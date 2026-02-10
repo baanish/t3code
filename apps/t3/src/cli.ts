@@ -729,6 +729,7 @@ function startStaticWebServer(distRoot: string, port: number) {
         response.statusCode = 200;
         response.setHeader("Content-Type", contentTypeFor(targetPath));
         response.setHeader("Content-Length", String(stats.size));
+        response.setHeader("Accept-Ranges", "bytes");
         applyStaticSecurityHeaders(response, {
           cacheControl: cacheControlFor(targetPath),
         });
@@ -746,6 +747,7 @@ function startStaticWebServer(distRoot: string, port: number) {
       response.statusCode = 200;
       response.setHeader("Content-Type", contentTypeFor(targetPath));
       response.setHeader("Content-Length", String(stats.size));
+      response.setHeader("Accept-Ranges", "bytes");
       applyStaticSecurityHeaders(response, {
         cacheControl: cacheControlFor(targetPath),
       });

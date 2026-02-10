@@ -187,6 +187,9 @@ async function main() {
         )}.`,
       );
     }
+    if ((page.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
+      throw new Error("Smoke test failed: expected accept-ranges=bytes on HTML response.");
+    }
     const html = await page.text();
     const assetMatch = html.match(/(?:src|href)="(\/assets\/[^"]+)"/);
     if (!assetMatch?.[1]) {
@@ -228,6 +231,9 @@ async function main() {
     }
     if ((assetResponse.headers.get("cross-origin-opener-policy") ?? "").toLowerCase() !== "same-origin") {
       throw new Error("Smoke test failed: expected COOP header on built asset response.");
+    }
+    if ((assetResponse.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
+      throw new Error("Smoke test failed: expected accept-ranges=bytes on built asset response.");
     }
     const headAssetResponse = await fetch(assetUrl, { method: "HEAD" });
     if (headAssetResponse.status !== 200) {
@@ -271,6 +277,9 @@ async function main() {
       "same-origin"
     ) {
       throw new Error("Smoke test failed: expected COOP on HEAD asset response.");
+    }
+    if ((headAssetResponse.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
+      throw new Error("Smoke test failed: expected accept-ranges=bytes on HEAD asset response.");
     }
     const missingAssetUrl = new URL("/assets/missing-bundle.js", parsedAppUrl);
     const missingAsset = await fetch(missingAssetUrl);
@@ -423,6 +432,9 @@ async function main() {
     }
     if ((headPage.headers.get("cross-origin-opener-policy") ?? "").toLowerCase() !== "same-origin") {
       throw new Error("Smoke test failed: expected COOP header on HEAD app response.");
+    }
+    if ((headPage.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
+      throw new Error("Smoke test failed: expected accept-ranges=bytes on HEAD app response.");
     }
     const headContentLength = Number(headPage.headers.get("content-length") ?? "0");
     if (!Number.isFinite(headContentLength) || headContentLength <= 0) {
