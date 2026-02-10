@@ -661,7 +661,7 @@ export function parseByteRangeHeader(
     return "invalid";
   }
 
-  const match = rangeHeaderValue.trim().match(/^bytes=(\d*)-(\d*)$/i);
+  const match = rangeHeaderValue.trim().match(/^bytes\s*=\s*(\d*)\s*-\s*(\d*)$/i);
   if (!match) {
     return "invalid";
   }
