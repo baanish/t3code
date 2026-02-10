@@ -217,6 +217,20 @@ async function main() {
     if ((assetResponse.headers.get("cross-origin-resource-policy") ?? "").toLowerCase() !== "same-origin") {
       throw new Error("Smoke test failed: expected CORP header on built asset response.");
     }
+    const headAssetResponse = await fetch(assetUrl, { method: "HEAD" });
+    if (headAssetResponse.status !== 200) {
+      throw new Error(
+        `Smoke test failed: expected HEAD asset status 200, received ${headAssetResponse.status}.`,
+      );
+    }
+    const headAssetCacheControl = (headAssetResponse.headers.get("cache-control") ?? "").toLowerCase();
+    if (!headAssetCacheControl.includes("immutable")) {
+      throw new Error(
+        `Smoke test failed: expected immutable cache-control on HEAD asset response, got ${String(
+          headAssetResponse.headers.get("cache-control"),
+        )}.`,
+      );
+    }
     const missingAssetUrl = new URL("/assets/missing-bundle.js", parsedAppUrl);
     const missingAsset = await fetch(missingAssetUrl);
     if (missingAsset.status !== 404) {
