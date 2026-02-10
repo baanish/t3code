@@ -20,6 +20,8 @@ export const WS_CLOSE_REASONS = {
 
 export const WS_REQUEST_ID_MAX_CHARS = 256;
 export const WS_METHOD_MAX_CHARS = 256;
+export const WS_ERROR_CODE_MAX_CHARS = 128;
+export const WS_ERROR_MESSAGE_MAX_CHARS = 8_192;
 
 const wsRequestSchema = z.object({
   type: z.literal("request"),
@@ -29,8 +31,8 @@ const wsRequestSchema = z.object({
 }).strict();
 
 const wsResponseErrorSchema = z.object({
-  code: z.string().min(1),
-  message: z.string().min(1),
+  code: z.string().min(1).max(WS_ERROR_CODE_MAX_CHARS),
+  message: z.string().min(1).max(WS_ERROR_MESSAGE_MAX_CHARS),
 }).strict();
 
 const wsResponseSchema = z

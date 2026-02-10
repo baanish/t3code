@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   WS_CLOSE_CODES,
   WS_CLOSE_REASONS,
+  WS_ERROR_CODE_MAX_CHARS,
+  WS_ERROR_MESSAGE_MAX_CHARS,
   WS_EVENT_CHANNELS,
   WS_METHOD_MAX_CHARS,
   WS_REQUEST_ID_MAX_CHARS,
@@ -112,6 +114,46 @@ describe("wsServerMessageSchema", () => {
         type: "response",
         id: "req-1",
         ok: false,
+      }),
+    ).toThrow();
+  });
+
+  it("accepts response errors at max field lengths", () => {
+    const parsed = wsServerMessageSchema.parse({
+      type: "response",
+      id: "req-1",
+      ok: false,
+      error: {
+        code: "c".repeat(WS_ERROR_CODE_MAX_CHARS),
+        message: "m".repeat(WS_ERROR_MESSAGE_MAX_CHARS),
+      },
+    });
+
+    expect(parsed.type).toBe("response");
+  });
+
+  it("rejects overlong response error fields", () => {
+    expect(() =>
+      wsServerMessageSchema.parse({
+        type: "response",
+        id: "req-1",
+        ok: false,
+        error: {
+          code: "c".repeat(WS_ERROR_CODE_MAX_CHARS + 1),
+          message: "valid",
+        },
+      }),
+    ).toThrow();
+
+    expect(() =>
+      wsServerMessageSchema.parse({
+        type: "response",
+        id: "req-1",
+        ok: false,
+        error: {
+          code: "request_failed",
+          message: "m".repeat(WS_ERROR_MESSAGE_MAX_CHARS + 1),
+        },
       }),
     ).toThrow();
   });

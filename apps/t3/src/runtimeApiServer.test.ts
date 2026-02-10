@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import {
   WS_METHOD_MAX_CHARS,
   WS_REQUEST_ID_MAX_CHARS,
+  WS_ERROR_MESSAGE_MAX_CHARS,
   WS_CLOSE_CODES,
   WS_CLOSE_REASONS,
   WS_EVENT_CHANNELS,
@@ -2004,6 +2005,38 @@ describe("runtimeApiServer", () => {
     }
     expect(response.error?.code).toBe("request_failed");
     expect(response.error?.message).toContain("Editor target must be a non-empty path");
+
+    client.socket.close();
+  });
+
+  it("truncates overlong runtime error messages to websocket protocol limits", async () => {
+    const server = await startRuntimeApiServer({
+      port: 0,
+      launchCwd: process.cwd(),
+    });
+    servers.push(server);
+
+    const client = await connectClient(server.wsUrl);
+    await client.nextMessage();
+
+    const response = await sendRequest(
+      client.socket,
+      client.nextMessage,
+      "shell-overlong-error-1",
+      "shell.openInEditor",
+      {
+        cwd: `/${"x".repeat(WS_ERROR_MESSAGE_MAX_CHARS + 500)}`,
+        editor: "cursor",
+      },
+    );
+    expect(response.ok).toBe(false);
+    if (response.ok) {
+      throw new Error("Expected overlong shell target request to fail.");
+    }
+    expect(response.error?.code).toBe("request_failed");
+    expect(typeof response.error?.message).toBe("string");
+    expect((response.error?.message ?? "").length).toBeLessThanOrEqual(WS_ERROR_MESSAGE_MAX_CHARS);
+    expect(response.error?.message?.endsWith("…")).toBe(true);
 
     client.socket.close();
   });

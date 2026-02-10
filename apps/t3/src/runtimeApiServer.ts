@@ -16,6 +16,8 @@ import {
   type WsResponseMessage,
   type WsServerMessage,
   WS_EVENT_CHANNELS,
+  WS_ERROR_CODE_MAX_CHARS,
+  WS_ERROR_MESSAGE_MAX_CHARS,
   WS_CLOSE_CODES,
   WS_CLOSE_REASONS,
   agentConfigSchema,
@@ -111,12 +113,39 @@ function responseSuccess(id: string, result: unknown): WsResponseMessage {
 }
 
 function responseError(id: string, error: JsonRpcErrorResult): WsResponseMessage {
+  const normalizedCode = normalizeErrorField(
+    error.code,
+    "request_failed",
+    WS_ERROR_CODE_MAX_CHARS,
+  );
+  const normalizedMessage = normalizeErrorField(
+    error.message,
+    "Request failed",
+    WS_ERROR_MESSAGE_MAX_CHARS,
+  );
   return {
     type: "response",
     id,
     ok: false,
-    error,
+    error: {
+      code: normalizedCode,
+      message: normalizedMessage,
+    },
   };
+}
+
+function normalizeErrorField(value: string, fallback: string, maxChars: number): string {
+  const trimmed = value.trim();
+  const safeValue = trimmed.length > 0 ? trimmed : fallback;
+  if (safeValue.length <= maxChars) {
+    return safeValue;
+  }
+
+  if (maxChars <= 1) {
+    return safeValue.slice(0, maxChars);
+  }
+
+  return `${safeValue.slice(0, maxChars - 1)}…`;
 }
 
 function sendMessage(socket: WebSocket, message: unknown): void {
