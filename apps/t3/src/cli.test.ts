@@ -449,6 +449,16 @@ describe("resolveStaticAssetReadTarget", () => {
     });
   });
 
+  it("returns not_found for missing asset files with extensions", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-static-missing-asset-"));
+    writeFileSync(path.join(tempDir, "index.html"), "<html>ok</html>", "utf8");
+
+    const result = resolveStaticAssetReadTarget("/assets/missing.js", tempDir);
+    expect(result).toEqual({
+      kind: "not_found",
+    });
+  });
+
   it("rejects symlinked files that escape the dist directory", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-static-symlink-"));
     writeFileSync(path.join(tempDir, "index.html"), "<html>ok</html>", "utf8");

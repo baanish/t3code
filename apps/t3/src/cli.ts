@@ -505,6 +505,9 @@ export function resolveStaticAssetReadTarget(
   if (requestedFile.kind === "file") {
     return requestedFile;
   }
+  if (path.extname(requestedPath.filePath).length > 0) {
+    return { kind: "not_found" };
+  }
 
   const indexPath = path.join(normalizedDistRoot, "index.html");
   const indexFile = resolveSafeFilePathInDist(indexPath, realDistRoot);
