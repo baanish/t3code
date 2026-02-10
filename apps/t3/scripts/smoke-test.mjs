@@ -564,6 +564,18 @@ async function main() {
         `Smoke test failed: expected current If-Unmodified-Since + If-None-Match status 304, received ${ifUnmodifiedSinceCurrentWithNoneMatch.status}.`,
       );
     }
+    const ifUnmodifiedSinceCurrentWithNoneMatchRange = await fetch(assetUrl, {
+      headers: {
+        Range: "bytes=0-15",
+        "If-Unmodified-Since": assetLastModified,
+        "If-None-Match": assetEtag,
+      },
+    });
+    if (ifUnmodifiedSinceCurrentWithNoneMatchRange.status !== 304) {
+      throw new Error(
+        `Smoke test failed: expected ranged current If-Unmodified-Since + If-None-Match status 304, received ${ifUnmodifiedSinceCurrentWithNoneMatchRange.status}.`,
+      );
+    }
     const ifMatchPrecedenceAsset = await fetch(assetUrl, {
       headers: {
         "If-Match": assetEtag,
