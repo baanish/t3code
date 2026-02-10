@@ -432,15 +432,18 @@ function resolveSafeFilePathInDist(
 export function resolveStaticAssetReadTarget(
   requestUrl: string | undefined,
   distRoot: string,
+  resolvedRealDistRoot?: string,
 ): { kind: "file"; filePath: string } | { kind: "forbidden" } | { kind: "bad_request" } {
   const normalizedDistRoot = path.resolve(distRoot);
-  const realDistRoot = (() => {
-    try {
-      return fs.realpathSync(normalizedDistRoot);
-    } catch {
-      return normalizedDistRoot;
-    }
-  })();
+  const realDistRoot =
+    resolvedRealDistRoot ??
+    (() => {
+      try {
+        return fs.realpathSync(normalizedDistRoot);
+      } catch {
+        return normalizedDistRoot;
+      }
+    })();
 
   const requestedPath = resolveStaticAssetPath(requestUrl, normalizedDistRoot);
   if (requestedPath.kind === "bad_request" || requestedPath.kind === "forbidden") {
@@ -465,8 +468,21 @@ export function resolveStaticAssetReadTarget(
 }
 
 function startStaticWebServer(distRoot: string, port: number) {
+  const normalizedDistRoot = path.resolve(distRoot);
+  const resolvedRealDistRoot = (() => {
+    try {
+      return fs.realpathSync(normalizedDistRoot);
+    } catch {
+      return normalizedDistRoot;
+    }
+  })();
+
   const server = createServer((request, response) => {
-    const resolvedPath = resolveStaticAssetReadTarget(request.url, distRoot);
+    const resolvedPath = resolveStaticAssetReadTarget(
+      request.url,
+      normalizedDistRoot,
+      resolvedRealDistRoot,
+    );
     if (resolvedPath.kind === "bad_request") {
       response.statusCode = 400;
       response.end("Invalid request path");
