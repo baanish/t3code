@@ -70,6 +70,25 @@ describe("parseCliOptions", () => {
     expect(options.noOpen).toBe(false);
   });
 
+  it("supports --open to override truthy no-open environment defaults", () => {
+    const options = parseCliOptions(
+      ["--open"],
+      {
+        T3_NO_OPEN: "true",
+      },
+      "/workspace",
+    );
+    expect(options.noOpen).toBe(false);
+  });
+
+  it("respects last flag when combining --open and --no-open", () => {
+    const openThenNoOpen = parseCliOptions(["--open", "--no-open"], {}, "/workspace");
+    expect(openThenNoOpen.noOpen).toBe(true);
+
+    const noOpenThenOpen = parseCliOptions(["--no-open", "--open"], {}, "/workspace");
+    expect(noOpenThenOpen.noOpen).toBe(false);
+  });
+
   it("supports falsey equals-style --no-open values", () => {
     const options = parseCliOptions(["--no-open=0"], {}, "/workspace");
     expect(options.noOpen).toBe(false);

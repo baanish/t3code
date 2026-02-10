@@ -100,6 +100,7 @@ const KNOWN_CLI_FLAGS = new Set([
   "-h",
   "--version",
   "-v",
+  "--open",
   "--no-open",
   "--backend-port",
   "--web-port",
@@ -210,6 +211,11 @@ export function parseCliOptions(
       continue;
     }
 
+    if (arg === "--open") {
+      noOpen = false;
+      continue;
+    }
+
     if (arg.startsWith("--no-open=")) {
       noOpen = parseBooleanCliValue(arg.split("=")[1] ?? "", "--no-open");
       continue;
@@ -293,6 +299,7 @@ function printHelp(): void {
       "",
       "Options:",
       "  --no-open[=bool]        Start runtime without opening browser (or explicitly set bool)",
+      "  --open                  Force browser auto-open",
       "  --backend-port <port>   Override WebSocket API port (default: 4317)",
       "  --web-port <port>       Override web UI port (default: 4318)",
       "  --cwd <path>            Launch project directory (default: current directory)",

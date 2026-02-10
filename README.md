@@ -23,6 +23,7 @@ On launch, `t3`:
 CLI flags:
 
 - `--no-open[=bool]` — disable browser auto-open (supports `true/false`, `1/0`, `yes/no`, `on/off` in equals form).
+- `--open` — force browser auto-open (overrides `T3_NO_OPEN`).
 - `--backend-port <port>` — set WebSocket runtime port.
 - `--web-port <port>` — set web UI port.
 - `--cwd <path>` — choose launch project directory (defaults to current directory).
