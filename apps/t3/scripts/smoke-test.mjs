@@ -195,15 +195,46 @@ async function main() {
       });
       ws.addEventListener("message", (event) => {
         const message = JSON.parse(String(event.data));
-        if (
-          message.type === "response" &&
-          message.id === "smoke" &&
-          message.ok === true &&
-          message.result?.status === "ok"
-        ) {
-          clearTimeout(timer);
-          resolve();
+        if (message.type !== "response" || message.id !== "smoke" || message.ok !== true) {
+          return;
         }
+        if (message.result?.status !== "ok") {
+          return;
+        }
+        if (message.result?.launchCwd !== appRoot) {
+          clearTimeout(timer);
+          reject(
+            new Error(
+              `Smoke test failed: expected launch cwd ${appRoot}, got ${String(
+                message.result?.launchCwd,
+              )}.`,
+            ),
+          );
+          return;
+        }
+        if (message.result?.activeClientConnected !== true) {
+          clearTimeout(timer);
+          reject(
+            new Error(
+              "Smoke test failed: app.health did not report active websocket client connectivity.",
+            ),
+          );
+          return;
+        }
+        if (!Number.isInteger(message.result?.sessionCount) || message.result.sessionCount < 0) {
+          clearTimeout(timer);
+          reject(
+            new Error(
+              `Smoke test failed: expected non-negative integer sessionCount, got ${String(
+                message.result?.sessionCount,
+              )}.`,
+            ),
+          );
+          return;
+        }
+
+        clearTimeout(timer);
+        resolve();
       });
       ws.addEventListener("error", () => {
         clearTimeout(timer);
