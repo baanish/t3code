@@ -251,7 +251,7 @@ function resolvePerfSeed(): ResolvedPerfSeed {
     source: "file",
     resolvedPath,
     state: parsed,
-    benchmarkThreads: pickBenchmarkThreads(stats, true),
+    benchmarkThreads: pickBenchmarkThreads(stats, false),
   };
 }
 
@@ -654,7 +654,7 @@ async function runRendererPerfInteractions(
         };
       });
 
-      const clickCount = Math.min(8, threadButtons.length);
+      const clickCount = Math.min(4, threadButtons.length);
       for (let index = 0; index < clickCount; index += 1) {
         clickElement(threadButtons[index]);
         await sleep(80);
