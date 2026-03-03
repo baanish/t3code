@@ -7,6 +7,7 @@
 ## Project Snapshot
 
 T3 Code is a minimal web GUI for using code agents like Codex and Claude Code (coming soon).
+This line is a dummy change for testing purposes.
 
 This repository is a VERY EARLY WIP. Proposing sweeping changes that improve long-term maintainability is encouraged.
 
