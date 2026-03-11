@@ -6,11 +6,14 @@ import {
 } from "@t3tools/contracts";
 import { Deferred, Effect, Queue, Ref, Schema } from "effect";
 import type { Scope } from "effect";
-import type { WebSocket } from "ws";
+
+export interface ServerPushClient {
+  readonly send: (message: string) => Effect.Effect<boolean>;
+}
 
 type PushTarget =
   | { readonly kind: "all" }
-  | { readonly kind: "client"; readonly client: WebSocket };
+  | { readonly kind: "client"; readonly client: ServerPushClient };
 
 interface PushJob<C extends WsPushChannel = WsPushChannel> {
   readonly channel: C;
@@ -25,14 +28,14 @@ export interface ServerPushBus {
     data: WsPushData<C>,
   ) => Effect.Effect<void>;
   readonly publishClient: <C extends WsPushChannel>(
-    client: WebSocket,
+    client: ServerPushClient,
     channel: C,
     data: WsPushData<C>,
   ) => Effect.Effect<boolean>;
 }
 
 export const makeServerPushBus = (input: {
-  readonly clients: Ref.Ref<Set<WebSocket>>;
+  readonly clients: Ref.Ref<Set<ServerPushClient>>;
   readonly logOutgoingPush: (push: WsPushEnvelopeBase, recipients: number) => void;
 }): Effect.Effect<ServerPushBus, never, Scope.Scope> =>
   Effect.gen(function* () {
@@ -57,19 +60,17 @@ export const makeServerPushBus = (input: {
         job.target.kind === "all" ? yield* Ref.get(input.clients) : new Set([job.target.client]);
 
       return yield* encodePush(push).pipe(
-        Effect.map((message) => {
-          let recipientCount = 0;
-          for (const client of recipients) {
-            if (client.readyState !== client.OPEN) {
-              continue;
-            }
-            client.send(message);
-            recipientCount += 1;
-          }
-
-          input.logOutgoingPush(push, recipientCount);
-          return recipientCount > 0;
-        }),
+        Effect.flatMap((message) =>
+          Effect.forEach(recipients, (client) => client.send(message), {
+            concurrency: "unbounded",
+          }).pipe(
+            Effect.map((deliveries) => {
+              const recipientCount = deliveries.filter(Boolean).length;
+              input.logOutgoingPush(push, recipientCount);
+              return recipientCount > 0;
+            }),
+          ),
+        ),
       );
     });
 

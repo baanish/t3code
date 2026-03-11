@@ -1,25 +1,22 @@
-import type { WebSocket } from "ws";
 import { it } from "@effect/vitest";
 import { describe, expect } from "vitest";
 import { Effect, Ref } from "effect";
 import { WS_CHANNELS } from "@t3tools/contracts";
 
-import { makeServerPushBus } from "./pushBus";
+import { makeServerPushBus, type ServerPushClient } from "./pushBus";
 
-class MockWebSocket {
-  static readonly OPEN = 1;
-
-  readonly OPEN = MockWebSocket.OPEN;
-  readyState = MockWebSocket.OPEN;
+class MockPushClient implements ServerPushClient {
   readonly sent: string[] = [];
   private readonly waiters = new Set<() => void>();
 
-  send(message: string) {
-    this.sent.push(message);
-    for (const waiter of this.waiters) {
-      waiter();
-    }
-  }
+  readonly send: ServerPushClient["send"] = (message: string) =>
+    Effect.sync(() => {
+      this.sent.push(message);
+      for (const waiter of this.waiters) {
+        waiter();
+      }
+      return true;
+    });
 
   waitForSentCount(count: number): Promise<void> {
     if (this.sent.length >= count) {
@@ -44,8 +41,8 @@ describe("makeServerPushBus", () => {
   it.live("waits for the welcome push before a new client joins broadcast delivery", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const client = new MockWebSocket();
-        const clients = yield* Ref.make(new Set<WebSocket>());
+        const client = new MockPushClient();
+        const clients = yield* Ref.make(new Set<ServerPushClient>());
         const pushBus = yield* makeServerPushBus({
           clients,
           logOutgoingPush: () => {},
@@ -57,7 +54,7 @@ describe("makeServerPushBus", () => {
         });
 
         const delivered = yield* pushBus.publishClient(
-          client as unknown as WebSocket,
+          client,
           WS_CHANNELS.serverWelcome,
           {
             cwd: "/tmp/project",
@@ -66,7 +63,7 @@ describe("makeServerPushBus", () => {
         );
         expect(delivered).toBe(true);
 
-        yield* Ref.update(clients, (current) => current.add(client as unknown as WebSocket));
+        yield* Ref.update(clients, (current) => current.add(client));
 
         yield* pushBus.publishAll(WS_CHANNELS.serverConfigUpdated, {
           issues: [],
