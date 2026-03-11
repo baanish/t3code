@@ -36,7 +36,7 @@ Legend: `[x]` done, `[ ]` not started.
 
 ### Phase 2: Project + editor read/write (small inputs, bounded side effects)
 
-- [ ] `projects.searchEntries`
+- [x] `projects.searchEntries`
 - [ ] `projects.writeFile`
 - [ ] `shell.openInEditor`
 

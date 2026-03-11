@@ -3,7 +3,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { KeybindingRule, ResolvedKeybindingRule, WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
-import { assertFailure } from "@effect/vitest/utils";
+import { assertEquals, assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import { Effect, FileSystem, Layer, Path, Stream } from "effect";
 import { HttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
@@ -252,6 +252,59 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assertFailure(result, error);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc projects.searchEntries", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ws-project-search-" });
+      yield* fs.writeFileString(
+        path.join(workspaceDir, "needle-file.ts"),
+        "export const needle = 1;",
+      );
+
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.projectsSearchEntries]({
+            cwd: workspaceDir,
+            query: "needle",
+            limit: 10,
+          }),
+        ),
+      );
+
+      assert.isAtLeast(response.entries.length, 1);
+      assert.isTrue(response.entries.some((entry) => entry.path === "needle-file.ts"));
+      assert.equal(response.truncated, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc projects.searchEntries errors", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.projectsSearchEntries]({
+            cwd: "/definitely/not/a/real/workspace/path",
+            query: "needle",
+            limit: 10,
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "ProjectSearchEntriesError");
+      assertInclude(
+        String(result.failure.cause),
+        "ENOENT: no such file or directory, scandir '/definitely/not/a/real/workspace/path'",
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 });

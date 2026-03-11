@@ -1,11 +1,12 @@
 import { Effect, Layer } from "effect";
-import { WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
+import { ProjectSearchEntriesError, WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { ServerConfig } from "./config";
 import { Keybindings } from "./keybindings";
 import { resolveAvailableEditors } from "./open";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
+import { searchWorkspaceEntries } from "./workspaceEntries";
 
 const WsRpcLayer = WsRpcGroup.toLayer({
   [WS_METHODS.serverGetConfig]: () =>
@@ -30,6 +31,15 @@ const WsRpcLayer = WsRpcGroup.toLayer({
       const keybindings = yield* Keybindings;
       const keybindingsConfig = yield* keybindings.upsertKeybindingRule(rule);
       return { keybindings: keybindingsConfig, issues: [] };
+    }),
+  [WS_METHODS.projectsSearchEntries]: (input) =>
+    Effect.tryPromise({
+      try: () => searchWorkspaceEntries(input),
+      catch: (cause) =>
+        new ProjectSearchEntriesError({
+          message: `Failed to search workspace entries`,
+          cause,
+        }),
     }),
 });
 
