@@ -74,7 +74,13 @@ const AllowedHost = Schema.Trim.pipe(
       { identifier: "AllowedHost" },
     ),
   ),
-  Schema.decodeTo(Schema.String, SchemaTransformation.toLowerCase()),
+  Schema.decodeTo(
+    Schema.String,
+    SchemaTransformation.transform({
+      decode: (input) => new URL(`http://${input}`).host,
+      encode: (input) => input,
+    }),
+  ),
 );
 
 const AllowedHostsCsv = Schema.String.pipe(
