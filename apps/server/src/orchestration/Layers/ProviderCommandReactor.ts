@@ -25,6 +25,7 @@ import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
+import { inferProviderForModel } from "@t3tools/shared/model";
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -210,7 +211,25 @@ const make = Effect.gen(function* () {
     )
       ? thread.session.providerName
       : undefined;
-    const preferredProvider: ProviderKind | undefined = options?.provider ?? currentProvider;
+    const threadProvider: ProviderKind = currentProvider ?? inferProviderForModel(thread.model);
+    if (options?.provider !== undefined && options.provider !== threadProvider) {
+      return yield* new ProviderAdapterRequestError({
+        provider: threadProvider,
+        method: "thread.turn.start",
+        detail: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${options.provider}'.`,
+      });
+    }
+    if (
+      options?.model !== undefined &&
+      inferProviderForModel(options.model, threadProvider) !== threadProvider
+    ) {
+      return yield* new ProviderAdapterRequestError({
+        provider: threadProvider,
+        method: "thread.turn.start",
+        detail: `Model '${options.model}' does not belong to provider '${threadProvider}' for thread '${threadId}'.`,
+      });
+    }
+    const preferredProvider: ProviderKind = currentProvider ?? options?.provider ?? threadProvider;
     const desiredModel = options?.model ?? thread.model;
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
@@ -478,7 +497,18 @@ const make = Effect.gen(function* () {
         : {}),
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
-    });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        appendProviderFailureActivity({
+          threadId: event.payload.threadId,
+          kind: "provider.turn.start.failed",
+          summary: "Provider turn start failed",
+          detail: Cause.pretty(cause),
+          turnId: null,
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+    );
   });
 
   const processTurnInterruptRequested = Effect.fnUntraced(function* (

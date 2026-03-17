@@ -64,6 +64,23 @@ export function resolveModelSlugForProvider(
   return resolveModelSlug(model, provider);
 }
 
+export function inferProviderForModel(
+  model: string | null | undefined,
+  fallback: ProviderKind = "codex",
+): ProviderKind {
+  const normalizedClaude = normalizeModelSlug(model, "claudeAgent");
+  if (normalizedClaude && MODEL_SLUG_SET_BY_PROVIDER.claudeAgent.has(normalizedClaude)) {
+    return "claudeAgent";
+  }
+
+  const normalizedCodex = normalizeModelSlug(model, "codex");
+  if (normalizedCodex && MODEL_SLUG_SET_BY_PROVIDER.codex.has(normalizedCodex)) {
+    return "codex";
+  }
+
+  return typeof model === "string" && model.trim().startsWith("claude-") ? "claudeAgent" : fallback;
+}
+
 export function getReasoningEffortOptions(
   provider: ProviderKind = "codex",
 ): ReadonlyArray<CodexReasoningEffort> {
