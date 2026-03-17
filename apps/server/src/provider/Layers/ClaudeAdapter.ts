@@ -238,12 +238,7 @@ function classifyToolItemType(toolName: string): CanonicalItemType {
   if (normalized.includes("agent")) {
     return "collab_agent_tool_call";
   }
-  if (
-    normalized === "task" ||
-    normalized === "agent" ||
-    normalized.includes("subagent") ||
-    normalized.includes("sub-agent")
-  ) {
+  if (normalized === "task") {
     return "collab_agent_tool_call";
   }
   if (
