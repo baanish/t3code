@@ -1,6 +1,6 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer, Option, Schema, Struct } from "effect";
+import { Effect, Layer, Schema, Struct } from "effect";
 
 import { ModelSelection, ProjectScript } from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
@@ -114,35 +114,11 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
   const getById: ProjectionProjectRepositoryShape["getById"] = (input) =>
     getProjectionProjectRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.getById:query")),
-      Effect.map(
-        Option.map((row) => ({
-          projectId: row.projectId,
-          title: row.title,
-          workspaceRoot: row.workspaceRoot,
-          defaultModelSelection: row.defaultModelSelection,
-          scripts: row.scripts,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-          deletedAt: row.deletedAt,
-        })),
-      ),
     );
 
   const listAll: ProjectionProjectRepositoryShape["listAll"] = () =>
     listProjectionProjectRows().pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.listAll:query")),
-      Effect.map((rows) =>
-        rows.map((row) => ({
-          projectId: row.projectId,
-          title: row.title,
-          workspaceRoot: row.workspaceRoot,
-          defaultModelSelection: row.defaultModelSelection,
-          scripts: row.scripts,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-          deletedAt: row.deletedAt,
-        })),
-      ),
     );
 
   const deleteById: ProjectionProjectRepositoryShape["deleteById"] = (input) =>
