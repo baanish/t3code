@@ -22,7 +22,6 @@ import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import {
   type ClientSettings,
   ClientSettingsSchema,
-  CLIENT_SETTINGS_STORAGE_KEY,
   DEFAULT_CLIENT_SETTINGS,
   SidebarProjectSortOrder,
   SidebarThreadSortOrder,
@@ -36,6 +35,9 @@ import { normalizeCustomModelSlugs } from "~/modelSelection";
 import { Predicate, Schema, Struct } from "effect";
 import { DeepMutable } from "effect/Types";
 import { deepMerge } from "@t3tools/shared/Struct";
+
+const CLIENT_SETTINGS_STORAGE_KEY = "t3code:client-settings:v1";
+const OLD_SETTINGS_KEY = "t3code:app-settings:v1";
 
 // ── Key sets for routing patches ─────────────────────────────────────
 
@@ -142,9 +144,6 @@ export function useUpdateSettings() {
 
 // ── One-time migration from localStorage ─────────────────────────────
 
-const MIGRATION_FLAG_KEY = "t3code:settings-migrated";
-const OLD_SETTINGS_KEY = "t3code:app-settings:v1";
-
 export function buildLegacyServerSettingsMigrationPatch(legacySettings: Record<string, unknown>) {
   const patch: DeepMutable<ServerSettingsPatch> = {};
 
@@ -228,19 +227,15 @@ export function buildLegacyClientSettingsMigrationPatch(
 }
 
 /**
- * Call once on app startup. Migrates settings from the old unified
- * localStorage key to the server (server-relevant keys) and to the new
- * client-settings localStorage key (client-only keys). Idempotent.
+ * Call once on app startup.
+ * If the legacy localStorage key exists, migrate its values to the new server
+ * and client storage formats, then remove the legacy key so this only runs once.
  */
 export function migrateLocalSettingsToServer(): void {
   if (typeof window === "undefined") return;
-  if (localStorage.getItem(MIGRATION_FLAG_KEY)) return;
 
   const raw = localStorage.getItem(OLD_SETTINGS_KEY);
-  if (!raw) {
-    localStorage.setItem(MIGRATION_FLAG_KEY, "true");
-    return;
-  }
+  if (!raw) return;
 
   try {
     const old = JSON.parse(raw);
@@ -263,12 +258,10 @@ export function migrateLocalSettingsToServer(): void {
         JSON.stringify({ ...current, ...clientPatch }),
       );
     }
-
-    localStorage.setItem(MIGRATION_FLAG_KEY, "true");
   } catch (error) {
     console.error("[MIGRATION] Error migrating local settings:", error);
   } finally {
-    // Mark as migrated no matter what to avoid retrying
-    localStorage.setItem(MIGRATION_FLAG_KEY, "true");
+    // Remove the legacy key regardless to keep migration one-shot behavior.
+    localStorage.removeItem(OLD_SETTINGS_KEY);
   }
 }

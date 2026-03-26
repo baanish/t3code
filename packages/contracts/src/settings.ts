@@ -9,8 +9,6 @@ import { ModelSelection } from "./orchestration";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
-export const CLIENT_SETTINGS_STORAGE_KEY = "t3code:client-settings:v1";
-
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
