@@ -47,8 +47,6 @@ import * as Semaphore from "effect/Semaphore";
 import { ServerConfig } from "./config";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 
-export { KeybindingsConfigError };
-
 type WhenToken =
   | { type: "identifier"; value: string }
   | { type: "not" }
