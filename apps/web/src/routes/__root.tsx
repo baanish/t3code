@@ -4,7 +4,7 @@ import {
   createRootRouteWithContext,
   type ErrorComponentProps,
   useNavigate,
-  useRouterState,
+  useLocation,
 } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
@@ -142,13 +142,11 @@ function EventRouter() {
   );
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const pathname = useLocation({ select: (loc) => loc.pathname });
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    pathnameRef.current = pathname;
-  }, [pathname]);
+  pathnameRef.current = pathname;
 
   useEffect(() => {
     const api = readNativeApi();

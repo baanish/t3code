@@ -2,6 +2,7 @@ import { Data, Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from "effect
 import { WsRpcGroup } from "@t3tools/contracts";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
+import { resolveServerUrl } from "./lib/utils";
 
 const makeWsRpcClient = RpcClient.make(WsRpcGroup);
 
@@ -37,24 +38,6 @@ function formatErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function resolveWebSocketUrl(url?: string): string {
-  const bridgeUrl = window.desktopBridge?.getWsUrl();
-  const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
-  const rawUrl =
-    url ??
-    (bridgeUrl && bridgeUrl.length > 0
-      ? bridgeUrl
-      : envUrl && envUrl.length > 0
-        ? envUrl
-        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`);
-
-  const parsedUrl = new URL(rawUrl);
-  if (parsedUrl.pathname === "/" || parsedUrl.pathname.length === 0) {
-    parsedUrl.pathname = "/ws";
-  }
-  return parsedUrl.toString();
-}
-
 export class WsTransport {
   private readonly runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
   private readonly clientScope: Scope.Closeable;
@@ -62,19 +45,19 @@ export class WsTransport {
   private disposed = false;
 
   constructor(url?: string) {
-    const resolvedUrl = resolveWebSocketUrl(url);
-    const runtimeLayer = RpcClient.layerProtocolSocket({ retryTransientErrors: true }).pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          Socket.layerWebSocket(resolvedUrl).pipe(
-            Layer.provide(Socket.layerWebSocketConstructorGlobal),
-          ),
-          RpcSerialization.layerJson,
-        ),
-      ),
+    const resolvedUrl = resolveServerUrl({
+      url,
+      protocol: "ws",
+      pathname: "/ws",
+    });
+    const SocketLayer = Socket.layerWebSocket(resolvedUrl).pipe(
+      Layer.provide(Socket.layerWebSocketConstructorGlobal),
+    );
+    const ProtocolLayer = RpcClient.layerProtocolSocket({ retryTransientErrors: true }).pipe(
+      Layer.provide(Layer.mergeAll(SocketLayer, RpcSerialization.layerJson)),
     );
 
-    this.runtime = ManagedRuntime.make(runtimeLayer);
+    this.runtime = ManagedRuntime.make(ProtocolLayer);
     this.clientScope = Effect.runSync(Scope.make());
     this.clientPromise = this.runtime.runPromise(Scope.provide(this.clientScope)(makeWsRpcClient));
   }
