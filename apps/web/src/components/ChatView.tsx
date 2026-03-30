@@ -2821,15 +2821,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
           createdAt: messageCreatedAt,
         });
         turnStartSucceeded = true;
-
-        // Sync snapshot before the transition ends so that `phase` reflects
-        // the new session state ("connecting"/"running").  Without this the
-        // optimistic overlay reverts to the stale `phase` (often
-        // "disconnected" for first-turn threads), causing a brief flicker.
-        await api.orchestration
-          .getSnapshot()
-          .then((snapshot) => syncServerReadModel(snapshot))
-          .catch(() => undefined);
       } catch (err: unknown) {
         if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
           await api.orchestration
@@ -3121,13 +3112,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
             planSidebarDismissedForTurnRef.current = null;
             setPlanSidebarOpen(true);
           }
-
-          // Sync snapshot before the transition ends so that `phase` reflects
-          // the session state, preventing a brief flicker.
-          await api.orchestration
-            .getSnapshot()
-            .then((snapshot) => syncServerReadModel(snapshot))
-            .catch(() => undefined);
         } catch (err) {
           setOptimisticUserMessages((existing) =>
             existing.filter((message) => message.id !== messageIdForSend),
@@ -3161,7 +3145,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
       startSendTransition,
       setOptimisticPhase,
       startOptimisticSendPhase,
-      syncServerReadModel,
       selectedModel,
     ],
   );
