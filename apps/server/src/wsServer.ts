@@ -79,6 +79,7 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
+import { sanitizeServerSettingsForTransport } from "./settingsSecrets";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -633,7 +634,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* Stream.runForEach(serverSettingsManager.streamChanges, (settings) =>
     pushBus.publishAll(WS_CHANNELS.serverConfigUpdated, {
       issues: [],
-      settings,
+      settings: sanitizeServerSettingsForTransport(settings),
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
@@ -912,7 +913,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           issues: keybindingsConfig.issues,
           providers,
           availableEditors,
-          settings,
+          settings: sanitizeServerSettingsForTransport(settings),
         };
       }
 
@@ -929,12 +930,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       }
 
       case WS_METHODS.serverGetSettings: {
-        return yield* serverSettingsManager.getSettings;
+        return yield* serverSettingsManager.getSettings.pipe(
+          Effect.map(sanitizeServerSettingsForTransport),
+        );
       }
 
       case WS_METHODS.serverUpdateSettings: {
         const body = stripRequestTag(request.body);
-        return yield* serverSettingsManager.updateSettings(body.patch);
+        return yield* serverSettingsManager
+          .updateSettings(body.patch)
+          .pipe(Effect.map(sanitizeServerSettingsForTransport));
       }
 
       default: {

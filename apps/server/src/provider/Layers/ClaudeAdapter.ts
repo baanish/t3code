@@ -42,6 +42,9 @@ import {
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
+  getClaudeProxyEnvironment,
+  getClaudeProxyTargetModel,
+  isClaudeProxyModel,
   resolveApiModelId,
   resolveEffort,
   trimOrNull,
@@ -2684,7 +2687,11 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const modelSelection =
         input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
       const caps = getClaudeModelCapabilities(modelSelection?.model);
-      const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
+      const rawApiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
+      const apiModelId =
+        rawApiModelId && isClaudeProxyModel(rawApiModelId)
+          ? (getClaudeProxyTargetModel(claudeSettings, rawApiModelId) ?? rawApiModelId)
+          : rawApiModelId;
       const effort = (resolveEffort(caps, modelSelection?.options?.effort) ??
         null) as ClaudeCodeEffort | null;
       const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
@@ -2714,7 +2721,10 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
-        env: process.env,
+        env: {
+          ...process.env,
+          ...getClaudeProxyEnvironment(claudeSettings, modelSelection?.model),
+        },
         ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
       };
 
@@ -2856,7 +2866,15 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (modelSelection?.model) {
-      const apiModelId = resolveApiModelId(modelSelection);
+      const rawApiModelId = resolveApiModelId(modelSelection);
+      let apiModelId = rawApiModelId;
+      if (isClaudeProxyModel(rawApiModelId)) {
+        const cs = yield* serverSettingsService.getSettings.pipe(
+          Effect.map((settings) => settings.providers.claudeAgent),
+          Effect.mapError((cause) => toRequestError(input.threadId, "turn/getSettings", cause)),
+        );
+        apiModelId = getClaudeProxyTargetModel(cs, rawApiModelId) ?? rawApiModelId;
+      }
       if (context.currentApiModelId !== apiModelId) {
         yield* Effect.tryPromise({
           try: () => context.query.setModel(apiModelId),

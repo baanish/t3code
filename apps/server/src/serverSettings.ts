@@ -40,6 +40,7 @@ import * as Semaphore from "effect/Semaphore";
 import { ServerConfig } from "./config";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
+import { stripMaskedSecretsFromPatch } from "./settingsSecrets";
 
 export class ServerSettingsError extends Schema.TaggedErrorClass<ServerSettingsError>()(
   "ServerSettingsError",
@@ -84,6 +85,7 @@ export class ServerSettingsService extends ServiceMap.Service<
         const currentSettingsRef = yield* Ref.make<ServerSettings>(
           deepMerge(DEFAULT_SERVER_SETTINGS, overrides),
         );
+        const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
 
         return {
           start: Effect.void,
@@ -91,10 +93,15 @@ export class ServerSettingsService extends ServiceMap.Service<
           getSettings: Ref.get(currentSettingsRef),
           updateSettings: (patch) =>
             Ref.get(currentSettingsRef).pipe(
-              Effect.map((currentSettings) => deepMerge(currentSettings, patch)),
+              Effect.map((currentSettings) =>
+                deepMerge(currentSettings, stripMaskedSecretsFromPatch(patch)),
+              ),
               Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
+              Effect.tap((nextSettings) => PubSub.publish(changesPubSub, nextSettings)),
             ),
-          streamChanges: Stream.empty,
+          streamChanges: Stream.fromPubSub(changesPubSub).pipe(
+            Stream.map(resolveTextGenerationProvider),
+          ),
         } satisfies ServerSettingsShape;
       }),
     );
@@ -324,7 +331,10 @@ const makeServerSettings = Effect.gen(function* () {
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const current = yield* getSettingsFromCache;
-          const next = yield* Schema.decodeEffect(ServerSettings)(deepMerge(current, patch)).pipe(
+          const normalizedPatch = stripMaskedSecretsFromPatch(patch);
+          const next = yield* Schema.decodeEffect(ServerSettings)(
+            deepMerge(current, normalizedPatch),
+          ).pipe(
             Effect.mapError(
               (cause) =>
                 new ServerSettingsError({

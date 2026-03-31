@@ -69,13 +69,20 @@ function mockCommandSpawnerLayer(
   handler: (
     command: string,
     args: ReadonlyArray<string>,
+    env: Record<string, string | undefined>,
   ) => { stdout: string; stderr: string; code: number },
 ) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as { command: string; args: ReadonlyArray<string> };
-      return Effect.succeed(mockHandle(handler(cmd.command, cmd.args)));
+      const cmd = command as unknown as {
+        command: string;
+        args: ReadonlyArray<string>;
+        options?: {
+          env?: Record<string, string | undefined>;
+        };
+      };
+      return Effect.succeed(mockHandle(handler(cmd.command, cmd.args, cmd.options?.env ?? {})));
     }),
   );
 }
@@ -859,6 +866,45 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
         ),
       );
 
+      it.effect("forwards custom Anthropic-compatible endpoint env to claude health checks", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus().pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                ServerSettingsService.layerTest({
+                  providers: {
+                    claudeAgent: {
+                      customBaseUrl: "https://api.minimax.io/anthropic",
+                      customApiKey: "claude-minimax-key",
+                    },
+                  },
+                }),
+                mockCommandSpawnerLayer((command, args, env) => {
+                  assert.strictEqual(command, "claude");
+                  assert.strictEqual(env.ANTHROPIC_BASE_URL, "https://api.minimax.io/anthropic");
+                  assert.strictEqual(env.ANTHROPIC_AUTH_TOKEN, "claude-minimax-key");
+                  const joined = args.join(" ");
+                  if (joined === "--version") {
+                    return { stdout: "1.0.0\n", stderr: "", code: 0 };
+                  }
+                  if (joined === "auth status") {
+                    return {
+                      stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                      stderr: "",
+                      code: 0,
+                    };
+                  }
+                  throw new Error(`Unexpected args: ${joined}`);
+                }),
+              ),
+            ),
+          );
+
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.auth.status, "authenticated");
+        }),
+      );
+
       it.effect("returns a display label for claude subscription types", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(() => Effect.succeed("maxplan"));
@@ -967,6 +1013,47 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
             }),
           ),
         ),
+      );
+
+      it.effect(
+        "returns ready when proxy credentials are configured but native auth is missing",
+        () =>
+          Effect.gen(function* () {
+            const status = yield* checkClaudeProviderStatus().pipe(
+              Effect.provide(
+                Layer.mergeAll(
+                  ServerSettingsService.layerTest({
+                    providers: {
+                      claudeAgent: {
+                        customBaseUrl: "https://api.minimax.io/anthropic",
+                        customApiKey: "claude-minimax-key",
+                      },
+                    },
+                  }),
+                  mockSpawnerLayer((args) => {
+                    const joined = args.join(" ");
+                    if (joined === "--version") {
+                      return { stdout: "1.0.0\n", stderr: "", code: 0 };
+                    }
+                    if (joined === "auth status") {
+                      return {
+                        stdout: '{"loggedIn":false}\n',
+                        stderr: "",
+                        code: 1,
+                      };
+                    }
+                    throw new Error(`Unexpected args: ${joined}`);
+                  }),
+                ),
+              ),
+            );
+
+            assert.strictEqual(status.provider, "claudeAgent");
+            assert.strictEqual(status.status, "ready");
+            assert.strictEqual(status.installed, true);
+            assert.strictEqual(status.auth.status, "authenticated");
+            assert.strictEqual(status.message, "Using custom proxy endpoint.");
+          }),
       );
 
       it.effect("returns unauthenticated when output includes 'not logged in'", () =>

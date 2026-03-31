@@ -1,10 +1,15 @@
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
+  type ClaudeSettings,
   type ModelSelection,
   type ProviderKind,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { normalizeModelSlug, resolveSelectableModel } from "@t3tools/shared/model";
+import {
+  getClaudeProxyModelEntries,
+  normalizeModelSlug,
+  resolveSelectableModel,
+} from "@t3tools/shared/model";
 import { getComposerProviderState } from "./components/chat/composerProviderRegistry";
 import { UnifiedSettings } from "@t3tools/contracts/settings";
 import {
@@ -30,24 +35,15 @@ export interface AppModelOption {
   isCustom: boolean;
 }
 
-const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConfig> = {
-  codex: {
+export const MODEL_PROVIDER_SETTINGS: ReadonlyArray<ProviderCustomModelConfig> = [
+  {
     provider: "codex",
     title: "Codex",
     description: "Save additional Codex model slugs for the picker and `/model` command.",
     placeholder: "your-codex-model-slug",
     example: "gpt-6.7-codex-ultra-preview",
   },
-  claudeAgent: {
-    provider: "claudeAgent",
-    title: "Claude",
-    description: "Save additional Claude model slugs for the picker and `/model` command.",
-    placeholder: "your-claude-model-slug",
-    example: "claude-sonnet-5-0",
-  },
-};
-
-export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
+];
 
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
@@ -99,18 +95,37 @@ export function getAppModelOptions(
       .map((model) => model.slug),
   );
 
-  const customModels = settings.providers[provider].customModels;
-  for (const slug of normalizeCustomModelSlugs(customModels, builtInModelSlugs, provider)) {
-    if (seen.has(slug)) {
-      continue;
-    }
+  if (provider === "codex") {
+    const customModels = settings.providers.codex.customModels;
+    for (const slug of normalizeCustomModelSlugs(customModels, builtInModelSlugs, provider)) {
+      if (seen.has(slug)) {
+        continue;
+      }
 
-    seen.add(slug);
-    options.push({
-      slug,
-      name: slug,
-      isCustom: true,
-    });
+      seen.add(slug);
+      options.push({
+        slug,
+        name: slug,
+        isCustom: true,
+      });
+    }
+  }
+
+  if (provider === "claudeAgent") {
+    for (const proxyEntry of getClaudeProxyModelEntries(
+      settings.providers.claudeAgent as ClaudeSettings,
+    )) {
+      if (seen.has(proxyEntry.slug)) {
+        continue;
+      }
+
+      seen.add(proxyEntry.slug);
+      options.push({
+        slug: proxyEntry.slug,
+        name: proxyEntry.name,
+        isCustom: false,
+      });
+    }
   }
 
   const normalizedSelectedModel = normalizeModelSlug(selectedModel, provider);

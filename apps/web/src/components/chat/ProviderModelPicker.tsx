@@ -1,5 +1,5 @@
 import { type ProviderKind, type ServerProvider } from "@t3tools/contracts";
-import { resolveSelectableModel } from "@t3tools/shared/model";
+import { isClaudeProxyModel, resolveSelectableModel } from "@t3tools/shared/model";
 import { memo, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
@@ -56,6 +56,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProvider>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>;
+  providerCustomEndpointByProvider?: Partial<Record<ProviderKind, boolean>>;
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -69,6 +70,16 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const selectedModelLabel =
     selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
+  const isProxyModel = (model: string) => isClaudeProxyModel(model);
+  const activeProviderHasCustomEndpoint =
+    activeProvider === "claudeAgent" && isClaudeProxyModel(props.model);
+  const splitModelOptions = (provider: ProviderKind) => {
+    const modelOptions = props.modelOptionsByProvider[provider];
+    return {
+      standard: modelOptions.filter((option) => !isProxyModel(option.slug)),
+      proxy: modelOptions.filter((option) => isProxyModel(option.slug)),
+    };
+  };
   const handleModelChange = (provider: ProviderKind, value: string) => {
     if (props.disabled) return;
     if (!value) return;
@@ -122,6 +133,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             )}
           />
           <span className="min-w-0 flex-1 truncate">{selectedModelLabel}</span>
+          {activeProviderHasCustomEndpoint ? (
+            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-emerald-700 dark:text-emerald-300">
+              Proxy
+            </span>
+          ) : null}
           <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
         </span>
       </MenuTrigger>
@@ -132,7 +148,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               value={props.model}
               onValueChange={(value) => handleModelChange(props.lockedProvider!, value)}
             >
-              {props.modelOptionsByProvider[props.lockedProvider].map((modelOption) => (
+              {splitModelOptions(props.lockedProvider).standard.map((modelOption) => (
+                <MenuRadioItem
+                  key={`${props.lockedProvider}:${modelOption.slug}`}
+                  value={modelOption.slug}
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  {modelOption.name}
+                </MenuRadioItem>
+              ))}
+              {splitModelOptions(props.lockedProvider).proxy.length > 0 ? <MenuDivider /> : null}
+              {splitModelOptions(props.lockedProvider).proxy.map((modelOption) => (
                 <MenuRadioItem
                   key={`${props.lockedProvider}:${modelOption.slug}`}
                   value={modelOption.slug}
@@ -182,7 +208,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                         providerIconClassName(option.value, "text-muted-foreground/85"),
                       )}
                     />
-                    {option.label}
+                    <span>{option.label}</span>
+                    {option.value === "claudeAgent" &&
+                    props.providerCustomEndpointByProvider?.claudeAgent ? (
+                      <span className="ms-auto rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-emerald-700 dark:text-emerald-300">
+                        Proxy
+                      </span>
+                    ) : null}
                   </MenuSubTrigger>
                   <MenuSubPopup className="[--available-height:min(24rem,70vh)]" sideOffset={4}>
                     <MenuGroup>
@@ -190,7 +222,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                         value={props.provider === option.value ? props.model : ""}
                         onValueChange={(value) => handleModelChange(option.value, value)}
                       >
-                        {props.modelOptionsByProvider[option.value].map((modelOption) => (
+                        {splitModelOptions(option.value).standard.map((modelOption) => (
+                          <MenuRadioItem
+                            key={`${option.value}:${modelOption.slug}`}
+                            value={modelOption.slug}
+                            onClick={() => setIsMenuOpen(false)}
+                          >
+                            {modelOption.name}
+                          </MenuRadioItem>
+                        ))}
+                        {splitModelOptions(option.value).proxy.length > 0 ? <MenuDivider /> : null}
+                        {splitModelOptions(option.value).proxy.map((modelOption) => (
                           <MenuRadioItem
                             key={`${option.value}:${modelOption.slug}`}
                             value={modelOption.slug}

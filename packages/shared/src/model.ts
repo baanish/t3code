@@ -1,6 +1,7 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
+  type ClaudeSettings,
   type ClaudeCodeEffort,
   type ClaudeModelOptions,
   type CodexModelOptions,
@@ -8,6 +9,156 @@ import {
   type ModelSelection,
   type ProviderKind,
 } from "@t3tools/contracts";
+
+export const CLAUDE_PROXY_MODEL_DEFINITIONS = [
+  {
+    slug: "proxy-opus",
+    name: "Proxy Opus",
+    settingsKey: "proxyOpusModel",
+    capabilityModelSlug: "claude-opus-4-6",
+  },
+  {
+    slug: "proxy-sonnet",
+    name: "Proxy Sonnet",
+    settingsKey: "proxySonnetModel",
+    capabilityModelSlug: "claude-sonnet-4-6",
+  },
+  {
+    slug: "proxy-haiku",
+    name: "Proxy Haiku",
+    settingsKey: "proxyHaikuModel",
+    capabilityModelSlug: "claude-haiku-4-5",
+  },
+] as const;
+
+export type ClaudeProxyModelSlug = (typeof CLAUDE_PROXY_MODEL_DEFINITIONS)[number]["slug"];
+
+type ClaudeProxySettings = Pick<
+  ClaudeSettings,
+  "customBaseUrl" | "customApiKey" | "proxyOpusModel" | "proxySonnetModel" | "proxyHaikuModel"
+>;
+
+export function getClaudeProxyModelSlug(
+  model: string | null | undefined,
+): ClaudeProxyModelSlug | null {
+  if (typeof model !== "string") {
+    return null;
+  }
+  const trimmed = model.trim();
+  const match = CLAUDE_PROXY_MODEL_DEFINITIONS.find((candidate) => candidate.slug === trimmed);
+  return match?.slug ?? null;
+}
+
+export function isClaudeProxyModel(model: string | null | undefined): boolean {
+  return getClaudeProxyModelSlug(model) !== null;
+}
+
+export function hasClaudeProxyCredentials(settings: ClaudeProxySettings): boolean {
+  return settings.customBaseUrl.trim().length > 0 && settings.customApiKey.trim().length > 0;
+}
+
+export function getClaudeProxyModelEntries(settings: ClaudeProxySettings): ReadonlyArray<{
+  slug: ClaudeProxyModelSlug;
+  name: string;
+  targetModel: string;
+  capabilityModelSlug: string;
+}> {
+  if (!hasClaudeProxyCredentials(settings)) {
+    return [];
+  }
+
+  return CLAUDE_PROXY_MODEL_DEFINITIONS.flatMap((definition) => {
+    const targetModel = settings[definition.settingsKey].trim();
+    return targetModel
+      ? [
+          {
+            slug: definition.slug,
+            name: definition.name,
+            targetModel,
+            capabilityModelSlug: definition.capabilityModelSlug,
+          },
+        ]
+      : [];
+  });
+}
+
+export function isClaudeProxyConfigured(settings: ClaudeProxySettings): boolean {
+  return getClaudeProxyModelEntries(settings).length > 0;
+}
+
+export function getClaudeProxyCapabilityModelSlug(model: string | null | undefined): string | null {
+  const slug = getClaudeProxyModelSlug(model);
+  if (!slug) {
+    return null;
+  }
+  return (
+    CLAUDE_PROXY_MODEL_DEFINITIONS.find((candidate) => candidate.slug === slug)
+      ?.capabilityModelSlug ?? null
+  );
+}
+
+export function getClaudeProxyTargetModel(
+  settings: ClaudeProxySettings,
+  model: string | null | undefined,
+): string | null {
+  const slug = getClaudeProxyModelSlug(model);
+  if (!slug) {
+    return null;
+  }
+  return (
+    getClaudeProxyModelEntries(settings).find((candidate) => candidate.slug === slug)
+      ?.targetModel ?? null
+  );
+}
+
+export function getClaudeProxyEnvironment(
+  settings: ClaudeProxySettings,
+  model: string | null | undefined,
+): Record<string, string> {
+  const targetModel = getClaudeProxyTargetModel(settings, model);
+  if (!targetModel) {
+    return {};
+  }
+
+  const env: Record<string, string> = {
+    ANTHROPIC_BASE_URL: settings.customBaseUrl.trim(),
+    ANTHROPIC_AUTH_TOKEN: settings.customApiKey.trim(),
+    ANTHROPIC_MODEL: targetModel,
+  };
+
+  const proxyEntries = getClaudeProxyModelEntries(settings);
+  const proxyOpusModel = proxyEntries.find((entry) => entry.slug === "proxy-opus")?.targetModel;
+  const proxySonnetModel = proxyEntries.find((entry) => entry.slug === "proxy-sonnet")?.targetModel;
+  const proxyHaikuModel = proxyEntries.find((entry) => entry.slug === "proxy-haiku")?.targetModel;
+
+  if (proxyOpusModel) {
+    env.ANTHROPIC_DEFAULT_OPUS_MODEL = proxyOpusModel;
+  }
+  if (proxySonnetModel) {
+    env.ANTHROPIC_DEFAULT_SONNET_MODEL = proxySonnetModel;
+  }
+  if (proxyHaikuModel) {
+    env.ANTHROPIC_DEFAULT_HAIKU_MODEL = proxyHaikuModel;
+    env.ANTHROPIC_SMALL_FAST_MODEL = proxyHaikuModel;
+  }
+
+  return env;
+}
+
+export function getClaudeProxyCredentialsEnvironment(settings: {
+  customBaseUrl?: string | null | undefined;
+  customApiKey?: string | null | undefined;
+}): Record<string, string> {
+  const customBaseUrl = settings.customBaseUrl?.trim() ?? "";
+  const customApiKey = settings.customApiKey?.trim() ?? "";
+  if (!customBaseUrl || !customApiKey) {
+    return {};
+  }
+  return {
+    ANTHROPIC_BASE_URL: customBaseUrl,
+    ANTHROPIC_AUTH_TOKEN: customApiKey,
+  };
+}
 
 export interface SelectableModelOption {
   slug: string;

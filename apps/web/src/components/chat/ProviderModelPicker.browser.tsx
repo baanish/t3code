@@ -128,6 +128,8 @@ async function mountPicker(props: {
   model: string;
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProvider>;
+  providerCustomEndpointByProvider?: Partial<Record<ProviderKind, boolean>>;
+  settings?: typeof DEFAULT_UNIFIED_SETTINGS;
   triggerVariant?: "ghost" | "outline";
 }) {
   const host = document.createElement("div");
@@ -135,7 +137,7 @@ async function mountPicker(props: {
   const onProviderModelChange = vi.fn();
   const providers = props.providers ?? TEST_PROVIDERS;
   const modelOptionsByProvider = getCustomModelOptionsByProvider(
-    DEFAULT_UNIFIED_SETTINGS,
+    props.settings ?? DEFAULT_UNIFIED_SETTINGS,
     providers,
     props.provider,
     props.model,
@@ -147,6 +149,9 @@ async function mountPicker(props: {
       lockedProvider={props.lockedProvider}
       providers={providers}
       modelOptionsByProvider={modelOptionsByProvider}
+      {...(props.providerCustomEndpointByProvider
+        ? { providerCustomEndpointByProvider: props.providerCustomEndpointByProvider }
+        : {})}
       triggerVariant={props.triggerVariant}
       onProviderModelChange={onProviderModelChange}
     />,
@@ -182,6 +187,49 @@ describe("ProviderModelPicker", () => {
         expect(text).toContain("Codex");
         expect(text).toContain("Claude");
         expect(text).not.toContain("Claude Sonnet 4.6");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows Claude proxy options and badge when a proxy model is selected", async () => {
+    const mounted = await mountPicker({
+      provider: "claudeAgent",
+      model: "proxy-sonnet",
+      lockedProvider: null,
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providers: {
+          ...DEFAULT_UNIFIED_SETTINGS.providers,
+          claudeAgent: {
+            ...DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent,
+            customBaseUrl: "https://api.minimax.io/anthropic",
+            customApiKey: "masked",
+            proxyOpusModel: "MiniMax-M2.7",
+            proxySonnetModel: "MiniMax-M2.7-Sonnet",
+            proxyHaikuModel: "MiniMax-M2.7-Haiku",
+          },
+        },
+      },
+      providerCustomEndpointByProvider: {
+        claudeAgent: true,
+      },
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").toContain("Proxy");
+      });
+
+      await page.getByRole("button").click();
+      await page.getByRole("menuitem", { name: "Claude" }).hover();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Proxy Opus");
+        expect(text).toContain("Proxy Sonnet");
+        expect(text).toContain("Proxy Haiku");
       });
     } finally {
       await mounted.cleanup();

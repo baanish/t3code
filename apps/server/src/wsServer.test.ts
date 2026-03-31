@@ -56,6 +56,7 @@ import { GitCommandError, GitManagerError } from "./git/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
+import { MASKED_API_KEY_VALUE } from "./settingsSecrets";
 
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asProviderItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
@@ -874,6 +875,74 @@ describe("WebSocket Server", () => {
       settings: defaultServerSettings,
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
+  });
+
+  it("masks provider API keys in server.getConfig and update pushes", async () => {
+    const serverSettings: Partial<ServerSettings> = {
+      providers: {
+        codex: {} as ServerSettings["providers"]["codex"],
+        claudeAgent: {
+          customBaseUrl: "https://api.minimax.io/anthropic",
+          customApiKey: "claude-secret",
+        } as ServerSettings["providers"]["claudeAgent"],
+      },
+    };
+
+    server = await createTestServer({ cwd: "/my/workspace", serverSettings });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const configResponse = await sendRequest(ws, WS_METHODS.serverGetConfig);
+    expect(configResponse.error).toBeUndefined();
+    expect(configResponse.result).toMatchObject({
+      settings: {
+        providers: {
+          claudeAgent: {
+            customBaseUrl: "https://api.minimax.io/anthropic",
+            customApiKey: MASKED_API_KEY_VALUE,
+          },
+        },
+      },
+    });
+
+    const updateResponse = await sendRequest(ws, WS_METHODS.serverUpdateSettings, {
+      patch: {
+        providers: {
+          codex: {
+            binaryPath: "/opt/homebrew/bin/codex",
+          },
+        },
+      },
+    });
+    expect(updateResponse.error).toBeUndefined();
+    expect(updateResponse.result).toMatchObject({
+      providers: {
+        codex: {
+          binaryPath: "/opt/homebrew/bin/codex",
+        },
+      },
+    });
+
+    const push = await waitForPush(
+      ws,
+      WS_CHANNELS.serverConfigUpdated,
+      (message) => message.data.settings?.providers.codex.binaryPath === "/opt/homebrew/bin/codex",
+    );
+    expect(push.data).toMatchObject({
+      settings: {
+        providers: {
+          codex: {
+            binaryPath: "/opt/homebrew/bin/codex",
+          },
+          claudeAgent: {
+            customApiKey: MASKED_API_KEY_VALUE,
+          },
+        },
+      },
+    });
   });
 
   it("bootstraps default keybindings file when missing", async () => {

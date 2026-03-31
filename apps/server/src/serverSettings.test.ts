@@ -1,6 +1,7 @@
+import assert from "node:assert/strict";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DEFAULT_SERVER_SETTINGS, ServerSettingsPatch } from "@t3tools/contracts";
-import { assert, it } from "@effect/vitest";
+import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Schema } from "effect";
 import { ServerConfig } from "./config";
 import { ServerSettingsLive, ServerSettingsService } from "./serverSettings";
@@ -56,7 +57,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
           claudeAgent: {
             binaryPath: "/usr/local/bin/claude",
-            customModels: ["claude-custom"],
+            customBaseUrl: "https://api.minimax.io/anthropic",
+            customApiKey: "claude-key",
+            proxyOpusModel: "minimax-opus",
+            proxySonnetModel: "minimax-sonnet",
+            proxyHaikuModel: "minimax-haiku",
           },
         },
         textGenerationModelSelection: {
@@ -91,7 +96,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.deepEqual(next.providers.claudeAgent, {
         enabled: true,
         binaryPath: "/usr/local/bin/claude",
-        customModels: ["claude-custom"],
+        customBaseUrl: "https://api.minimax.io/anthropic",
+        customApiKey: "claude-key",
+        proxyOpusModel: "minimax-opus",
+        proxySonnetModel: "minimax-sonnet",
+        proxyHaikuModel: "minimax-haiku",
       });
       assert.deepEqual(next.textGenerationModelSelection, {
         provider: "codex",
@@ -153,6 +162,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
           claudeAgent: {
             binaryPath: "  /opt/homebrew/bin/claude  ",
+            customBaseUrl: "  https://api.fireworks.ai/inference  ",
+            customApiKey: "  claude-token  ",
           },
         },
       });
@@ -166,7 +177,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.deepEqual(next.providers.claudeAgent, {
         enabled: true,
         binaryPath: "/opt/homebrew/bin/claude",
-        customModels: [],
+        customBaseUrl: "https://api.fireworks.ai/inference",
+        customApiKey: "claude-token",
+        proxyOpusModel: "",
+        proxySonnetModel: "",
+        proxyHaikuModel: "",
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
@@ -211,6 +226,36 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         providers: {
           codex: {
             binaryPath: "/opt/homebrew/bin/codex",
+          },
+        },
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("writes custom provider endpoint overrides when they differ from defaults", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsService;
+      const serverConfig = yield* ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      const next = yield* serverSettings.updateSettings({
+        providers: {
+          claudeAgent: {
+            customBaseUrl: "https://api.fireworks.ai/inference",
+            customApiKey: "claude-fireworks-key",
+          },
+        },
+      });
+
+      assert.equal(next.providers.claudeAgent.customBaseUrl, "https://api.fireworks.ai/inference");
+      assert.equal(next.providers.claudeAgent.customApiKey, "claude-fireworks-key");
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.deepEqual(JSON.parse(raw), {
+        providers: {
+          claudeAgent: {
+            customBaseUrl: "https://api.fireworks.ai/inference",
+            customApiKey: "claude-fireworks-key",
           },
         },
       });

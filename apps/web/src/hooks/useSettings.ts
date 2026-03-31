@@ -184,16 +184,6 @@ export function buildLegacyServerSettingsMigrationPatch(legacySettings: Record<s
     patch.providers.claudeAgent.binaryPath = legacySettings.claudeBinaryPath;
   }
 
-  if (Array.isArray(legacySettings.customClaudeModels)) {
-    patch.providers ??= {};
-    patch.providers.claudeAgent ??= {};
-    patch.providers.claudeAgent.customModels = normalizeCustomModelSlugs(
-      legacySettings.customClaudeModels,
-      new Set<string>(),
-      "claudeAgent",
-    );
-  }
-
   return patch;
 }
 

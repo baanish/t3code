@@ -135,6 +135,7 @@ function makeHarness(config?: {
   readonly nativeEventLogger?: ClaudeAdapterLiveOptions["nativeEventLogger"];
   readonly cwd?: string;
   readonly baseDir?: string;
+  readonly serverSettings?: Parameters<typeof ServerSettingsService.layerTest>[0];
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -169,7 +170,7 @@ function makeHarness(config?: {
           config?.baseDir ?? "/tmp",
         ),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(ServerSettingsService.layerTest(config?.serverSettings)),
       Layer.provideMerge(NodeServices.layer),
     ),
     query,
@@ -297,6 +298,81 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
       assert.equal(createInput?.options.permissionMode, undefined);
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not pass Claude proxy env for non-proxy model selections", () => {
+    const harness = makeHarness({
+      serverSettings: {
+        providers: {
+          claudeAgent: {
+            customBaseUrl: "https://api.minimax.io/anthropic",
+            customApiKey: "claude-minimax-key",
+            proxyOpusModel: "MiniMax-M2.7",
+            proxySonnetModel: "MiniMax-M2.7-Sonnet",
+            proxyHaikuModel: "MiniMax-M2.7-Haiku",
+          },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.env?.ANTHROPIC_BASE_URL, undefined);
+      assert.equal(createInput?.options.env?.ANTHROPIC_AUTH_TOKEN, undefined);
+      assert.equal(createInput?.options.env?.ANTHROPIC_MODEL, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("passes Claude proxy env for proxy model selections", () => {
+    const harness = makeHarness({
+      serverSettings: {
+        providers: {
+          claudeAgent: {
+            customBaseUrl: "https://api.minimax.io/anthropic",
+            customApiKey: "claude-minimax-key",
+            proxyOpusModel: "MiniMax-M2.7",
+            proxySonnetModel: "MiniMax-M2.7-Sonnet",
+            proxyHaikuModel: "MiniMax-M2.7-Haiku",
+          },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "proxy-sonnet",
+        },
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(
+        createInput?.options.env?.ANTHROPIC_BASE_URL,
+        "https://api.minimax.io/anthropic",
+      );
+      assert.equal(createInput?.options.env?.ANTHROPIC_AUTH_TOKEN, "claude-minimax-key");
+      assert.equal(createInput?.options.env?.ANTHROPIC_MODEL, "MiniMax-M2.7-Sonnet");
+      assert.equal(createInput?.options.env?.ANTHROPIC_DEFAULT_OPUS_MODEL, "MiniMax-M2.7");
+      assert.equal(createInput?.options.env?.ANTHROPIC_DEFAULT_SONNET_MODEL, "MiniMax-M2.7-Sonnet");
+      assert.equal(createInput?.options.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL, "MiniMax-M2.7-Haiku");
+      assert.equal(createInput?.options.env?.ANTHROPIC_SMALL_FAST_MODEL, "MiniMax-M2.7-Haiku");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

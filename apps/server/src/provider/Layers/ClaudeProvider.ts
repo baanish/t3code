@@ -9,6 +9,12 @@ import type {
 import { Cache, Duration, Effect, Equal, Layer, Option, Result, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import {
+  getClaudeProxyCapabilityModelSlug,
+  getClaudeProxyCredentialsEnvironment,
+  getClaudeProxyModelEntries,
+  hasClaudeProxyCredentials,
+} from "@t3tools/shared/model";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 
 import {
@@ -18,7 +24,6 @@ import {
   extractAuthBoolean,
   isCommandMissingCause,
   parseGenericCliVersion,
-  providerModelsFromSettings,
   spawnAndCollect,
   type CommandResult,
 } from "../providerSnapshot";
@@ -84,7 +89,7 @@ const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
 ];
 
 export function getClaudeModelCapabilities(model: string | null | undefined): ModelCapabilities {
-  const slug = model?.trim();
+  const slug = getClaudeProxyCapabilityModelSlug(model) ?? model?.trim();
   return (
     BUILT_IN_MODELS.find((candidate) => candidate.slug === slug)?.capabilities ?? {
       reasoningEffortLevels: [],
@@ -94,6 +99,21 @@ export function getClaudeModelCapabilities(model: string | null | undefined): Mo
       promptInjectedEffortLevels: [],
     }
   );
+}
+
+function getClaudeProviderModels(
+  settings: Pick<
+    ClaudeSettings,
+    "customBaseUrl" | "customApiKey" | "proxyOpusModel" | "proxySonnetModel" | "proxyHaikuModel"
+  >,
+): ReadonlyArray<ServerProviderModel> {
+  const proxyModels = getClaudeProxyModelEntries(settings).map((entry) => ({
+    slug: entry.slug,
+    name: entry.name,
+    isCustom: false,
+    capabilities: getClaudeModelCapabilities(entry.slug),
+  }));
+  return [...BUILT_IN_MODELS, ...proxyModels];
 }
 
 export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
@@ -394,19 +414,27 @@ const CAPABILITIES_PROBE_TIMEOUT_MS = 8_000;
  * This is used as a fallback when `claude auth status` does not include
  * subscription type information.
  */
-const probeClaudeCapabilities = (binaryPath: string) => {
+const probeClaudeCapabilities = (input: {
+  readonly binaryPath: string;
+  readonly customBaseUrl?: string;
+  readonly customApiKey?: string;
+}) => {
   const abort = new AbortController();
   return Effect.tryPromise(async () => {
     const q = claudeQuery({
       prompt: ".",
       options: {
         persistSession: false,
-        pathToClaudeCodeExecutable: binaryPath,
+        pathToClaudeCodeExecutable: input.binaryPath,
         abortController: abort,
         maxTurns: 0,
         settingSources: [],
         allowedTools: [],
         stderr: () => {},
+        env: {
+          ...process.env,
+          ...getClaudeProxyCredentialsEnvironment(input),
+        },
       },
     });
     const init = await q.initializationResult();
@@ -434,12 +462,20 @@ const runClaudeCommand = (args: ReadonlyArray<string>) =>
     );
     const command = ChildProcess.make(claudeSettings.binaryPath, [...args], {
       shell: process.platform === "win32",
+      env: {
+        ...process.env,
+        ...getClaudeProxyCredentialsEnvironment(claudeSettings),
+      },
     });
     return yield* spawnAndCollect(claudeSettings.binaryPath, command);
   });
 
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
-  resolveSubscriptionType?: (binaryPath: string) => Effect.Effect<string | undefined>,
+  resolveSubscriptionType?: (input: {
+    readonly binaryPath: string;
+    readonly customBaseUrl?: string;
+    readonly customApiKey?: string;
+  }) => Effect.Effect<string | undefined>,
 ): Effect.fn.Return<
   ServerProvider,
   ServerSettingsError,
@@ -450,7 +486,8 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     Effect.map((settings) => settings.providers.claudeAgent),
   );
   const checkedAt = new Date().toISOString();
-  const models = providerModelsFromSettings(BUILT_IN_MODELS, PROVIDER, claudeSettings.customModels);
+  const models = getClaudeProviderModels(claudeSettings);
+  const hasProxyCredentials = hasClaudeProxyCredentials(claudeSettings);
 
   if (!claudeSettings.enabled) {
     return buildServerProvider({
@@ -530,6 +567,21 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
+  const buildProxyReadyProvider = () =>
+    buildServerProvider({
+      provider: PROVIDER,
+      enabled: claudeSettings.enabled,
+      checkedAt,
+      models,
+      probe: {
+        installed: true,
+        version: parsedVersion,
+        status: "ready",
+        auth: { status: "authenticated" },
+        message: "Using custom proxy endpoint.",
+      },
+    });
+
   // ── Auth check + subscription detection ────────────────────────────
 
   const authProbe = yield* runClaudeCommand(["auth", "status"]).pipe(
@@ -551,8 +603,12 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     authMethod = extractClaudeAuthMethodFromOutput(authProbe.success.value);
   }
 
-  if (!subscriptionType && resolveSubscriptionType) {
-    subscriptionType = yield* resolveSubscriptionType(claudeSettings.binaryPath);
+  if (!subscriptionType && resolveSubscriptionType && !hasProxyCredentials) {
+    subscriptionType = yield* resolveSubscriptionType({
+      binaryPath: claudeSettings.binaryPath,
+      customBaseUrl: claudeSettings.customBaseUrl,
+      customApiKey: claudeSettings.customApiKey,
+    });
   }
 
   const resolvedModels = adjustModelsForSubscription(models, subscriptionType);
@@ -560,6 +616,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   // ── Handle auth results (same logic as before, adjusted models) ──
 
   if (Result.isFailure(authProbe)) {
+    if (hasProxyCredentials) {
+      return buildProxyReadyProvider();
+    }
     const error = authProbe.failure;
     return buildServerProvider({
       provider: PROVIDER,
@@ -580,6 +639,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   }
 
   if (Option.isNone(authProbe.success)) {
+    if (hasProxyCredentials) {
+      return buildProxyReadyProvider();
+    }
     return buildServerProvider({
       provider: PROVIDER,
       enabled: claudeSettings.enabled,
@@ -596,6 +658,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   }
 
   const parsed = parseClaudeAuthStatusFromOutput(authProbe.success.value);
+  if (hasProxyCredentials && parsed.auth.status !== "authenticated") {
+    return buildProxyReadyProvider();
+  }
   const authMetadata = claudeAuthMetadata({ subscriptionType, authMethod });
   return buildServerProvider({
     provider: PROVIDER,
@@ -624,12 +689,25 @@ export const ClaudeProviderLive = Layer.effect(
     const subscriptionProbeCache = yield* Cache.make({
       capacity: 1,
       timeToLive: Duration.minutes(5),
-      lookup: (binaryPath: string) =>
-        probeClaudeCapabilities(binaryPath).pipe(Effect.map((r) => r?.subscriptionType)),
+      lookup: (key: string) => {
+        const [binaryPath, customBaseUrl, customApiKey] = JSON.parse(key) as [
+          string,
+          string | undefined,
+          string | undefined,
+        ];
+        return probeClaudeCapabilities({
+          binaryPath,
+          ...(customBaseUrl ? { customBaseUrl } : {}),
+          ...(customApiKey ? { customApiKey } : {}),
+        }).pipe(Effect.map((r) => r?.subscriptionType));
+      },
     });
 
-    const checkProvider = checkClaudeProviderStatus((binaryPath) =>
-      Cache.get(subscriptionProbeCache, binaryPath),
+    const checkProvider = checkClaudeProviderStatus((input) =>
+      Cache.get(
+        subscriptionProbeCache,
+        JSON.stringify([input.binaryPath, input.customBaseUrl, input.customApiKey]),
+      ),
     ).pipe(
       Effect.provideService(ServerSettingsService, serverSettings),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

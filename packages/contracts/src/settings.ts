@@ -67,7 +67,11 @@ export type CodexSettings = typeof CodexSettings.Type;
 export const ClaudeSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   binaryPath: makeBinaryPathSetting("claude"),
-  customModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(() => [])),
+  customBaseUrl: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  customApiKey: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  proxyOpusModel: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  proxySonnetModel: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
+  proxyHaikuModel: TrimmedString.pipe(Schema.withDecodingDefault(() => "")),
 });
 export type ClaudeSettings = typeof ClaudeSettings.Type;
 
@@ -138,7 +142,11 @@ const CodexSettingsPatch = Schema.Struct({
 const ClaudeSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(Schema.String),
-  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  customBaseUrl: Schema.optionalKey(Schema.String),
+  customApiKey: Schema.optionalKey(Schema.String),
+  proxyOpusModel: Schema.optionalKey(Schema.String),
+  proxySonnetModel: Schema.optionalKey(Schema.String),
+  proxyHaikuModel: Schema.optionalKey(Schema.String),
 });
 
 export const ServerSettingsPatch = Schema.Struct({

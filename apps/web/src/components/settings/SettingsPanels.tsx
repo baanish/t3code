@@ -18,8 +18,12 @@ import {
   type ServerProviderModel,
   ThreadId,
 } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
-import { normalizeModelSlug } from "@t3tools/shared/model";
+import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts/settings";
+import {
+  getClaudeProxyModelEntries,
+  isClaudeProxyConfigured,
+  normalizeModelSlug,
+} from "@t3tools/shared/model";
 import { Equal } from "effect";
 import { APP_VERSION } from "../../branding";
 import {
@@ -88,6 +92,12 @@ type InstallProviderSettings = {
   title: string;
   binaryPlaceholder: string;
   binaryDescription: ReactNode;
+  baseUrlEnvVar?: string;
+  baseUrlPlaceholder?: string;
+  baseUrlDescription?: ReactNode;
+  apiKeyEnvVar?: string;
+  apiKeyPlaceholder?: string;
+  apiKeyDescription?: ReactNode;
   homePathKey?: "codexHomePath";
   homePlaceholder?: string;
   homeDescription?: ReactNode;
@@ -108,6 +118,13 @@ const PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     title: "Claude",
     binaryPlaceholder: "Claude binary path",
     binaryDescription: "Path to the Claude binary",
+    baseUrlEnvVar: "ANTHROPIC_BASE_URL",
+    baseUrlPlaceholder: "https://api.example.com",
+    baseUrlDescription:
+      "Base URL for an Anthropic-compatible proxy. The SDK appends /v1/messages automatically, so use the bare host (e.g. https://api.minimax.io/anthropic).",
+    apiKeyEnvVar: "ANTHROPIC_AUTH_TOKEN",
+    apiKeyPlaceholder: "sk-ant-...",
+    apiKeyDescription: "API key for your Anthropic-compatible proxy provider.",
   },
 ] as const;
 
@@ -528,22 +545,37 @@ export function GeneralSettingsPanel() {
     claudeAgent: Boolean(
       settings.providers.claudeAgent.binaryPath !==
         DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.binaryPath ||
-      settings.providers.claudeAgent.customModels.length > 0,
+      settings.providers.claudeAgent.customBaseUrl !==
+        DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.customBaseUrl ||
+      settings.providers.claudeAgent.customApiKey !==
+        DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.customApiKey ||
+      settings.providers.claudeAgent.proxyOpusModel !==
+        DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.proxyOpusModel ||
+      settings.providers.claudeAgent.proxySonnetModel !==
+        DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.proxySonnetModel ||
+      settings.providers.claudeAgent.proxyHaikuModel !==
+        DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.proxyHaikuModel,
     ),
   });
-  const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
-    Record<ProviderKind, string>
-  >({
-    codex: "",
-    claudeAgent: "",
-  });
-  const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
-    Partial<Record<ProviderKind, string | null>>
-  >({});
+  const [customCodexModelInput, setCustomCodexModelInput] = useState("");
+  const [customCodexModelError, setCustomCodexModelError] = useState<string | null>(null);
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const refreshingRef = useRef(false);
   const queryClient = useQueryClient();
   const modelListRefs = useRef<Partial<Record<ProviderKind, HTMLDivElement | null>>>({});
+  const updateProviderSettings = useCallback(
+    <TProvider extends ProviderKind>(
+      provider: TProvider,
+      patch: Partial<(typeof settings.providers)[TProvider]>,
+    ) => {
+      updateSettings({
+        providers: {
+          [provider]: patch,
+        },
+      } as unknown as Partial<UnifiedSettings>);
+    },
+    [updateSettings],
+  );
   const refreshProviders = useCallback(() => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
@@ -602,95 +634,59 @@ export function GeneralSettingsPanel() {
       });
   }, [availableEditors, keybindingsConfigPath]);
 
-  const addCustomModel = useCallback(
-    (provider: ProviderKind) => {
-      const customModelInput = customModelInputByProvider[provider];
-      const customModels = settings.providers[provider].customModels;
-      const normalized = normalizeModelSlug(customModelInput, provider);
-      if (!normalized) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "Enter a model slug.",
-        }));
-        return;
-      }
-      if (
-        serverProviders
-          .find((candidate) => candidate.provider === provider)
-          ?.models.some((option) => !option.isCustom && option.slug === normalized)
-      ) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That model is already built in.",
-        }));
-        return;
-      }
-      if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
-        }));
-        return;
-      }
-      if (customModels.includes(normalized)) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That custom model is already saved.",
-        }));
-        return;
-      }
+  const addCodexCustomModel = useCallback(() => {
+    const customModelInput = customCodexModelInput;
+    const customModels = settings.providers.codex.customModels;
+    const normalized = normalizeModelSlug(customModelInput, "codex");
+    if (!normalized) {
+      setCustomCodexModelError("Enter a model slug.");
+      return;
+    }
+    if (
+      serverProviders
+        .find((candidate) => candidate.provider === "codex")
+        ?.models.some((option) => !option.isCustom && option.slug === normalized)
+    ) {
+      setCustomCodexModelError("That model is already built in.");
+      return;
+    }
+    if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
+      setCustomCodexModelError(
+        `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
+      );
+      return;
+    }
+    if (customModels.includes(normalized)) {
+      setCustomCodexModelError("That custom model is already saved.");
+      return;
+    }
 
-      updateSettings({
-        providers: {
-          ...settings.providers,
-          [provider]: {
-            ...settings.providers[provider],
-            customModels: [...customModels, normalized],
-          },
-        },
-      });
-      setCustomModelInputByProvider((existing) => ({
-        ...existing,
-        [provider]: "",
-      }));
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: null,
-      }));
+    updateProviderSettings("codex", {
+      customModels: [...customModels, normalized],
+    });
+    setCustomCodexModelInput("");
+    setCustomCodexModelError(null);
 
-      const el = modelListRefs.current[provider];
-      if (!el) return;
-      const scrollToEnd = () => el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-      requestAnimationFrame(scrollToEnd);
-      const observer = new MutationObserver(() => {
-        scrollToEnd();
-        observer.disconnect();
+    const el = modelListRefs.current.codex;
+    if (!el) return;
+    const scrollToEnd = () => el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    requestAnimationFrame(scrollToEnd);
+    const observer = new MutationObserver(() => {
+      scrollToEnd();
+      observer.disconnect();
+    });
+    observer.observe(el, { childList: true, subtree: true });
+    setTimeout(() => observer.disconnect(), 2_000);
+  }, [customCodexModelInput, serverProviders, settings, updateProviderSettings]);
+
+  const removeCodexCustomModel = useCallback(
+    (slug: string) => {
+      updateProviderSettings("codex", {
+        customModels: settings.providers.codex.customModels.filter((model) => model !== slug),
       });
-      observer.observe(el, { childList: true, subtree: true });
-      setTimeout(() => observer.disconnect(), 2_000);
+      setCustomCodexModelError(null);
     },
-    [customModelInputByProvider, serverProviders, settings, updateSettings],
-  );
-
-  const removeCustomModel = useCallback(
-    (provider: ProviderKind, slug: string) => {
-      updateSettings({
-        providers: {
-          ...settings.providers,
-          [provider]: {
-            ...settings.providers[provider],
-            customModels: settings.providers[provider].customModels.filter(
-              (model) => model !== slug,
-            ),
-          },
-        },
-      });
-      setCustomModelErrorByProvider((existing) => ({
-        ...existing,
-        [provider]: null,
-      }));
-    },
-    [settings, updateSettings],
+    [settings, updateProviderSettings],
   );
 
   const providerCards = PROVIDER_SETTINGS.map((providerSettings) => {
@@ -699,26 +695,46 @@ export function GeneralSettingsPanel() {
     );
     const providerConfig = settings.providers[providerSettings.provider];
     const defaultProviderConfig = DEFAULT_UNIFIED_SETTINGS.providers[providerSettings.provider];
+    const codexProviderConfig =
+      providerSettings.provider === "codex" ? settings.providers.codex : null;
+    const claudeProviderConfig =
+      providerSettings.provider === "claudeAgent" ? settings.providers.claudeAgent : null;
     const statusKey = liveProvider?.status ?? (providerConfig.enabled ? "warning" : "disabled");
     const summary = getProviderSummary(liveProvider);
     const models: ReadonlyArray<ServerProviderModel> =
       liveProvider?.models ??
-      providerConfig.customModels.map((slug) => ({
-        slug,
-        name: slug,
-        isCustom: true,
-        capabilities: null,
-      }));
+      (codexProviderConfig
+        ? codexProviderConfig.customModels.map((slug: string) => ({
+            slug,
+            name: slug,
+            isCustom: true,
+            capabilities: null,
+          }))
+        : getClaudeProxyModelEntries(claudeProviderConfig!).map((entry) => ({
+            slug: entry.slug,
+            name: entry.name,
+            isCustom: false,
+            capabilities: null,
+          })));
 
     return {
       provider: providerSettings.provider,
       title: providerSettings.title,
       binaryPlaceholder: providerSettings.binaryPlaceholder,
       binaryDescription: providerSettings.binaryDescription,
+      baseUrlEnvVar: providerSettings.baseUrlEnvVar,
+      baseUrlPlaceholder: providerSettings.baseUrlPlaceholder,
+      baseUrlDescription: providerSettings.baseUrlDescription,
+      apiKeyEnvVar: providerSettings.apiKeyEnvVar,
+      apiKeyPlaceholder: providerSettings.apiKeyPlaceholder,
+      apiKeyDescription: providerSettings.apiKeyDescription,
       homePathKey: providerSettings.homePathKey,
       homePlaceholder: providerSettings.homePlaceholder,
       homeDescription: providerSettings.homeDescription,
       binaryPathValue: providerConfig.binaryPath,
+      customBaseUrlValue: claudeProviderConfig?.customBaseUrl ?? "",
+      customApiKeyValue: claudeProviderConfig?.customApiKey ?? "",
+      claudeProxyConfig: claudeProviderConfig,
       isDirty: !Equal.equals(providerConfig, defaultProviderConfig),
       liveProvider,
       models,
@@ -982,6 +998,9 @@ export function GeneralSettingsPanel() {
                 lockedProvider={null}
                 providers={serverProviders}
                 modelOptionsByProvider={gitModelOptionsByProvider}
+                providerCustomEndpointByProvider={{
+                  claudeAgent: isClaudeProxyConfigured(settings.providers.claudeAgent),
+                }}
                 triggerVariant="outline"
                 triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
                 onProviderModelChange={(provider, model) => {
@@ -1060,10 +1079,12 @@ export function GeneralSettingsPanel() {
         }
       >
         {providerCards.map((providerCard) => {
-          const customModelInput = customModelInputByProvider[providerCard.provider];
-          const customModelError = customModelErrorByProvider[providerCard.provider] ?? null;
           const providerDisplayName =
             PROVIDER_DISPLAY_NAMES[providerCard.provider] ?? providerCard.title;
+          const showClaudeProxyFields =
+            providerCard.provider === "claudeAgent" &&
+            (providerCard.claudeProxyConfig?.customBaseUrl.trim().length ?? 0) > 0 &&
+            (providerCard.claudeProxyConfig?.customApiKey.trim().length ?? 0) > 0;
 
           return (
             <div key={providerCard.provider} className="border-t border-border first:border-t-0">
@@ -1087,15 +1108,14 @@ export function GeneralSettingsPanel() {
                             onClick={() => {
                               updateSettings({
                                 providers: {
-                                  ...settings.providers,
                                   [providerCard.provider]:
                                     DEFAULT_UNIFIED_SETTINGS.providers[providerCard.provider],
                                 },
-                              });
-                              setCustomModelErrorByProvider((existing) => ({
-                                ...existing,
-                                [providerCard.provider]: null,
-                              }));
+                              } as Partial<UnifiedSettings>);
+                              if (providerCard.provider === "codex") {
+                                setCustomCodexModelError(null);
+                                setCustomCodexModelInput("");
+                              }
                             }}
                           />
                         ) : null}
@@ -1134,9 +1154,7 @@ export function GeneralSettingsPanel() {
                           isDisabling && textGenProvider === providerCard.provider;
                         updateSettings({
                           providers: {
-                            ...settings.providers,
                             [providerCard.provider]: {
-                              ...settings.providers[providerCard.provider],
                               enabled: Boolean(checked),
                             },
                           },
@@ -1146,7 +1164,7 @@ export function GeneralSettingsPanel() {
                                   DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
                               }
                             : {}),
-                        });
+                        } as Partial<UnifiedSettings>);
                       }}
                       aria-label={`Enable ${providerDisplayName}`}
                     />
@@ -1178,14 +1196,8 @@ export function GeneralSettingsPanel() {
                           className="mt-1.5"
                           value={providerCard.binaryPathValue}
                           onChange={(event) =>
-                            updateSettings({
-                              providers: {
-                                ...settings.providers,
-                                [providerCard.provider]: {
-                                  ...settings.providers[providerCard.provider],
-                                  binaryPath: event.target.value,
-                                },
-                              },
+                            updateProviderSettings(providerCard.provider, {
+                              binaryPath: event.target.value,
                             })
                           }
                           placeholder={providerCard.binaryPlaceholder}
@@ -1211,14 +1223,8 @@ export function GeneralSettingsPanel() {
                             className="mt-1.5"
                             value={codexHomePath}
                             onChange={(event) =>
-                              updateSettings({
-                                providers: {
-                                  ...settings.providers,
-                                  codex: {
-                                    ...settings.providers.codex,
-                                    homePath: event.target.value,
-                                  },
-                                },
+                              updateProviderSettings("codex", {
+                                homePath: event.target.value,
                               })
                             }
                             placeholder={providerCard.homePlaceholder}
@@ -1230,6 +1236,136 @@ export function GeneralSettingsPanel() {
                             </span>
                           ) : null}
                         </label>
+                      </div>
+                    ) : null}
+
+                    {providerCard.provider === "claudeAgent" ? (
+                      <>
+                        <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                          <label htmlFor="provider-install-claudeAgent-base-url" className="block">
+                            <span className="text-xs font-medium text-foreground">Base URL</span>
+                            <Input
+                              id="provider-install-claudeAgent-base-url"
+                              className="mt-1.5"
+                              value={providerCard.customBaseUrlValue}
+                              onChange={(event) =>
+                                updateProviderSettings("claudeAgent", {
+                                  customBaseUrl: event.target.value,
+                                })
+                              }
+                              placeholder={providerCard.baseUrlPlaceholder}
+                              spellCheck={false}
+                            />
+                            <span className="mt-1 block text-xs text-muted-foreground">
+                              {providerCard.baseUrlDescription} Uses{" "}
+                              <code>{providerCard.baseUrlEnvVar}</code>.
+                            </span>
+                          </label>
+                        </div>
+
+                        <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                          <label htmlFor="provider-install-claudeAgent-api-key" className="block">
+                            <span className="text-xs font-medium text-foreground">API key</span>
+                            <Input
+                              id="provider-install-claudeAgent-api-key"
+                              className="mt-1.5"
+                              type="password"
+                              value={providerCard.customApiKeyValue}
+                              onChange={(event) =>
+                                updateProviderSettings("claudeAgent", {
+                                  customApiKey: event.target.value,
+                                })
+                              }
+                              placeholder={providerCard.apiKeyPlaceholder}
+                              spellCheck={false}
+                            />
+                            <span className="mt-1 block text-xs text-muted-foreground">
+                              {providerCard.apiKeyDescription} Uses{" "}
+                              <code>{providerCard.apiKeyEnvVar}</code>.
+                              {providerCard.customApiKeyValue
+                                ? " Saved keys are masked after they sync. Enter a new value to replace the stored key."
+                                : null}
+                            </span>
+                          </label>
+                        </div>
+                      </>
+                    ) : null}
+
+                    {showClaudeProxyFields ? (
+                      <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                        <div className="space-y-3">
+                          <div>
+                            <div className="text-xs font-medium text-foreground">Proxy models</div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Map Claude&apos;s internal model tiers to your proxy&apos;s model
+                              identifiers. When using a Proxy model, all Claude Code requests
+                              (including compaction and subagents) route through your proxy.
+                            </p>
+                          </div>
+
+                          <label
+                            htmlFor="provider-install-claudeAgent-proxy-opus"
+                            className="block"
+                          >
+                            <span className="text-xs font-medium text-foreground">
+                              Proxy Opus Model
+                            </span>
+                            <Input
+                              id="provider-install-claudeAgent-proxy-opus"
+                              className="mt-1.5"
+                              value={providerCard.claudeProxyConfig?.proxyOpusModel ?? ""}
+                              onChange={(event) =>
+                                updateProviderSettings("claudeAgent", {
+                                  proxyOpusModel: event.target.value,
+                                })
+                              }
+                              placeholder="your-provider-model-id"
+                              spellCheck={false}
+                            />
+                          </label>
+
+                          <label
+                            htmlFor="provider-install-claudeAgent-proxy-sonnet"
+                            className="block"
+                          >
+                            <span className="text-xs font-medium text-foreground">
+                              Proxy Sonnet Model
+                            </span>
+                            <Input
+                              id="provider-install-claudeAgent-proxy-sonnet"
+                              className="mt-1.5"
+                              value={providerCard.claudeProxyConfig?.proxySonnetModel ?? ""}
+                              onChange={(event) =>
+                                updateProviderSettings("claudeAgent", {
+                                  proxySonnetModel: event.target.value,
+                                })
+                              }
+                              placeholder="your-provider-model-id"
+                              spellCheck={false}
+                            />
+                          </label>
+
+                          <label
+                            htmlFor="provider-install-claudeAgent-proxy-haiku"
+                            className="block"
+                          >
+                            <span className="text-xs font-medium text-foreground">
+                              Proxy Haiku Model
+                            </span>
+                            <Input
+                              id="provider-install-claudeAgent-proxy-haiku"
+                              className="mt-1.5"
+                              value={providerCard.claudeProxyConfig?.proxyHaikuModel ?? ""}
+                              onChange={(event) =>
+                                updateProviderSettings("claudeAgent", {
+                                  proxyHaikuModel: event.target.value,
+                                })
+                              }
+                              placeholder="your-provider-model-id"
+                              spellCheck={false}
+                            />
+                          </label>
+                        </div>
                       </div>
                     ) : null}
 
@@ -1307,9 +1443,7 @@ export function GeneralSettingsPanel() {
                                     type="button"
                                     className="text-muted-foreground transition-colors hover:text-foreground"
                                     aria-label={`Remove ${model.slug}`}
-                                    onClick={() =>
-                                      removeCustomModel(providerCard.provider, model.slug)
-                                    }
+                                    onClick={() => removeCodexCustomModel(model.slug)}
                                   >
                                     <XIcon className="size-3" />
                                   </button>
@@ -1320,47 +1454,40 @@ export function GeneralSettingsPanel() {
                         })}
                       </div>
 
-                      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                        <Input
-                          id={`custom-model-${providerCard.provider}`}
-                          value={customModelInput}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setCustomModelInputByProvider((existing) => ({
-                              ...existing,
-                              [providerCard.provider]: value,
-                            }));
-                            if (customModelError) {
-                              setCustomModelErrorByProvider((existing) => ({
-                                ...existing,
-                                [providerCard.provider]: null,
-                              }));
-                            }
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key !== "Enter") return;
-                            event.preventDefault();
-                            addCustomModel(providerCard.provider);
-                          }}
-                          placeholder={
-                            providerCard.provider === "codex"
-                              ? "gpt-6.7-codex-ultra-preview"
-                              : "claude-sonnet-5-0"
-                          }
-                          spellCheck={false}
-                        />
-                        <Button
-                          className="shrink-0"
-                          variant="outline"
-                          onClick={() => addCustomModel(providerCard.provider)}
-                        >
-                          <PlusIcon className="size-3.5" />
-                          Add
-                        </Button>
-                      </div>
+                      {providerCard.provider === "codex" ? (
+                        <>
+                          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                            <Input
+                              id="custom-model-codex"
+                              value={customCodexModelInput}
+                              onChange={(event) => {
+                                setCustomCodexModelInput(event.target.value);
+                                if (customCodexModelError) {
+                                  setCustomCodexModelError(null);
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== "Enter") return;
+                                event.preventDefault();
+                                addCodexCustomModel();
+                              }}
+                              placeholder="gpt-6.7-codex-ultra-preview"
+                              spellCheck={false}
+                            />
+                            <Button
+                              className="shrink-0"
+                              variant="outline"
+                              onClick={() => addCodexCustomModel()}
+                            >
+                              <PlusIcon className="size-3.5" />
+                              Add
+                            </Button>
+                          </div>
 
-                      {customModelError ? (
-                        <p className="mt-2 text-xs text-destructive">{customModelError}</p>
+                          {customCodexModelError ? (
+                            <p className="mt-2 text-xs text-destructive">{customCodexModelError}</p>
+                          ) : null}
+                        </>
                       ) : null}
                     </div>
                   </div>
