@@ -121,6 +121,61 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
     }),
   );
 
+  it.effect("reads legacy default provider status cache payloads", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-cache-" });
+      const codexPath = yield* resolveProviderStatusCachePath({
+        cacheDir: tempDir,
+        instanceId: defaultInstanceIdForDriver(CODEX_DRIVER),
+      });
+      yield* fs.writeFileString(
+        codexPath,
+        `{
+  "provider": "codex",
+  "enabled": true,
+  "installed": true,
+  "version": "0.122.0",
+  "status": "ready",
+  "auth": { "status": "authenticated" },
+  "checkedAt": "2026-04-10T12:00:00.000Z",
+  "models": [
+    {
+      "slug": "gpt-5.4",
+      "name": "GPT-5.4",
+      "isCustom": false,
+      "capabilities": { "optionDescriptors": [] }
+    }
+  ],
+  "slashCommands": [],
+  "skills": []
+}
+`,
+      );
+
+      assert.deepStrictEqual(yield* readProviderStatusCache(codexPath), {
+        instanceId: defaultInstanceIdForDriver(CODEX_DRIVER),
+        driver: CODEX_DRIVER,
+        enabled: true,
+        installed: true,
+        version: "0.122.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-04-10T12:00:00.000Z",
+        models: [
+          {
+            slug: "gpt-5.4",
+            name: "GPT-5.4",
+            isCustom: false,
+            capabilities: emptyCapabilities,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      });
+    }),
+  );
+
   it("hydrates cached provider status while preserving current settings-derived models", () => {
     const cachedCodex = makeProvider(CODEX_DRIVER, {
       checkedAt: "2026-04-10T12:00:00.000Z",

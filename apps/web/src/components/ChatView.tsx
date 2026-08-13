@@ -249,6 +249,7 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
+import { useTeleportChatIntegration } from "./teleport/useTeleportChatIntegration";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
@@ -2657,6 +2658,16 @@ function ChatViewContent(props: ChatViewProps) {
     ? activeProviderStatus
     : null;
   const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
+  const teleport = useTeleportChatIntegration({
+    environmentId,
+    providerStatuses,
+    activeProject,
+    activeThread,
+    activeProviderStatus,
+    isServerThread,
+    runtimeMode,
+    interactionMode,
+  });
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -5990,7 +6001,12 @@ function ChatViewContent(props: ChatViewProps) {
 
   // Empty state: no active thread
   if (!activeThread) {
-    return <NoActiveThreadState />;
+    return (
+      <>
+        <NoActiveThreadState headerAction={teleport.emptyStateAction} />
+        {teleport.dialog}
+      </>
+    );
   }
 
   const panelToggleControls = (
@@ -6191,6 +6207,7 @@ function ChatViewContent(props: ChatViewProps) {
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
             onNewThreadInProject={handleNewThreadInActiveProject}
+            actions={teleport.headerActions}
             onRunProjectScript={runProjectScript}
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
@@ -6515,6 +6532,7 @@ function ChatViewContent(props: ChatViewProps) {
             ) : null}
           </div>
           {/* end chat column */}
+          {teleport.dialog}
         </div>
         {/* end horizontal flex container */}
 

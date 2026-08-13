@@ -494,6 +494,15 @@ export function makeCursorAdapter(
               issue: "cwd is required and must be non-empty.",
             });
           }
+          const resumeSessionId = parseCursorResume(input.resumeCursor)?.sessionId;
+          if (input.strictResume === true && resumeSessionId === undefined) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue:
+                "Cursor strict resume requires a resume cursor with schemaVersion 1 and sessionId.",
+            });
+          }
 
           const cwd = path.resolve(input.cwd.trim());
           const cursorModelSelection =
@@ -512,7 +521,6 @@ export function makeCursorAdapter(
           );
           let ctx!: CursorSessionContext;
 
-          const resumeSessionId = parseCursorResume(input.resumeCursor)?.sessionId;
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -538,6 +546,7 @@ export function makeCursorAdapter(
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
+            ...(input.strictResume === true ? { strictResume: true } : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(mcpSession
               ? {

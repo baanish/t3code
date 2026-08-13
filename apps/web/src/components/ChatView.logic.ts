@@ -1,8 +1,8 @@
 import {
   type EnvironmentId,
-  isProviderDriverKind,
   ProjectId,
   type ModelSelection,
+  PROVIDER_DISPLAY_NAMES,
   type ProviderDriverKind,
   type ServerProvider,
   type ScopedProjectRef,
@@ -370,6 +370,10 @@ export function threadHasStarted(thread: Thread | null | undefined): boolean {
   );
 }
 
+function isKnownProviderDriverKind(value: string | null): value is ProviderDriverKind {
+  return value !== null && Object.prototype.hasOwnProperty.call(PROVIDER_DISPLAY_NAMES, value);
+}
+
 // `threadProvider` is the open branded driver kind carried by the session.
 // Unknown driver kinds degrade to `null` (i.e. "unlocked"), which is the safe
 // rollback / fork behavior — the routing layer is the right place to surface
@@ -391,15 +395,15 @@ export function deriveLockedProvider(input: {
     return null;
   }
   const sessionProvider = input.thread?.session?.providerName ?? null;
-  if (sessionProvider && isProviderDriverKind(sessionProvider)) {
+  if (sessionProvider && isKnownProviderDriverKind(sessionProvider)) {
     return sessionProvider;
   }
   const narrowedThreadProvider =
-    input.threadProvider && isProviderDriverKind(input.threadProvider)
+    input.threadProvider && isKnownProviderDriverKind(input.threadProvider)
       ? input.threadProvider
       : null;
   const narrowedSelectedProvider =
-    input.selectedProvider && isProviderDriverKind(input.selectedProvider)
+    input.selectedProvider && isKnownProviderDriverKind(input.selectedProvider)
       ? input.selectedProvider
       : null;
   return narrowedThreadProvider ?? narrowedSelectedProvider ?? null;

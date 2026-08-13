@@ -27,6 +27,7 @@ import {
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { makeCursorAdapter } from "./CursorAdapter.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
@@ -168,6 +169,36 @@ const cursorAdapterTestLayer = it.layer(
 );
 
 cursorAdapterTestLayer("CursorAdapterLive", (it) => {
+  it.effect("returns validation error when strict resume is missing a Cursor cursor", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const result = yield* adapter
+        .startSession({
+          threadId: ThreadId.make("cursor-strict-resume-missing-cursor"),
+          provider: ProviderDriverKind.make("cursor"),
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          strictResume: true,
+          modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") {
+        throw new Error("Expected strict resume without a cursor to fail.");
+      }
+      assert.deepStrictEqual(
+        result.failure,
+        new ProviderAdapterValidationError({
+          provider: ProviderDriverKind.make("cursor"),
+          operation: "startSession",
+          issue:
+            "Cursor strict resume requires a resume cursor with schemaVersion 1 and sessionId.",
+        }),
+      );
+    }),
+  );
+
   it.effect("starts a session and maps mock ACP prompt flow to runtime events", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;
@@ -552,6 +583,47 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
         assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast", "mode"]);
         assert.equal(finalRequests.filter((entry) => entry.method === "session/prompt").length, 1);
       }),
+  );
+
+  it.effect("does not create a new ACP session when strict resume load fails", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-strict-resume-load-failure");
+      const tempDir = yield* Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "cursor-acp-")));
+      const requestLogPath = path.join(tempDir, "requests.ndjson");
+      const argvLogPath = path.join(tempDir, "argv.txt");
+      yield* Effect.promise(() => writeFile(requestLogPath, "", "utf8"));
+      const wrapperPath = yield* Effect.promise(() =>
+        makeProbeWrapper(requestLogPath, argvLogPath, {
+          T3_ACP_FAIL_LOAD_SESSION: "1",
+        }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const error = yield* adapter
+        .startSession({
+          threadId,
+          provider: ProviderDriverKind.make("cursor"),
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          resumeCursor: { schemaVersion: 1, sessionId: "external-cursor-session" },
+          strictResume: true,
+          modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(error._tag, "ProviderAdapterRequestError");
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.deepStrictEqual(
+        requests.map((entry) => entry.method).filter((method) => method === "session/load"),
+        ["session/load"],
+      );
+      assert.equal(
+        requests.some((entry) => entry.method === "session/new"),
+        false,
+      );
+    }),
   );
 
   it.effect(

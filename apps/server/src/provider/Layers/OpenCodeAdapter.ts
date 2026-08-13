@@ -210,6 +210,7 @@ interface OpenCodeSessionContext {
   readonly server: OpenCodeServerConnection;
   readonly directory: string;
   readonly openCodeSessionId: string;
+  readonly ownsOpenCodeSession: boolean;
   readonly pendingPermissions: Map<string, PermissionRequest>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
   readonly messageRoleById: Map<string, "user" | "assistant">;
@@ -546,12 +547,14 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
     return false;
   }
 
-  // Best-effort remote abort. The scope close below tears down the local
-  // handles (event-pump fiber, server-exit fiber, event-subscribe fetch),
-  // but we still want to tell OpenCode that this session is done.
-  yield* runOpenCodeSdk("session.abort", () =>
-    context.client.session.abort({ sessionID: context.openCodeSessionId }),
-  ).pipe(Effect.ignore({ log: true }));
+  if (context.ownsOpenCodeSession) {
+    // Best-effort remote abort. The scope close below tears down the local
+    // handles (event-pump fiber, server-exit fiber, event-subscribe fetch),
+    // but we still want to tell OpenCode that this T3-created session is done.
+    yield* runOpenCodeSdk("session.abort", () =>
+      context.client.session.abort({ sessionID: context.openCodeSessionId }),
+    ).pipe(Effect.ignore({ log: true }));
+  }
 
   // Closing the session scope interrupts every fiber forked into it and
   // runs each finalizer we registered — the `AbortController.abort()` call,
@@ -709,9 +712,11 @@ export function makeOpenCodeAdapter(
       // Inline the teardown that `stopOpenCodeContext` would do; we can't
       // delegate to it because our `getAndSet` above already flipped the
       // one-shot guard, so the call would no-op.
-      yield* runOpenCodeSdk("session.abort", () =>
-        context.client.session.abort({ sessionID: context.openCodeSessionId }),
-      ).pipe(Effect.ignore({ log: true }));
+      if (context.ownsOpenCodeSession) {
+        yield* runOpenCodeSdk("session.abort", () =>
+          context.client.session.abort({ sessionID: context.openCodeSessionId }),
+        ).pipe(Effect.ignore({ log: true }));
+      }
       yield* Scope.close(context.sessionScope, Exit.void);
     });
 
@@ -1191,6 +1196,14 @@ export function makeOpenCodeAdapter(
         const serverPassword = openCodeSettings.serverPassword;
         const directory = input.cwd ?? serverConfig.cwd;
         const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
+        if (input.strictResume === true && resumeSessionId === undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue:
+              "OpenCode strict resume requires a resume cursor with schemaVersion 1 and sessionId.",
+          });
+        }
         const existing = sessions.get(input.threadId);
         if (existing) {
           yield* stopOpenCodeContext(existing);
@@ -1296,6 +1309,12 @@ export function makeOpenCodeAdapter(
                 }
 
                 if (resumeSessionId) {
+                  if (input.strictResume === true) {
+                    return yield* new OpenCodeRuntimeError({
+                      operation: "session.get",
+                      detail: `OpenCode session '${resumeSessionId}' no longer exists.`,
+                    });
+                  }
                   yield* Effect.logWarning(
                     `OpenCode session '${resumeSessionId}' no longer exists; starting a fresh session.`,
                   );
@@ -1319,7 +1338,7 @@ export function makeOpenCodeAdapter(
                 server,
                 client,
                 openCodeSession: resolved.openCodeSession,
-                created: resolved.created,
+                ownsOpenCodeSession: resolved.created,
               };
             }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
           );
@@ -1337,7 +1356,7 @@ export function makeOpenCodeAdapter(
           // Another call won the race — clean up. Only abort the remote
           // session if we created it here; a resumed one is shared upstream
           // state the winner is now using.
-          if (started.created) {
+          if (started.ownsOpenCodeSession) {
             yield* runOpenCodeSdk("session.abort", () =>
               started.client.session.abort({
                 sessionID: started.openCodeSession.id,
@@ -1374,6 +1393,7 @@ export function makeOpenCodeAdapter(
           server: started.server,
           directory,
           openCodeSessionId: started.openCodeSession.id,
+          ownsOpenCodeSession: started.ownsOpenCodeSession,
           pendingPermissions: new Map(),
           pendingQuestions: new Map(),
           partById: new Map(),

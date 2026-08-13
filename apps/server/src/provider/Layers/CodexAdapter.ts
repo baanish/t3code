@@ -1652,6 +1652,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
           });
         }
+        const resumeCursor = isCodexResumeCursorSchema(input.resumeCursor)
+          ? input.resumeCursor
+          : undefined;
+        if (input.strictResume === true && resumeCursor === undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: "Codex strict resume requires a resume cursor with threadId.",
+          });
+        }
 
         const existing = sessions.get(input.threadId);
         if (existing && !existing.stopped) {
@@ -1671,9 +1681,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
           ...(options?.environment ? { environment: options.environment } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
-          ...(isCodexResumeCursorSchema(input.resumeCursor)
-            ? { resumeCursor: input.resumeCursor }
-            : {}),
+          ...(resumeCursor ? { resumeCursor } : {}),
+          ...(input.strictResume === true ? { strictResume: true } : {}),
           runtimeMode: input.runtimeMode,
           ...(input.modelSelection?.instanceId === boundInstanceId
             ? { model: input.modelSelection.model }

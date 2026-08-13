@@ -94,6 +94,50 @@ it.effect("launches the default browser through the platform command", () => {
   );
 });
 
+it.effect("launches an interactive terminal command through the platform command", () => {
+  let spawned: ChildProcess.StandardCommand | undefined;
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+
+    yield* launcher.launchTerminalCommand({
+      command: "cd '/tmp/project' && codex resume 'thread-1'",
+    });
+
+    assert.ok(spawned);
+    assert.equal(spawned.command, "osascript");
+    assert.equal(spawned.args.at(-1), "cd '/tmp/project' && codex resume 'thread-1'");
+  }).pipe(
+    Effect.provide(
+      testLayer({
+        platform: "darwin",
+        onSpawn: (command) => {
+          spawned = command;
+        },
+      }),
+    ),
+  );
+});
+
+it.effect("falls back to a default terminal emulator on Linux when none is on PATH", () => {
+  let spawned: ChildProcess.StandardCommand | undefined;
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+
+    yield* launcher.launchTerminalCommand({
+      command: "cd '/tmp/project' && opencode --session 'ses_1' '/tmp/project'",
+    });
+
+    assert.ok(spawned);
+    assert.equal(spawned.command, "x-terminal-emulator");
+    assert.deepEqual(spawned.args, [
+      "-e",
+      "sh",
+      "-lc",
+      "cd '/tmp/project' && opencode --session 'ses_1' '/tmp/project'",
+    ]);
+  }).pipe(Effect.provide(testLayer({ platform: "linux", env: { PATH: "" } })));
+});
+
 it.effect("launches an installed editor with platform-safe arguments", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;

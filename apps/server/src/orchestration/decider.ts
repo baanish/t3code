@@ -1267,6 +1267,35 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.message.append": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+          metadata: { teleportHistory: true },
+        }),
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.message.id,
+          role: command.message.role,
+          text: command.message.text,
+          attachments: command.message.attachments ?? [],
+          turnId: command.message.turnId,
+          streaming: command.message.streaming,
+          createdAt: command.message.createdAt,
+          updatedAt: command.message.updatedAt,
+        },
+      };
+    }
+
     case "thread.proposed-plan.upsert": {
       yield* requireThread({
         readModel,

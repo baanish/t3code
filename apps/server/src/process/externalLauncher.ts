@@ -59,6 +59,10 @@ interface ProcessLaunch {
   readonly options: ChildProcess.CommandOptions;
 }
 
+export interface LaunchTerminalCommandInput {
+  readonly command: string;
+}
+
 interface TargetPathAndPosition {
   readonly path: string;
   readonly line: string;
@@ -262,6 +266,68 @@ function buildBrowserLaunch(
   };
 }
 
+const resolveTerminalLaunch = Effect.fn("externalLauncher.resolveTerminalLaunch")(function* (
+  input: LaunchTerminalCommandInput,
+): Effect.fn.Return<ProcessLaunch, never, FileSystem.FileSystem | Path.Path> {
+  const platform = yield* HostProcessPlatform;
+  const env = yield* readCommandLookupEnv;
+
+  if (platform === "darwin") {
+    return {
+      command: "osascript",
+      args: [
+        "-e",
+        "on run argv",
+        "-e",
+        'tell application "Terminal"',
+        "-e",
+        "activate",
+        "-e",
+        "do script item 1 of argv",
+        "-e",
+        "end tell",
+        "-e",
+        "end run",
+        input.command,
+      ],
+      options: DETACHED_IGNORE_STDIO_OPTIONS,
+    };
+  }
+
+  if (platform === "win32") {
+    return {
+      command: resolvePowerShellPath(env),
+      args: [
+        ...POWERSHELL_ARGUMENTS_PREFIX,
+        encodeUtf16LeBase64(
+          `Start-Process cmd.exe -ArgumentList @('/k', ${escapePowerShellStringLiteral(input.command)})`,
+        ),
+      ],
+      options: DETACHED_IGNORE_STDIO_OPTIONS,
+    };
+  }
+
+  const terminal = Option.getOrElse(
+    yield* resolveAvailableCommand(
+      ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"],
+      env,
+    ),
+    () => "x-terminal-emulator",
+  );
+  if (terminal === "gnome-terminal") {
+    return {
+      command: terminal,
+      args: ["--", "sh", "-lc", input.command],
+      options: DETACHED_IGNORE_STDIO_OPTIONS,
+    };
+  }
+  return {
+    command: terminal,
+    args: ["-e", "sh", "-lc", input.command],
+    options: DETACHED_IGNORE_STDIO_OPTIONS,
+  };
+});
+
 const buildAvailableEditors = Effect.fn("externalLauncher.buildAvailableEditors")(function* (
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
@@ -322,23 +388,30 @@ interface EditorDiscoveryCacheEntry {
   readonly expiresAtNanos: bigint;
 }
 
+export interface ExternalLauncherShape {
+  readonly resolveAvailableEditors: () => Effect.Effect<ReadonlyArray<EditorId>>;
+  /** Launch a URL target in the default browser. */
+  readonly launchBrowser: (target: string) => Effect.Effect<void, ExternalLauncherError>;
+  /**
+   * Launch a workspace path in a selected editor integration.
+   *
+   * Launches the editor as a detached process so server startup is not blocked.
+   */
+  readonly launchEditor: (input: LaunchEditorInput) => Effect.Effect<void, ExternalLauncherError>;
+  /**
+   * Launch an interactive shell command in the user's terminal application.
+   */
+  readonly launchTerminalCommand: (
+    input: LaunchTerminalCommandInput,
+  ) => Effect.Effect<void, ExternalLauncherError>;
+}
+
 /**
  * ExternalLauncher - Service tag for browser/editor launch operations.
  */
-export class ExternalLauncher extends Context.Service<
-  ExternalLauncher,
-  {
-    readonly resolveAvailableEditors: () => Effect.Effect<ReadonlyArray<EditorId>>;
-    /** Launch a URL target in the default browser. */
-    readonly launchBrowser: (target: string) => Effect.Effect<void, ExternalLauncherError>;
-    /**
-     * Launch a workspace path in a selected editor integration.
-     *
-     * Launches the editor as a detached process so server startup is not blocked.
-     */
-    readonly launchEditor: (input: LaunchEditorInput) => Effect.Effect<void, ExternalLauncherError>;
-  }
->()("t3/process/externalLauncher") {}
+export class ExternalLauncher extends Context.Service<ExternalLauncher, ExternalLauncherShape>()(
+  "t3/process/externalLauncher",
+) {}
 
 // ==============================
 // Implementations
@@ -454,7 +527,27 @@ const launchEditorProcess = Effect.fn("externalLauncher.launchEditorProcess")(fu
   );
 });
 
-export const make = Effect.gen(function* () {
+const launchTerminalCommand = Effect.fn("externalLauncher.launchTerminalCommand")(function* (
+  input: LaunchTerminalCommandInput,
+): Effect.fn.Return<
+  void,
+  ExternalLauncherError,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> {
+  const launch = yield* resolveTerminalLaunch(input);
+  yield* launchAndUnref(
+    launch,
+    (cause) =>
+      new ExternalLauncherBrowserSpawnError({
+        target: input.command,
+        command: launch.command,
+        args: launch.args,
+        cause,
+      }),
+  );
+});
+
+const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -500,6 +593,10 @@ export const make = Effect.gen(function* () {
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           ),
         ),
+      ),
+    launchTerminalCommand: (input) =>
+      provideCommandResolutionServices(launchTerminalCommand(input)).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       ),
   });
 });

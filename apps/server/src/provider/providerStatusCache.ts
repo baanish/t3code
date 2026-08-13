@@ -1,5 +1,6 @@
 import {
-  type ProviderDriverKind,
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
   ServerProvider as ServerProviderSchema,
@@ -12,9 +13,31 @@ import * as Schema from "effect/Schema";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 
-const decodeProviderStatusCache = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(ServerProviderSchema),
+const decodeProviderStatusCache = Schema.decodeUnknownEffect(ServerProviderSchema);
+const decodeProviderStatusCacheJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Unknown),
 );
+
+function normalizeProviderStatusCachePayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+  const record = payload as Record<string, unknown>;
+  if (
+    typeof record.provider !== "string" ||
+    record.instanceId !== undefined ||
+    record.driver !== undefined
+  ) {
+    return payload;
+  }
+  const provider = ProviderDriverKind.make(record.provider);
+  const { provider: _legacyProvider, ...rest } = record;
+  return {
+    ...rest,
+    instanceId: defaultInstanceIdForDriver(provider),
+    driver: provider,
+  };
+}
 
 const mergeProviderModels = (
   fallbackModels: ReadonlyArray<ServerProvider["models"][number]>,
@@ -129,7 +152,21 @@ export const readProviderStatusCache = (filePath: string) =>
       return undefined;
     }
 
-    return yield* decodeProviderStatusCache(trimmed).pipe(
+    const parsed = yield* decodeProviderStatusCacheJson(trimmed).pipe(
+      Effect.matchCauseEffect({
+        onFailure: (cause) =>
+          Effect.logWarning("failed to parse provider status cache json, ignoring", {
+            path: filePath,
+            issues: Cause.pretty(cause),
+          }).pipe(Effect.as(undefined)),
+        onSuccess: Effect.succeed,
+      }),
+    );
+    if (parsed === undefined) {
+      return undefined;
+    }
+
+    return yield* decodeProviderStatusCache(normalizeProviderStatusCachePayload(parsed)).pipe(
       Effect.matchCauseEffect({
         onFailure: (cause) =>
           Effect.logWarning("failed to parse provider status cache, ignoring", {

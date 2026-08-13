@@ -245,10 +245,9 @@ export const ProviderRegistryLive = Layer.effect(
         Effect.gen(function* () {
           // One cache file per configured instance. For the default
           // instance of a built-in kind the path equals `<kind>.json` —
-          // identical to the legacy filename. We still require the cache
-          // payload to carry matching instance id + driver kind; old
-          // identity-less payloads are discarded and the awaited refresh
-          // below repopulates the cache.
+          // identical to the legacy filename. The cache reader upgrades
+          // legacy provider-keyed default payloads before this identity
+          // correlation check runs.
           const filePath = yield* resolveProviderStatusCachePath({
             cacheDir: config.providerStatusCacheDir,
             instanceId: source.instanceId,

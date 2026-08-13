@@ -100,6 +100,14 @@ import type {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
+import type {
+  TeleportImportSessionInput,
+  TeleportImportSessionResult,
+  TeleportLaunchExternalSessionInput,
+  TeleportLaunchExternalSessionResult,
+  TeleportListSessionsInput,
+  TeleportListSessionsResult,
+} from "./teleport.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -1225,6 +1233,13 @@ export interface EnvironmentApi {
     publishRepository: (
       input: SourceControlPublishRepositoryInput,
     ) => Promise<SourceControlPublishRepositoryResult>;
+  };
+  teleport: {
+    listSessions: (input?: TeleportListSessionsInput) => Promise<TeleportListSessionsResult>;
+    importSession: (input: TeleportImportSessionInput) => Promise<TeleportImportSessionResult>;
+    launchExternalSession: (
+      input: TeleportLaunchExternalSessionInput,
+    ) => Promise<TeleportLaunchExternalSessionResult>;
   };
   vcs: {
     listRefs: (input: VcsListRefsInput) => Promise<VcsListRefsResult>;

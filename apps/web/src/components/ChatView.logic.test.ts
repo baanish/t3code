@@ -18,6 +18,7 @@ import {
   buildThreadTurnInterruptInput,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveLockedProvider,
   dismissBranchMismatchForSession,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
@@ -560,6 +561,36 @@ describe("startNewThreadForProject", () => {
       }),
     ).toBe(false);
     expect(called).toBe(false);
+  });
+});
+
+describe("deriveLockedProvider", () => {
+  it("falls back to the thread provider when a persisted session has a display label", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-imported-codex"),
+      latestTurn: {
+        turnId: TurnId.make("turn-imported"),
+        state: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        assistantMessageId: null,
+      },
+      session: {
+        ...readySession,
+        threadId: ThreadId.make("thread-imported-codex"),
+        // Display labels are not valid ProviderDriverKind values.
+        providerName: "Codex",
+      },
+    });
+
+    expect(
+      deriveLockedProvider({
+        thread,
+        selectedProvider: "codex",
+        threadProvider: "codex",
+      }),
+    ).toBe("codex");
   });
 });
 

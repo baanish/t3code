@@ -123,6 +123,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import * as TeleportService from "./teleport/Services/TeleportService.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -410,6 +411,7 @@ const makeWsRpcLayer = (
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const pullRequests = yield* PullRequestService.PullRequestService;
+      const teleport = yield* TeleportService.TeleportService;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
@@ -1908,6 +1910,22 @@ const makeWsRpcLayer = (
               });
             }),
             { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.teleportImportSession]: (input) =>
+          observeRpcEffect(WS_METHODS.teleportImportSession, teleport.importSession(input), {
+            "rpc.aggregate": "teleport",
+          }),
+        [WS_METHODS.teleportListSessions]: (input) =>
+          observeRpcEffect(WS_METHODS.teleportListSessions, teleport.listSessions(input), {
+            "rpc.aggregate": "teleport",
+          }),
+        [WS_METHODS.teleportLaunchExternalSession]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.teleportLaunchExternalSession,
+            teleport.launchExternalSession(input),
+            {
+              "rpc.aggregate": "teleport",
+            },
           ),
         [WS_METHODS.subscribeVcsStatus]: (input) =>
           observeRpcStream(

@@ -106,6 +106,7 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  readonly strictResume?: boolean;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -462,6 +463,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly strictResume?: boolean;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -481,15 +483,17 @@ export const openCodexThread = (input: {
       ...startParams,
     })
     .pipe(
-      Effect.catchIf(isRecoverableThreadResumeError, (error) =>
-        Effect.logWarning("codex app-server thread resume fell back to fresh start", {
-          threadId: input.threadId,
-          requestedRuntimeMode: input.runtimeMode,
-          resumeThreadId,
-          recoverable: true,
-          cause: error,
-        }).pipe(Effect.andThen(input.client.request("thread/start", startParams))),
-      ),
+      input.strictResume === true
+        ? (effect) => effect
+        : Effect.catchIf(isRecoverableThreadResumeError, (error) =>
+            Effect.logWarning("codex app-server thread resume fell back to fresh start", {
+              threadId: input.threadId,
+              requestedRuntimeMode: input.runtimeMode,
+              resumeThreadId,
+              recoverable: true,
+              cause: error.message,
+            }).pipe(Effect.andThen(input.client.request("thread/start", startParams))),
+          ),
     );
 };
 
@@ -1696,6 +1700,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        ...(options.strictResume === true ? { strictResume: true } : {}),
       });
 
       const providerThreadId = opened.thread.id;

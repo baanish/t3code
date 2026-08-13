@@ -149,6 +149,17 @@ import {
   PreviewAutomationStreamEvent,
 } from "./previewAutomation.ts";
 import {
+  TeleportImportError,
+  TeleportImportSessionInput,
+  TeleportImportSessionResult,
+  TeleportLaunchExternalSessionError,
+  TeleportLaunchExternalSessionInput,
+  TeleportLaunchExternalSessionResult,
+  TeleportListSessionsError,
+  TeleportListSessionsInput,
+  TeleportListSessionsResult,
+} from "./teleport.ts";
+import {
   ServerConfigStreamEvent,
   ServerConfig,
   ServerProviderUpdateError,
@@ -297,6 +308,11 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+
+  // Teleport methods
+  teleportListSessions: "teleport.listSessions",
+  teleportImportSession: "teleport.importSession",
+  teleportLaunchExternalSession: "teleport.launchExternalSession",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -654,6 +670,27 @@ export const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
   success: AssetCreateUrlResult,
   error: Schema.Union([AssetAccessError, EnvironmentAuthorizationError]),
 });
+
+export const WsTeleportImportSessionRpc = Rpc.make(WS_METHODS.teleportImportSession, {
+  payload: TeleportImportSessionInput,
+  success: TeleportImportSessionResult,
+  error: TeleportImportError,
+});
+
+export const WsTeleportListSessionsRpc = Rpc.make(WS_METHODS.teleportListSessions, {
+  payload: TeleportListSessionsInput,
+  success: TeleportListSessionsResult,
+  error: TeleportListSessionsError,
+});
+
+export const WsTeleportLaunchExternalSessionRpc = Rpc.make(
+  WS_METHODS.teleportLaunchExternalSession,
+  {
+    payload: TeleportLaunchExternalSessionInput,
+    success: TeleportLaunchExternalSessionResult,
+    error: TeleportLaunchExternalSessionError,
+  },
+);
 
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
@@ -1021,6 +1058,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsAssetsCreateUrlRpc,
+  WsTeleportListSessionsRpc,
+  WsTeleportImportSessionRpc,
+  WsTeleportLaunchExternalSessionRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,

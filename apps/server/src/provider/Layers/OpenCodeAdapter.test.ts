@@ -62,10 +62,14 @@ const runtimeMock = {
     authHeaders: [] as Array<string | null>,
     abortCalls: [] as string[],
     closeCalls: [] as string[],
+    sessionGetCalls: [] as string[],
+    sessionGetError: null as Error | null,
+    sessionGetData: undefined as { id?: string } | null | undefined,
     revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
     promptCalls: [] as Array<unknown>,
     promptAsyncError: null as Error | null,
     closeError: null as Error | null,
+    messageCalls: [] as string[],
     messages: [] as MessageEntry[],
     subscribedEvents: [] as unknown[],
     sessionGetIds: [] as string[],
@@ -82,10 +86,14 @@ const runtimeMock = {
     this.state.authHeaders.length = 0;
     this.state.abortCalls.length = 0;
     this.state.closeCalls.length = 0;
+    this.state.sessionGetCalls.length = 0;
+    this.state.sessionGetError = null;
+    this.state.sessionGetData = undefined;
     this.state.revertCalls.length = 0;
     this.state.promptCalls.length = 0;
     this.state.promptAsyncError = null;
     this.state.closeError = null;
+    this.state.messageCalls.length = 0;
     this.state.messages = [];
     this.state.subscribedEvents = [];
     this.state.sessionGetIds.length = 0;
@@ -177,13 +185,28 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         abort: async ({ sessionID }: { sessionID: string }) => {
           runtimeMock.state.abortCalls.push(sessionID);
         },
+        get: async ({ sessionID }: { sessionID: string }) => {
+          runtimeMock.state.sessionGetCalls.push(sessionID);
+          if (runtimeMock.state.sessionGetError) {
+            throw runtimeMock.state.sessionGetError;
+          }
+          return {
+            data:
+              runtimeMock.state.sessionGetData === undefined
+                ? { id: sessionID }
+                : runtimeMock.state.sessionGetData,
+          };
+        },
         promptAsync: async (input: unknown) => {
           runtimeMock.state.promptCalls.push(input);
           if (runtimeMock.state.promptAsyncError) {
             throw runtimeMock.state.promptAsyncError;
           }
         },
-        messages: async () => ({ data: runtimeMock.state.messages }),
+        messages: async ({ sessionID }: { sessionID: string }) => {
+          runtimeMock.state.messageCalls.push(sessionID);
+          return { data: runtimeMock.state.messages };
+        },
         revert: async ({ sessionID, messageID }: { sessionID: string; messageID?: string }) => {
           runtimeMock.state.revertCalls.push({
             sessionID,
@@ -625,6 +648,95 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         events.map((event) => event.type),
         ["session.started", "thread.started", "session.exited"],
       );
+    }),
+  );
+
+  it.effect("resumes an existing OpenCode session id without creating a new session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const session = yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId: asThreadId("thread-opencode-resume"),
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: "external-opencode-session" },
+        strictResume: true,
+      });
+
+      assert.equal(session.provider, "opencode");
+      assert.deepEqual(session.resumeCursor, {
+        schemaVersion: 1,
+        sessionId: "external-opencode-session",
+      });
+      assert.deepEqual(runtimeMock.state.sessionCreateUrls, []);
+      assert.deepEqual(runtimeMock.state.sessionGetCalls, ["external-opencode-session"]);
+
+      yield* adapter.stopSession(asThreadId("thread-opencode-resume"));
+      assert.deepEqual(runtimeMock.state.abortCalls, []);
+    }),
+  );
+
+  it.effect("falls back to creating a new OpenCode session for non-strict stale resume", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      runtimeMock.state.sessionGetError = new Error("session missing");
+
+      const session = yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId: asThreadId("thread-opencode-non-strict-resume-missing"),
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: "stale-opencode-session" },
+      });
+
+      assert.deepEqual(runtimeMock.state.sessionGetCalls, ["stale-opencode-session"]);
+      assert.deepEqual(runtimeMock.state.sessionCreateUrls, ["http://127.0.0.1:9999"]);
+      assert.deepEqual(session.resumeCursor, {
+        schemaVersion: 1,
+        sessionId: "http://127.0.0.1:9999/session",
+      });
+
+      yield* adapter.stopSession(asThreadId("thread-opencode-non-strict-resume-missing"));
+    }),
+  );
+
+  it.effect("fails strict OpenCode resume when the existing session id cannot be opened", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      runtimeMock.state.sessionGetError = new Error("session missing");
+
+      const error = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId: asThreadId("thread-opencode-resume-missing"),
+          runtimeMode: "full-access",
+          resumeCursor: { schemaVersion: 1, sessionId: "missing-opencode-session" },
+          strictResume: true,
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(error._tag, "ProviderAdapterProcessError");
+      assert.deepEqual(runtimeMock.state.sessionCreateUrls, []);
+      assert.deepEqual(runtimeMock.state.sessionGetCalls, ["missing-opencode-session"]);
+    }),
+  );
+
+  it.effect("fails strict OpenCode resume when session.get returns no session payload", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      runtimeMock.state.sessionGetData = null;
+
+      const error = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId: asThreadId("thread-opencode-resume-empty-payload"),
+          runtimeMode: "full-access",
+          resumeCursor: { schemaVersion: 1, sessionId: "missing-opencode-session" },
+          strictResume: true,
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(error._tag, "ProviderAdapterProcessError");
+      assert.deepEqual(runtimeMock.state.sessionCreateUrls, []);
+      assert.deepEqual(runtimeMock.state.sessionGetCalls, ["missing-opencode-session"]);
     }),
   );
 

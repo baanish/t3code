@@ -106,6 +106,7 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import { TeleportServiceLive } from "./teleport/Layers/TeleportService.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -360,8 +361,12 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
-const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
+const ProviderRuntimeLayerLive = Layer.mergeAll(
+  ProviderSessionReaperLive,
+  TeleportServiceLive,
+).pipe(
   Layer.provideMerge(ProviderLayerLive),
+  Layer.provideMerge(ProviderSessionDirectoryLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),
 );
 

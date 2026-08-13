@@ -634,6 +634,9 @@ const make = Effect.gen(function* () {
       { type: "thread.turn-start-requested" | "thread.message-sent" }
     >,
   ) {
+    if (event.type === "thread.message-sent" && event.metadata.teleportHistory === true) {
+      return;
+    }
     if (event.type === "thread.message-sent") {
       if (
         event.payload.role !== "user" ||

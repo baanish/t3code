@@ -112,6 +112,20 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.providerInstanceId).toBe("ollama_local");
     expect(parsed.modelSelection?.instanceId).toBe("ollama_local");
   });
+
+  it("accepts strict resume for import-only provider session starts", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      provider: "codex",
+      providerInstanceId: "codex",
+      resumeCursor: { threadId: "external-codex-thread" },
+      strictResume: true,
+      runtimeMode: "full-access",
+    });
+
+    expect(parsed.strictResume).toBe(true);
+    expect(parsed.resumeCursor).toEqual({ threadId: "external-codex-thread" });
+  });
 });
 
 describe("ProviderSendTurnInput", () => {

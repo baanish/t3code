@@ -262,6 +262,31 @@ validationLayer("CodexAdapterLive validation", (it) => {
       NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
     }),
   );
+  it.effect("returns validation error when strict resume is missing a Codex cursor", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const result = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-strict-resume-missing-cursor"),
+          runtimeMode: "full-access",
+          strictResume: true,
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      assert.deepStrictEqual(
+        result.failure,
+        new ProviderAdapterValidationError({
+          provider: ProviderDriverKind.make("codex"),
+          operation: "startSession",
+          issue: "Codex strict resume requires a resume cursor with threadId.",
+        }),
+      );
+      assert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
+    }),
+  );
   it.effect("maps codex model options before starting a session", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
