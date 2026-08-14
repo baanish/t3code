@@ -22,6 +22,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import GitActionsControl from "../GitActionsControl";
+import { TeleportOutButton } from "../teleport/TeleportOutButton";
 import { type DraftId } from "~/composerDraftStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
@@ -335,6 +336,11 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
+        <TeleportOutButton
+          environmentId={activeThreadEnvironmentId}
+          threadId={activeThreadId}
+          isServerThread={isServerThread}
+        />
       </div>
     </div>
   );

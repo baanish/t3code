@@ -33,6 +33,7 @@ import {
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
+  ImportIcon,
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
@@ -82,7 +83,7 @@ import {
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
-import { onOpenCommandPalette } from "../commandPaletteBus";
+import { formatRelativeTimeLabel } from "../timestampFormat";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -126,7 +127,9 @@ import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog"
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
+import { teleportFailureMessage, teleportProviderLabel } from "../lib/teleport";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
+import { teleportEnvironment } from "../state/teleport";
 import {
   deriveProviderInstanceEntries,
   resolveDefaultProviderModelSelection,
@@ -393,6 +396,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
+  const openImportSessions = useCallback(() => dispatch({ _tag: "OpenImportSessions" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
@@ -463,15 +467,28 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   useEffect(
     () =>
       onOpenCommandPalette((detail) => {
-        if (detail.open === "new-thread-in") {
-          openNewThreadIn();
-        } else if (detail.open === "add-project") {
-          openAddProject();
-        } else {
+        const open = detail.open;
+        if (open === undefined) {
           setOpen(true);
+          return;
+        }
+        switch (open) {
+          case "new-thread-in":
+            openNewThreadIn();
+            return;
+          case "add-project":
+            openAddProject();
+            return;
+          case "import-sessions":
+            openImportSessions();
+            return;
+          default: {
+            const _exhaustive: never = open;
+            return _exhaustive;
+          }
         }
       }),
-    [openAddProject, openNewThreadIn, setOpen],
+    [openAddProject, openImportSessions, openNewThreadIn, setOpen],
   );
 
   return (
@@ -576,6 +593,12 @@ function OpenCommandPaletteDialog(props: {
     reportDefect: false,
   });
   const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
+    reportFailure: false,
+  });
+  const listTeleportSessions = useAtomCommand(teleportEnvironment.listSessions, {
+    reportFailure: false,
+  });
+  const importTeleportSessions = useAtomCommand(teleportEnvironment.importSessions, {
     reportFailure: false,
   });
   const { environments } = useEnvironments();
@@ -1126,6 +1149,161 @@ function OpenCommandPaletteDialog(props: {
     }
   }
 
+  const importNativeSession = useCallback(
+    async (
+      project: Project,
+      session: {
+        readonly provider: "codex" | "claudeAgent" | "opencode" | "grok";
+        readonly externalSessionId: string;
+      },
+    ): Promise<void> => {
+      const result = await importTeleportSessions({
+        environmentId: project.environmentId,
+        input: {
+          projectId: project.id,
+          cwd: project.workspaceRoot,
+          sessions: [
+            {
+              provider: session.provider,
+              externalSessionId: session.externalSessionId,
+            },
+          ],
+        },
+      });
+      if (result._tag === "Success") {
+        const imported = result.value.imported[0];
+        if (imported) {
+          await navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(
+              scopeThreadRef(project.environmentId, imported.threadId),
+            ),
+          });
+          toastManager.add({
+            type: "success",
+            title: imported.updatedInPlace
+              ? "Updated thread from native session"
+              : "Imported native session",
+          });
+        }
+        setOpen(false);
+        return;
+      }
+      if (isAtomCommandInterrupted(result)) {
+        return;
+      }
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not import session",
+          description: teleportFailureMessage(squashAtomCommandFailure(result)),
+        }),
+      );
+    },
+    [importTeleportSessions, navigate, setOpen],
+  );
+
+  const openImportSessionsForProject = useCallback(
+    async (project: Project): Promise<void> => {
+      const result = await listTeleportSessions({
+        environmentId: project.environmentId,
+        input: { cwd: project.workspaceRoot },
+      });
+      if (result._tag !== "Success") {
+        if (!isAtomCommandInterrupted(result)) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not list native sessions",
+              description: teleportFailureMessage(squashAtomCommandFailure(result)),
+            }),
+          );
+        }
+        return;
+      }
+      if (result.value.sessions.length === 0) {
+        toastManager.add({
+          type: "info",
+          title: "No native sessions found",
+          description: `No Codex, Claude, OpenCode, or Grok sessions match ${project.workspaceRoot}.`,
+        });
+        return;
+      }
+      const items: CommandPaletteActionItem[] = result.value.sessions.map((session) => ({
+        kind: "action",
+        value: `import-session:${session.provider}:${session.externalSessionId}`,
+        searchTerms: [
+          session.title ?? "",
+          session.externalSessionId,
+          teleportProviderLabel(session.provider),
+          session.cwd,
+        ],
+        title: session.title ?? session.externalSessionId,
+        description: [
+          teleportProviderLabel(session.provider),
+          session.updatedAt ? formatRelativeTimeLabel(session.updatedAt) : null,
+        ]
+          .filter((part): part is string => part !== null)
+          .join(" · "),
+        icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await importNativeSession(project, session);
+        },
+      }));
+      pushPaletteView({
+        addonIcon: <ImportIcon className={ADDON_ICON_CLASS} />,
+        groups: [
+          {
+            value: "native-sessions",
+            label: `Sessions in ${project.title}`,
+            items,
+          },
+        ],
+      });
+    },
+    [importNativeSession, listTeleportSessions, pushPaletteView],
+  );
+
+  const importProjectItems = useMemo(
+    () =>
+      pickerProjects.map((project) => ({
+        kind: "action" as const,
+        value: `import-sessions:${project.environmentId}:${project.id}`,
+        searchTerms: [project.title, project.workspaceRoot, "import", "teleport"],
+        title: project.title,
+        description: project.workspaceRoot,
+        icon: projectFavicon(project),
+        keepOpen: true,
+        run: async () => {
+          await openImportSessionsForProject(project);
+        },
+      })),
+    [openImportSessionsForProject, pickerProjects],
+  );
+
+  const openImportSessionsFlow = useCallback(() => {
+    if (importProjectItems.length === 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "No projects available",
+          description: "Add a project before importing native sessions.",
+        }),
+      );
+      return;
+    }
+    pushPaletteView({
+      addonIcon: <ImportIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "projects",
+          label: "Projects",
+          items: importProjectItems,
+        },
+      ],
+    });
+  }, [importProjectItems, pushPaletteView]);
+
   const startAddProjectBrowse = useCallback(
     async (environmentId: EnvironmentId): Promise<void> => {
       const initialQuery = getAddProjectInitialQueryForEnvironment(environmentId);
@@ -1414,6 +1592,14 @@ function OpenCommandPaletteDialog(props: {
     pushPaletteView,
   ]);
 
+  useLayoutEffect(() => {
+    if (openIntent?.kind !== "import-sessions") {
+      return;
+    }
+    clearOpenIntent();
+    openImportSessionsFlow();
+  }, [clearOpenIntent, openImportSessionsFlow, openIntent]);
+
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
   if (projects.length > 0) {
@@ -1452,6 +1638,27 @@ function OpenCommandPaletteDialog(props: {
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
+    });
+
+    actionItems.push({
+      kind: "action",
+      value: "action:import-sessions",
+      searchTerms: [
+        "import sessions",
+        "teleport",
+        "codex",
+        "claude",
+        "opencode",
+        "grok",
+        "native",
+        "cli",
+      ],
+      title: "Import sessions...",
+      icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+      keepOpen: true,
+      run: async () => {
+        openImportSessionsFlow();
+      },
     });
   }
 
