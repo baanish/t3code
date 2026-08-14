@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off preferSchemaOverJson:off
 import * as NodeSqlite from "node:sqlite";
 
 import {
@@ -15,7 +15,13 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { firstUserTitle, isRecord, nonEmptyString, parseJsonObject } from "../json.ts";
-import type { NativeTextMessage, ParsedNativeSession } from "../types.ts";
+import {
+  nativeTextMessage,
+  parsedNativeSession,
+  teleportCandidateFields,
+  type NativeTextMessage,
+  type ParsedNativeSession,
+} from "../types.ts";
 
 const OPENCODE = ProviderDriverKind.make("opencode");
 
@@ -113,8 +119,8 @@ const readOpenCodeSqliteSessions = Effect.fn("readOpenCodeSqliteSessions")(funct
     return [] as ParsedNativeSession[];
   }
 
-  return yield* Effect.try({
-    try: () => {
+  return yield* Effect.sync(() => {
+    try {
       const db = new NodeSqlite.DatabaseSync(dbPath, { readOnly: true });
       try {
         const rows = db
@@ -163,39 +169,36 @@ const readOpenCodeSqliteSessions = Effect.fn("readOpenCodeSqliteSessions")(funct
             if (!role || !text) {
               continue;
             }
-            messages.push({
-              role,
-              text,
-              ...(dateFromMillis(messageRow.time_created)
-                ? { createdAt: dateFromMillis(messageRow.time_created) }
-                : {}),
-              ...(nonEmptyString(messageRow.id) ? { id: nonEmptyString(messageRow.id) } : {}),
-            });
+            messages.push(
+              nativeTextMessage({
+                role,
+                text,
+                createdAt: dateFromMillis(messageRow.time_created),
+                id: nonEmptyString(messageRow.id),
+              }),
+            );
           }
-          sessions.push({
-            provider: "opencode",
-            externalSessionId: id,
-            cwd,
-            nativePath: dbPath,
-            nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-            ...((nonEmptyString(row.title) ?? firstUserTitle(messages))
-              ? { title: nonEmptyString(row.title) ?? firstUserTitle(messages) }
-              : {}),
-            ...(dateFromMillis(row.time_created)
-              ? { createdAt: dateFromMillis(row.time_created) }
-              : {}),
-            ...(dateFromMillis(row.time_updated)
-              ? { updatedAt: dateFromMillis(row.time_updated) }
-              : {}),
-            messages,
-          });
+          sessions.push(
+            parsedNativeSession({
+              provider: "opencode",
+              externalSessionId: id,
+              cwd,
+              nativePath: dbPath,
+              nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+              title: nonEmptyString(row.title) ?? firstUserTitle(messages),
+              createdAt: dateFromMillis(row.time_created),
+              updatedAt: dateFromMillis(row.time_updated),
+              messages,
+            }),
+          );
         }
         return sessions;
       } finally {
         db.close();
       }
-    },
-    catch: () => [] as ParsedNativeSession[],
+    } catch {
+      return [] as ParsedNativeSession[];
+    }
   });
 });
 
@@ -236,19 +239,19 @@ const readOpenCodeJsonSessions = Effect.fn("readOpenCodeJsonSessions")(function*
     const updatedAt =
       dateFromMillis(isRecord(parsed.time) ? parsed.time.updated : parsed.time_updated) ??
       nonEmptyString(parsed.updatedAt);
-    sessions.push({
-      provider: "opencode",
-      externalSessionId: id,
-      cwd,
-      nativePath: filePath,
-      nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-      ...((nonEmptyString(parsed.title) ?? firstUserTitle(messages))
-        ? { title: nonEmptyString(parsed.title) ?? firstUserTitle(messages) }
-        : {}),
-      ...(createdAt ? { createdAt } : {}),
-      ...(updatedAt ? { updatedAt } : {}),
-      messages,
-    });
+    sessions.push(
+      parsedNativeSession({
+        provider: "opencode",
+        externalSessionId: id,
+        cwd,
+        nativePath: filePath,
+        nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+        title: nonEmptyString(parsed.title) ?? firstUserTitle(messages),
+        createdAt,
+        updatedAt,
+        messages,
+      }),
+    );
   }
 
   return sessions;
@@ -279,12 +282,14 @@ const readOpenCodeJsonMessages = Effect.fn("readOpenCodeJsonMessages")(function*
       continue;
     }
     const createdAt = dateFromMillis(isRecord(parsed.time) ? parsed.time.created : undefined);
-    messages.push({
-      role,
-      text,
-      ...(createdAt ? { createdAt } : {}),
-      id,
-    });
+    messages.push(
+      nativeTextMessage({
+        role,
+        text,
+        createdAt,
+        id,
+      }),
+    );
   }
   return messages.toSorted((left, right) =>
     (left.createdAt ?? "").localeCompare(right.createdAt ?? ""),
@@ -417,8 +422,8 @@ const writeOpenCodeSqliteSession = Effect.fn("writeOpenCodeSqliteSession")(funct
   if (!exists) {
     return;
   }
-  yield* Effect.try({
-    try: () => {
+  yield* Effect.sync(() => {
+    try {
       const db = new NodeSqlite.DatabaseSync(dbPath);
       try {
         db.exec("BEGIN");
@@ -473,8 +478,9 @@ const writeOpenCodeSqliteSession = Effect.fn("writeOpenCodeSqliteSession")(funct
       } finally {
         db.close();
       }
-    },
-    catch: (cause) => cause,
+    } catch {
+      // JSON files are the export source of truth; SQLite is best-effort.
+    }
   });
 });
 
@@ -486,9 +492,7 @@ export function toOpenCodeCandidate(session: ParsedNativeSession): TeleportSessi
     cwd: session.cwd,
     nativePath: session.nativePath,
     nativeFormatVersion: session.nativeFormatVersion,
-    ...(session.title ? { title: session.title } : {}),
-    ...(session.createdAt ? { createdAt: session.createdAt } : {}),
-    ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
+    ...teleportCandidateFields(session),
   };
 }
 

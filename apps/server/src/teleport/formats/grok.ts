@@ -1,3 +1,5 @@
+// Native Grok files store wall-clock ISO timestamps and JSON session records.
+// @effect-diagnostics globalDate:off preferSchemaOverJson:off
 import {
   TELEPORT_NATIVE_FORMAT_VERSION,
   TeleportSchemaVersionError,
@@ -11,7 +13,13 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { firstUserTitle, isRecord, nonEmptyString, parseJsonObject } from "../json.ts";
-import type { NativeTextMessage, ParsedNativeSession } from "../types.ts";
+import {
+  nativeTextMessage,
+  parsedNativeSession,
+  teleportCandidateFields,
+  type NativeTextMessage,
+  type ParsedNativeSession,
+} from "../types.ts";
 
 const GROK = ProviderDriverKind.make("grok");
 
@@ -57,29 +65,31 @@ export function parseGrokSessionContents(input: {
       if (!role || !text) {
         continue;
       }
-      messages.push({
-        role,
-        text,
-        ...(nonEmptyString(entry.createdAt) ? { createdAt: nonEmptyString(entry.createdAt) } : {}),
-        ...(nonEmptyString(entry.id) ? { id: nonEmptyString(entry.id) } : {}),
-      });
+      messages.push(
+        nativeTextMessage({
+          role,
+          text,
+          createdAt: nonEmptyString(entry.createdAt),
+          id: nonEmptyString(entry.id),
+        }),
+      );
     }
   }
 
   return Effect.succeed(
-    Option.some({
-      provider: "grok",
-      externalSessionId,
-      cwd,
-      nativePath: input.nativePath,
-      nativeFormatVersion,
-      ...((nonEmptyString(parsed.title) ?? firstUserTitle(messages))
-        ? { title: nonEmptyString(parsed.title) ?? firstUserTitle(messages) }
-        : {}),
-      ...(nonEmptyString(parsed.createdAt) ? { createdAt: nonEmptyString(parsed.createdAt) } : {}),
-      ...(nonEmptyString(parsed.updatedAt) ? { updatedAt: nonEmptyString(parsed.updatedAt) } : {}),
-      messages,
-    }),
+    Option.some(
+      parsedNativeSession({
+        provider: "grok",
+        externalSessionId,
+        cwd,
+        nativePath: input.nativePath,
+        nativeFormatVersion,
+        title: nonEmptyString(parsed.title) ?? firstUserTitle(messages),
+        createdAt: nonEmptyString(parsed.createdAt),
+        updatedAt: nonEmptyString(parsed.updatedAt),
+        messages,
+      }),
+    ),
   );
 }
 
@@ -144,8 +154,6 @@ export function toGrokCandidate(session: ParsedNativeSession): TeleportSessionCa
     cwd: session.cwd,
     nativePath: session.nativePath,
     nativeFormatVersion: session.nativeFormatVersion,
-    ...(session.title ? { title: session.title } : {}),
-    ...(session.createdAt ? { createdAt: session.createdAt } : {}),
-    ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
+    ...teleportCandidateFields(session),
   };
 }

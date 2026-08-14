@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off preferSchemaOverJson:off
 import * as NodeCrypto from "node:crypto";
 
 import {
@@ -20,7 +20,13 @@ import {
   nonEmptyString,
   parseJsonObject,
 } from "../json.ts";
-import type { NativeTextMessage, ParsedNativeSession } from "../types.ts";
+import {
+  nativeTextMessage,
+  parsedNativeSession,
+  teleportCandidateFields,
+  type NativeTextMessage,
+  type ParsedNativeSession,
+} from "../types.ts";
 
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
 
@@ -55,12 +61,12 @@ function extractClaudeMessage(record: Record<string, unknown>): NativeTextMessag
   if (!text) {
     return undefined;
   }
-  return {
+  return nativeTextMessage({
     role,
     text,
-    ...(nonEmptyString(record.timestamp) ? { createdAt: nonEmptyString(record.timestamp) } : {}),
-    ...(nonEmptyString(record.uuid) ? { id: nonEmptyString(record.uuid) } : {}),
-  };
+    createdAt: nonEmptyString(record.timestamp),
+    id: nonEmptyString(record.uuid),
+  });
 }
 
 export function parseClaudeSessionContents(input: {
@@ -75,7 +81,7 @@ export function parseClaudeSessionContents(input: {
   let sessionId: string | undefined;
   let cwd: string | undefined;
   let createdAt: string | undefined;
-  let nativeFormatVersion = TELEPORT_NATIVE_FORMAT_VERSION;
+  let nativeFormatVersion: number = TELEPORT_NATIVE_FORMAT_VERSION;
   const messages: NativeTextMessage[] = [];
 
   for (const line of lines) {
@@ -114,17 +120,19 @@ export function parseClaudeSessionContents(input: {
 
   const updatedAt = messages.at(-1)?.createdAt ?? createdAt;
   return Effect.succeed(
-    Option.some({
-      provider: "claudeAgent",
-      externalSessionId,
-      cwd,
-      nativePath: input.nativePath,
-      nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-      ...(firstUserTitle(messages) ? { title: firstUserTitle(messages) } : {}),
-      ...(createdAt ? { createdAt } : {}),
-      ...(updatedAt ? { updatedAt } : {}),
-      messages,
-    }),
+    Option.some(
+      parsedNativeSession({
+        provider: "claudeAgent",
+        externalSessionId,
+        cwd,
+        nativePath: input.nativePath,
+        nativeFormatVersion,
+        title: firstUserTitle(messages),
+        createdAt,
+        updatedAt,
+        messages,
+      }),
+    ),
   );
 }
 
@@ -191,9 +199,7 @@ export function toClaudeCandidate(session: ParsedNativeSession): TeleportSession
     cwd: session.cwd,
     nativePath: session.nativePath,
     nativeFormatVersion: session.nativeFormatVersion,
-    ...(session.title ? { title: session.title } : {}),
-    ...(session.createdAt ? { createdAt: session.createdAt } : {}),
-    ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
+    ...teleportCandidateFields(session),
   };
 }
 

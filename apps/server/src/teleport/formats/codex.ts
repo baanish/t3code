@@ -1,3 +1,5 @@
+// Native Codex files store wall-clock ISO timestamps and JSONL event records.
+// @effect-diagnostics globalDate:off preferSchemaOverJson:off
 import {
   TELEPORT_NATIVE_FORMAT_VERSION,
   TeleportSchemaVersionError,
@@ -11,13 +13,20 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import {
+  definedField,
   firstUserTitle,
   isRecord,
   nonEmptyString,
   parseJsonObject,
   uuidFromPath,
 } from "../json.ts";
-import type { NativeTextMessage, ParsedNativeSession } from "./types.ts";
+import {
+  nativeTextMessage,
+  parsedNativeSession,
+  teleportCandidateFields,
+  type NativeTextMessage,
+  type ParsedNativeSession,
+} from "../types.ts";
 
 const CODEX = ProviderDriverKind.make("codex");
 
@@ -56,12 +65,12 @@ function extractMessage(event: Record<string, unknown>): NativeTextMessage | und
   if (!text) {
     return undefined;
   }
-  const createdAt = nonEmptyString(event.timestamp);
-  return {
+  return nativeTextMessage({
     role,
     text,
-    ...(createdAt ? { createdAt } : {}),
-  };
+    createdAt: nonEmptyString(event.timestamp),
+    id: undefined,
+  });
 }
 
 function collectCodexText(content: unknown): string | undefined {
@@ -97,7 +106,7 @@ export function parseCodexSessionContents(input: {
   let cwd: string | undefined;
   let createdAt: string | undefined;
   let title: string | undefined;
-  let nativeFormatVersion = TELEPORT_NATIVE_FORMAT_VERSION;
+  let nativeFormatVersion: number = TELEPORT_NATIVE_FORMAT_VERSION;
   let forked = false;
   const messages: NativeTextMessage[] = [];
 
@@ -161,17 +170,19 @@ export function parseCodexSessionContents(input: {
 
   const updatedAt = messages.at(-1)?.createdAt ?? createdAt;
   return Effect.succeed(
-    Option.some({
-      provider: "codex",
-      externalSessionId,
-      cwd,
-      nativePath: input.nativePath,
-      nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-      ...((title ?? firstUserTitle(messages)) ? { title: title ?? firstUserTitle(messages) } : {}),
-      ...(createdAt ? { createdAt } : {}),
-      ...(updatedAt ? { updatedAt } : {}),
-      messages,
-    }),
+    Option.some(
+      parsedNativeSession({
+        provider: "codex",
+        externalSessionId,
+        cwd,
+        nativePath: input.nativePath,
+        nativeFormatVersion,
+        title: title ?? firstUserTitle(messages),
+        createdAt,
+        updatedAt,
+        messages,
+      }),
+    ),
   );
 }
 
@@ -188,7 +199,7 @@ export function serializeCodexSession(session: ParsedNativeSession): string {
         timestamp,
         originator: "t3-teleport",
         source: "cli",
-        ...(session.title ? { title: session.title } : {}),
+        ...definedField("title", session.title),
       },
     }),
     JSON.stringify({
@@ -258,9 +269,7 @@ export function toCodexCandidate(session: ParsedNativeSession): TeleportSessionC
     cwd: session.cwd,
     nativePath: session.nativePath,
     nativeFormatVersion: session.nativeFormatVersion,
-    ...(session.title ? { title: session.title } : {}),
-    ...(session.createdAt ? { createdAt: session.createdAt } : {}),
-    ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
+    ...teleportCandidateFields(session),
   };
 }
 

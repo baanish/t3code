@@ -13,18 +13,15 @@ import {
   TeleportProjectResolutionError,
   TeleportIdentityConflictError,
   TeleportNativeWriteError,
-  TeleportUnsupportedProviderError,
   ThreadId,
   defaultInstanceIdForDriver,
   isTeleportProvider,
   type ModelSelection,
   type OrchestrationMessage,
   type TeleportExportSessionInput,
-  type TeleportExportSessionResult,
+  type TeleportImportedSession,
   type TeleportImportSessionsInput,
-  type TeleportImportSessionsResult,
   type TeleportListSessionsInput,
-  type TeleportListSessionsResult,
   type TeleportProvider,
   type TeleportRuntimePayload,
 } from "@t3tools/contracts";
@@ -35,6 +32,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 
 import * as OrchestrationEngine from "../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -71,6 +69,7 @@ import { firstUserTitle, truncateTitle } from "../json.ts";
 import {
   MAX_TELEPORT_MESSAGE_CHARS,
   MAX_TELEPORT_MESSAGES,
+  nativeTextMessage,
   type NativeTextMessage,
   type ParsedNativeSession,
 } from "../types.ts";
@@ -85,16 +84,14 @@ function modelSelectionForProvider(provider: TeleportProvider): ModelSelection {
 }
 
 function capMessages(messages: ReadonlyArray<NativeTextMessage>): NativeTextMessage[] {
-  return messages
-    .slice(-MAX_TELEPORT_MESSAGES)
-    .map((message) =>
-      message.text.length > MAX_TELEPORT_MESSAGE_CHARS
-        ? {
-            ...message,
-            text: `${message.text.slice(0, MAX_TELEPORT_MESSAGE_CHARS)}\n\n[truncated]`,
-          }
-        : message,
-    );
+  return messages.slice(-MAX_TELEPORT_MESSAGES).map((message) =>
+    message.text.length > MAX_TELEPORT_MESSAGE_CHARS
+      ? {
+          ...message,
+          text: `${message.text.slice(0, MAX_TELEPORT_MESSAGE_CHARS)}\n\n[truncated]`,
+        }
+      : message,
+  );
 }
 
 function nativeMessagesToOrchestration(
@@ -123,12 +120,12 @@ function orchestrationToNative(messages: ReadonlyArray<OrchestrationMessage>): N
       return [];
     }
     return [
-      {
+      nativeTextMessage({
         role: message.role,
         text: message.text,
         createdAt: message.createdAt,
         id: message.id,
-      },
+      }),
     ];
   });
 }
@@ -251,7 +248,7 @@ export const TeleportServiceLive = Layer.effect(
             });
           }
 
-          const imported: TeleportImportSessionsResult["imported"] = [];
+          const imported: TeleportImportedSession[] = [];
           const now = yield* nowIso;
 
           for (const parsed of parsedSessions) {
@@ -407,6 +404,15 @@ export const TeleportServiceLive = Layer.effect(
             imported,
           };
         }),
+      ).pipe(
+        Effect.catchTag(
+          "PlatformError",
+          (cause: PlatformError.PlatformError) =>
+            new TeleportDiscoveryError({
+              message: "Native filesystem error during teleport import.",
+              cause,
+            }),
+        ),
       );
 
     const exportSession = (input: TeleportExportSessionInput) =>
@@ -680,6 +686,16 @@ export const TeleportServiceLive = Layer.effect(
             cwd,
           };
         }),
+      ).pipe(
+        Effect.catchTag(
+          "PlatformError",
+          (cause: PlatformError.PlatformError) =>
+            new TeleportNativeWriteError({
+              nativePath: "native session",
+              message: "Native filesystem error during teleport export.",
+              cause,
+            }),
+        ),
       );
 
     return TeleportService.of({

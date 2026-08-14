@@ -1,3 +1,13 @@
+export function definedField<K extends string, V>(
+  key: K,
+  value: V | undefined,
+): Record<PropertyKey, never> | { readonly [P in K]: V } {
+  if (value === undefined) {
+    return {};
+  }
+  return { [key]: value } as { readonly [P in K]: V };
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
