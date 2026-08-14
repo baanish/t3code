@@ -189,6 +189,17 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  TeleportExportError,
+  TeleportExportSessionInput,
+  TeleportExportSessionResult,
+  TeleportImportError,
+  TeleportImportSessionsInput,
+  TeleportImportSessionsResult,
+  TeleportListSessionsError,
+  TeleportListSessionsInput,
+  TeleportListSessionsResult,
+} from "./teleport.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -297,6 +308,11 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+
+  // Teleport session sync
+  teleportListSessions: "teleport.listSessions",
+  teleportImportSessions: "teleport.importSessions",
+  teleportExportSession: "teleport.exportSession",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -970,6 +986,24 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
   stream: true,
 });
 
+export const WsTeleportListSessionsRpc = Rpc.make(WS_METHODS.teleportListSessions, {
+  payload: TeleportListSessionsInput,
+  success: TeleportListSessionsResult,
+  error: Schema.Union([TeleportListSessionsError, EnvironmentAuthorizationError]),
+});
+
+export const WsTeleportImportSessionsRpc = Rpc.make(WS_METHODS.teleportImportSessions, {
+  payload: TeleportImportSessionsInput,
+  success: TeleportImportSessionsResult,
+  error: Schema.Union([TeleportImportError, EnvironmentAuthorizationError]),
+});
+
+export const WsTeleportExportSessionRpc = Rpc.make(WS_METHODS.teleportExportSession, {
+  payload: TeleportExportSessionInput,
+  success: TeleportExportSessionResult,
+  error: Schema.Union([TeleportExportError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1061,6 +1095,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsTeleportListSessionsRpc,
+  WsTeleportImportSessionsRpc,
+  WsTeleportExportSessionRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
