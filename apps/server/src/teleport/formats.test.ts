@@ -12,7 +12,7 @@ import { teleportCwdsMatch } from "./cwd.ts";
 import { discoverTeleportSessions } from "./discovery.ts";
 import { parseClaudeSessionContents, serializeClaudeSession } from "./formats/claude.ts";
 import { parseCodexSessionContents, serializeCodexSession } from "./formats/codex.ts";
-import { parseGrokSessionContents, serializeGrokSession } from "./formats/grok.ts";
+import { parseGrokSessionDirectory, writeGrokSession } from "./formats/grok.ts";
 import { readOpenCodeSessionById, writeOpenCodeSession } from "./formats/opencode.ts";
 import type { TeleportHomes } from "./homes.ts";
 import { buildTeleportResumeCursor, readTeleportExternalSessionId } from "./resumeCursors.ts";
@@ -143,33 +143,100 @@ describe("teleport formats", () => {
     }),
   );
 
-  it.effect("roundtrips Grok json", () =>
+  it.effect("roundtrips Grok session directories", () =>
     Effect.gen(function* () {
-      const session = sampleSession("grok");
-      const parsed = yield* parseGrokSessionContents({
-        contents: serializeGrokSession(session),
-        nativePath: session.nativePath,
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-grok-" });
+      const session = sampleSession("grok", "/workspace");
+      const nativePath = yield* writeGrokSession({
+        sessionsRoot: root,
+        session,
+      });
+      const summary = yield* fs.readFileString(path.join(nativePath, "summary.json"));
+      const updates = yield* fs.readFileString(path.join(nativePath, "updates.jsonl"));
+      const parsed = yield* parseGrokSessionDirectory({
+        summaryContents: summary,
+        updatesContents: updates,
+        nativePath,
       });
       assert.equal(Option.isSome(parsed), true);
       if (Option.isSome(parsed)) {
         assert.equal(parsed.value.externalSessionId, SESSION_ID);
+        assert.equal(parsed.value.cwd, "/workspace");
         assert.equal(parsed.value.messages.length, 2);
+        assert.equal(parsed.value.messages[0]?.text, "Fix the flaky matcher");
+        assert.equal(
+          parsed.value.messages[1]?.text,
+          "I'll tighten the path comparison and add a realpath fallback.",
+        );
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("concatenates consecutive Grok message chunks", () =>
+    Effect.gen(function* () {
+      const parsed = yield* parseGrokSessionDirectory({
+        nativePath: "/tmp/grok-session",
+        summaryContents: JSON.stringify({
+          info: { id: SESSION_ID, cwd: "/workspace" },
+          chat_format_version: 1,
+        }),
+        updatesContents: `${JSON.stringify({
+          timestamp: 1_782_000_000,
+          method: "session/update",
+          params: {
+            sessionId: SESSION_ID,
+            update: {
+              sessionUpdate: "user_message_chunk",
+              content: { type: "text", text: "Hello " },
+            },
+          },
+        })}\n${JSON.stringify({
+          timestamp: 1_782_000_001,
+          method: "session/update",
+          params: {
+            sessionId: SESSION_ID,
+            update: {
+              sessionUpdate: "user_message_chunk",
+              content: { type: "text", text: "world" },
+            },
+          },
+        })}\n${JSON.stringify({
+          timestamp: 1_782_000_002,
+          method: "session/update",
+          params: {
+            sessionId: SESSION_ID,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "Hi" },
+            },
+          },
+        })}\n`,
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.messages.length, 2);
+        assert.equal(parsed.value.messages[0]?.text, "Hello world");
+        assert.equal(parsed.value.messages[1]?.text, "Hi");
       }
     }),
   );
 
   it.effect("fails closed on a newer Grok format version", () =>
     Effect.gen(function* () {
-      const result = yield* parseGrokSessionContents({
-        contents: JSON.stringify({
-          nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION + 1,
-          id: SESSION_ID,
-          cwd: "/workspace",
-          messages: [],
+      const result = yield* parseGrokSessionDirectory({
+        summaryContents: JSON.stringify({
+          info: { id: SESSION_ID, cwd: "/workspace" },
+          chat_format_version: 2,
         }),
-        nativePath: "/tmp/new-grok.json",
+        updatesContents: "",
+        nativePath: "/tmp/new-grok",
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure._tag, "TeleportSchemaVersionError");
+      }
     }),
   );
 
@@ -276,13 +343,14 @@ describe("teleport discovery", () => {
       yield* fs.writeFileString(codexPath, serializeCodexSession(sampleSession("codex")));
       yield* fs.writeFileString(path.join(path.dirname(codexPath), "garbage.jsonl"), "not-json\n");
 
-      const grokPath = path.join(homes.grokSessionsRoot, `${SESSION_ID}.json`);
-      yield* fs.makeDirectory(homes.grokSessionsRoot, { recursive: true });
-      yield* fs.writeFileString(grokPath, serializeGrokSession(sampleSession("grok")));
-      yield* fs.writeFileString(
-        path.join(homes.grokSessionsRoot, "other-project.json"),
-        serializeGrokSession(sampleSession("grok", "/other-project")),
-      );
+      yield* writeGrokSession({
+        sessionsRoot: homes.grokSessionsRoot,
+        session: sampleSession("grok"),
+      });
+      yield* writeGrokSession({
+        sessionsRoot: homes.grokSessionsRoot,
+        session: sampleSession("grok", "/other-project"),
+      });
 
       const listed = yield* discoverTeleportSessions({
         homes,
@@ -307,16 +375,16 @@ describe("teleport discovery", () => {
         opencodeRoot: path.join(root, "opencode"),
         grokSessionsRoot: path.join(root, "grok", "sessions"),
       };
-      yield* fs.makeDirectory(homes.grokSessionsRoot, { recursive: true });
+      const grokPath = path.join(homes.grokSessionsRoot, "%2Fworkspace", SESSION_ID);
+      yield* fs.makeDirectory(grokPath, { recursive: true });
       yield* fs.writeFileString(
-        path.join(homes.grokSessionsRoot, `${SESSION_ID}.json`),
+        path.join(grokPath, "summary.json"),
         JSON.stringify({
-          nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION + 1,
-          id: SESSION_ID,
-          cwd: "/workspace",
-          messages: [],
+          info: { id: SESSION_ID, cwd: "/workspace" },
+          chat_format_version: TELEPORT_NATIVE_FORMAT_VERSION + 1,
         }),
       );
+      yield* fs.writeFileString(path.join(grokPath, "updates.jsonl"), "");
       const result = yield* discoverTeleportSessions({
         homes,
         cwd: "/workspace",

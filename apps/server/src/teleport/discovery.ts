@@ -22,7 +22,7 @@ import {
   parseCodexSessionContents,
   toCodexCandidate,
 } from "./formats/codex.ts";
-import { listGrokSessionFiles, parseGrokSessionContents, toGrokCandidate } from "./formats/grok.ts";
+import { listGrokSessionDirs, readGrokSessionFromDir, toGrokCandidate } from "./formats/grok.ts";
 import {
   listOpenCodeSessions,
   readOpenCodeSessionById,
@@ -91,12 +91,9 @@ export const discoverTeleportSessions = Effect.fn("discoverTeleportSessions")(fu
         break;
       }
       case "grok": {
-        const files = yield* listGrokSessionFiles(input.homes.grokSessionsRoot);
-        for (const nativePath of files) {
-          const parsed = yield* readParsedSessionFile({
-            nativePath,
-            parse: parseGrokSessionContents,
-          });
+        const dirs = yield* listGrokSessionDirs(input.homes.grokSessionsRoot);
+        for (const nativePath of dirs) {
+          const parsed = yield* readGrokSessionFromDir(nativePath);
           if (Option.isNone(parsed)) {
             continue;
           }
@@ -162,12 +159,18 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
     return parsed.value;
   }
 
+  if (input.provider === "grok") {
+    const parsed = yield* readGrokSessionFromDir(candidate.nativePath);
+    if (Option.isNone(parsed)) {
+      return yield* new TeleportDiscoveryError({
+        message: `Native Grok session '${input.externalSessionId}' could not be read.`,
+      });
+    }
+    return parsed.value;
+  }
+
   const parser =
-    input.provider === "codex"
-      ? parseCodexSessionContents
-      : input.provider === "claudeAgent"
-        ? parseClaudeSessionContents
-        : parseGrokSessionContents;
+    input.provider === "codex" ? parseCodexSessionContents : parseClaudeSessionContents;
   const parsed = yield* readParsedSessionFile({
     nativePath: candidate.nativePath,
     parse: parser,

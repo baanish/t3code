@@ -52,11 +52,7 @@ import {
   parseCodexSessionContents,
   serializeCodexSession,
 } from "../formats/codex.ts";
-import {
-  allocateGrokSessionPath,
-  parseGrokSessionContents,
-  serializeGrokSession,
-} from "../formats/grok.ts";
+import { writeGrokSession } from "../formats/grok.ts";
 import { writeOpenCodeSession } from "../formats/opencode.ts";
 import { resolveTeleportHomes } from "../homes.ts";
 import { writeNativeSessionAtomically } from "../nativeWrite.ts";
@@ -65,7 +61,7 @@ import {
   readTeleportExternalSessionId,
   toTeleportProvider,
 } from "../resumeCursors.ts";
-import { firstUserTitle, truncateTitle } from "../json.ts";
+import { definedField, firstUserTitle, truncateTitle } from "../json.ts";
 import {
   MAX_TELEPORT_MESSAGE_CHARS,
   MAX_TELEPORT_MESSAGES,
@@ -607,37 +603,11 @@ export const TeleportServiceLive = Layer.effect(
               break;
             }
             case "grok": {
-              nativePath =
-                existingNativePath ??
-                allocateGrokSessionPath({
-                  sessionsRoot: homes.grokSessionsRoot,
-                  sessionId: externalSessionId,
-                  join: path.join,
-                });
-              const contents = serializeGrokSession({ ...nativeSession, nativePath });
-              yield* writeNativeSessionAtomically({
-                filePath: nativePath,
-                contents,
-                verify: (written) =>
-                  parseGrokSessionContents({ contents: written, nativePath }).pipe(
-                    Effect.flatMap((parsed) =>
-                      Option.isSome(parsed)
-                        ? Effect.void
-                        : new TeleportNativeWriteError({
-                            nativePath,
-                            message: `Exported Grok session failed verification: ${nativePath}`,
-                          }),
-                    ),
-                    Effect.mapError((error) =>
-                      error._tag === "TeleportSchemaVersionError"
-                        ? new TeleportNativeWriteError({
-                            nativePath,
-                            message: error.message,
-                            cause: error,
-                          })
-                        : error,
-                    ),
-                  ),
+              yield* requireNativePathUnlocked(homes.grokSessionsRoot);
+              nativePath = yield* writeGrokSession({
+                sessionsRoot: homes.grokSessionsRoot,
+                session: { ...nativeSession, nativePath: existingNativePath ?? "" },
+                ...definedField("existingNativePath", existingNativePath),
               });
               break;
             }
