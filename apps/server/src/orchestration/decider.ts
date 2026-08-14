@@ -941,6 +941,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
         });
       }
+      if (targetThread.teleport?.presence === "native") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "This thread is in the native CLI. Import it before sending messages from T3.",
+        });
+      }
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1408,6 +1414,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messages: command.messages,
           replacedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.teleport.set": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.teleported",
+        payload: {
+          threadId: command.threadId,
+          teleport: command.teleport,
+          updatedAt: command.createdAt,
         },
       };
     }

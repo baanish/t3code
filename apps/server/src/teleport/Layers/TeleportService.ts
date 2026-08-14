@@ -16,6 +16,7 @@ import {
   ThreadId,
   defaultInstanceIdForDriver,
   isTeleportProvider,
+  resolveTeleportPresence,
   type ModelSelection,
   type OrchestrationMessage,
   type TeleportExportSessionInput,
@@ -37,6 +38,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as OrchestrationEngine from "../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstanceRegistry.ts";
+import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { canonicalizeTeleportCwd, teleportCwdsMatch } from "../cwd.ts";
@@ -59,6 +61,8 @@ import { writeNativeSessionAtomically } from "../nativeWrite.ts";
 import {
   buildTeleportResumeCursor,
   readTeleportExternalSessionId,
+  readTeleportRuntimePayload,
+  teleportThreadStateFromPayload,
   toTeleportProvider,
 } from "../resumeCursors.ts";
 import { definedField, firstUserTitle, truncateTitle } from "../json.ts";
@@ -130,6 +134,17 @@ function isBusySessionStatus(status: string | undefined): boolean {
   return status === "starting" || status === "running";
 }
 
+function isIgnorableProviderStopError(error: { readonly _tag: string }): boolean {
+  switch (error._tag) {
+    case "ProviderValidationError":
+    case "ProviderSessionNotFoundError":
+    case "ProviderAdapterSessionNotFoundError":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export const TeleportServiceLive = Layer.effect(
   TeleportService,
   Effect.gen(function* () {
@@ -138,6 +153,7 @@ export const TeleportServiceLive = Layer.effect(
     const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const directory = yield* ProviderSessionDirectory;
     const instanceRegistry = yield* ProviderInstanceRegistry;
+    const providerService = yield* ProviderService;
     const crypto = yield* Crypto.Crypto;
     const nativeContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
     const provideNative = <A, E>(
@@ -461,6 +477,7 @@ export const TeleportServiceLive = Layer.effect(
                 lastSyncDirection: "import",
                 lastSyncedAt: now,
                 nativeFormatVersion: parsed.nativeFormatVersion,
+                presence: "t3",
               };
               yield* directory
                 .upsert({
@@ -483,6 +500,18 @@ export const TeleportServiceLive = Layer.effect(
                       }),
                   ),
                 );
+              yield* engine
+                .dispatch({
+                  type: "thread.teleport.set",
+                  commandId: CommandId.make(yield* nextId()),
+                  threadId,
+                  teleport: teleportThreadStateFromPayload({
+                    provider: parsed.provider,
+                    payload: teleportPayload,
+                  }),
+                  createdAt: now,
+                })
+                .pipe(Effect.mapError(mapDispatchError("Failed to persist teleport presence.")));
 
               imported.push({
                 threadId,
@@ -577,6 +606,47 @@ export const TeleportServiceLive = Layer.effect(
               });
             }
             const provider = yield* toTeleportProvider(driverKind);
+            const existingPayload = Option.isSome(binding)
+              ? readTeleportRuntimePayload(binding.value.runtimePayload)
+              : undefined;
+            if (resolveTeleportPresence(existingPayload) === "native") {
+              return yield* new TeleportInvalidInputError({
+                message:
+                  "This thread is already in the native CLI. Import it before exporting again.",
+              });
+            }
+
+            yield* providerService.stopSession({ threadId: input.threadId }).pipe(
+              Effect.catchIf(isIgnorableProviderStopError, (error) =>
+                Effect.logDebug("teleport.export.stop-session-skipped", {
+                  threadId: input.threadId,
+                  reason: error._tag,
+                }),
+              ),
+              Effect.mapError(
+                (cause) =>
+                  new TeleportInvalidInputError({
+                    message: "Failed to stop the T3 provider session before export.",
+                    cause,
+                  }),
+              ),
+            );
+            const now = yield* nowIso;
+            yield* engine
+              .dispatch({
+                type: "thread.session.stop",
+                commandId: CommandId.make(yield* nextId()),
+                threadId: input.threadId,
+                createdAt: now,
+              })
+              .pipe(
+                Effect.catch(() =>
+                  Effect.logDebug("teleport.export.session-stop-dispatch-skipped", {
+                    threadId: input.threadId,
+                  }),
+                ),
+              );
+
             const cwd = yield* canonicalizeTeleportCwd(project.value.workspaceRoot);
             const settings = yield* settingsService.getSettings.pipe(
               Effect.mapError(
@@ -589,7 +659,6 @@ export const TeleportServiceLive = Layer.effect(
               ),
             );
             const homes = yield* resolveTeleportHomes(settings);
-            const now = yield* nowIso;
             const existingExternalId = Option.isSome(binding)
               ? readTeleportExternalSessionId({
                   provider: driverKind,
@@ -613,11 +682,6 @@ export const TeleportServiceLive = Layer.effect(
                 message: `Thread '${input.threadId}' was not found.`,
               });
             }
-            if (isBusySessionStatus(latest.value.session?.status)) {
-              return yield* new TeleportInvalidInputError({
-                message: "Cannot export while this T3 session is running.",
-              });
-            }
             const messages = capMessages(orchestrationToNative(latest.value.messages));
             const nativeSession: ParsedNativeSession = {
               provider,
@@ -632,17 +696,7 @@ export const TeleportServiceLive = Layer.effect(
             };
 
             const path = yield* Path.Path;
-            const existingNativePath =
-              Option.isSome(binding) &&
-              binding.value.runtimePayload &&
-              typeof binding.value.runtimePayload === "object" &&
-              binding.value.runtimePayload !== null &&
-              "teleport" in binding.value.runtimePayload &&
-              typeof (binding.value.runtimePayload as { teleport?: { nativePath?: unknown } })
-                .teleport?.nativePath === "string"
-                ? (binding.value.runtimePayload as { teleport: { nativePath: string } }).teleport
-                    .nativePath
-                : undefined;
+            const existingNativePath = existingPayload?.nativePath;
 
             let nativePath: string;
             switch (provider) {
@@ -746,6 +800,7 @@ export const TeleportServiceLive = Layer.effect(
               lastSyncDirection: "export",
               lastSyncedAt: now,
               nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+              presence: "native",
             };
             yield* directory
               .upsert({
@@ -754,7 +809,7 @@ export const TeleportServiceLive = Layer.effect(
                 providerInstanceId:
                   Option.getOrUndefined(binding)?.providerInstanceId ??
                   defaultInstanceIdForDriver(driverKind),
-                status: Option.getOrUndefined(binding)?.status ?? "stopped",
+                status: "stopped",
                 resumeCursor: buildTeleportResumeCursor({ provider, externalSessionId }),
                 runtimePayload: { teleport: teleportPayload },
               })
@@ -768,6 +823,18 @@ export const TeleportServiceLive = Layer.effect(
                     }),
                 ),
               );
+            yield* engine
+              .dispatch({
+                type: "thread.teleport.set",
+                commandId: CommandId.make(yield* nextId()),
+                threadId: input.threadId,
+                teleport: teleportThreadStateFromPayload({
+                  provider,
+                  payload: teleportPayload,
+                }),
+                createdAt: now,
+              })
+              .pipe(Effect.mapError(mapDispatchError("Failed to persist teleport presence.")));
 
             return {
               schemaVersion: TELEPORT_SCHEMA_VERSION,

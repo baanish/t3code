@@ -574,6 +574,17 @@ export function applyThreadDetailEvent(
       };
     }
 
+    case "thread.teleported": {
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          teleport: event.payload.teleport,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+    }
+
     // ── Activities ──────────────────────────────────────────────────
     case "thread.activity-appended": {
       const activity = event.payload.activity;

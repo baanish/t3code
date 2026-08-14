@@ -281,7 +281,8 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
       | "thread.turn-diff-completed"
       | "thread.reverted"
       | "thread.session-set"
-      | "thread.history-replaced";
+      | "thread.history-replaced"
+      | "thread.teleported";
   }
 > {
   return (
@@ -291,7 +292,8 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
     event.type === "thread.session-set" ||
-    event.type === "thread.history-replaced"
+    event.type === "thread.history-replaced" ||
+    event.type === "thread.teleported"
   );
 }
 

@@ -13,6 +13,18 @@ export type TeleportProvider = typeof TeleportProvider.Type;
 export const TeleportSyncDirection = Schema.Literals(["import", "export"]);
 export type TeleportSyncDirection = typeof TeleportSyncDirection.Type;
 
+export const TeleportPresence = Schema.Literals(["t3", "native"]);
+export type TeleportPresence = typeof TeleportPresence.Type;
+
+export const TeleportThreadState = Schema.Struct({
+  presence: TeleportPresence,
+  provider: TeleportProvider,
+  externalSessionId: TrimmedNonEmptyString,
+  nativePath: TrimmedNonEmptyString,
+  lastSyncedAt: IsoDateTime,
+});
+export type TeleportThreadState = typeof TeleportThreadState.Type;
+
 export const TeleportSessionRef = Schema.Struct({
   provider: TeleportProvider,
   externalSessionId: TrimmedNonEmptyString,
@@ -95,11 +107,25 @@ export const TeleportRuntimePayload = Schema.Struct({
   lastSyncDirection: TeleportSyncDirection,
   lastSyncedAt: IsoDateTime,
   nativeFormatVersion: Schema.Int,
+  presence: Schema.optional(TeleportPresence),
 });
 export type TeleportRuntimePayload = typeof TeleportRuntimePayload.Type;
 
 export function isTeleportProvider(value: string): value is TeleportProvider {
   return value === "codex" || value === "claudeAgent" || value === "opencode" || value === "grok";
+}
+
+export function resolveTeleportPresence(
+  payload: Pick<TeleportRuntimePayload, "presence" | "lastSyncDirection"> | null | undefined,
+): TeleportPresence {
+  if (payload?.presence) {
+    return payload.presence;
+  }
+  return payload?.lastSyncDirection === "export" ? "native" : "t3";
+}
+
+export function isTeleportedOut(teleport: TeleportThreadState | null | undefined): boolean {
+  return teleport?.presence === "native";
 }
 
 export class TeleportInvalidInputError extends Schema.TaggedErrorClass<TeleportInvalidInputError>()(

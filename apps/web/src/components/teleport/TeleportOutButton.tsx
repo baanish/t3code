@@ -4,10 +4,10 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { isTeleportProvider, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { LogOutIcon } from "lucide-react";
+import { LogInIcon, LogOutIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
-import { teleportFailureMessage } from "../../lib/teleport";
+import { isTeleportedOut, teleportFailureMessage } from "../../lib/teleport";
 import { teleportEnvironment } from "../../state/teleport";
 import { useEnvironmentThread } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -19,15 +19,20 @@ interface TeleportOutButtonProps {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly isServerThread: boolean;
+  readonly cwd: string | null;
 }
 
 export function TeleportOutButton({
   environmentId,
   threadId,
   isServerThread,
+  cwd,
 }: TeleportOutButtonProps) {
   const threadState = useEnvironmentThread(environmentId, threadId);
   const exportSession = useAtomCommand(teleportEnvironment.exportSession, {
+    reportFailure: false,
+  });
+  const importSessions = useAtomCommand(teleportEnvironment.importSessions, {
     reportFailure: false,
   });
   const pendingRef = useRef(false);
@@ -37,16 +42,20 @@ export function TeleportOutButton({
     return null;
   }
 
+  const teleport = thread.teleport ?? null;
+  const teleportedOut = isTeleportedOut(teleport);
   const providerName = thread.session?.providerName;
   const supported =
+    teleportedOut ||
     (typeof providerName === "string" && isTeleportProvider(providerName)) ||
     isTeleportProvider(thread.modelSelection.instanceId);
   if (!supported) {
     return null;
   }
 
-  const busy =
-    pending || thread.session?.status === "starting" || thread.session?.status === "running";
+  const sessionBusy = thread.session?.status === "starting" || thread.session?.status === "running";
+  const importNeedsCwd = teleportedOut && (cwd === null || cwd.length === 0);
+  const busy = pending || sessionBusy || importNeedsCwd;
 
   return (
     <Tooltip>
@@ -57,7 +66,11 @@ export function TeleportOutButton({
             className="shrink-0"
             variant="outline"
             size="xs"
-            aria-label="Teleport this thread to the native CLI"
+            aria-label={
+              teleportedOut
+                ? "Import this thread from the native CLI"
+                : "Teleport this thread to the native CLI"
+            }
             disabled={busy}
             onClick={() => {
               if (pendingRef.current || busy) {
@@ -67,6 +80,44 @@ export function TeleportOutButton({
               setPending(true);
               void (async () => {
                 try {
+                  if (teleportedOut) {
+                    if (teleport === null || cwd === null || cwd.length === 0) {
+                      return;
+                    }
+                    const result = await importSessions({
+                      environmentId,
+                      input: {
+                        projectId: thread.projectId,
+                        cwd,
+                        sessions: [
+                          {
+                            provider: teleport.provider,
+                            externalSessionId: teleport.externalSessionId,
+                          },
+                        ],
+                      },
+                    });
+                    if (result._tag === "Success") {
+                      toastManager.add({
+                        type: "success",
+                        title: "Imported from native session",
+                        description: teleport.nativePath,
+                      });
+                      return;
+                    }
+                    if (isAtomCommandInterrupted(result)) {
+                      return;
+                    }
+                    toastManager.add(
+                      stackedThreadToast({
+                        type: "error",
+                        title: "Could not teleport in",
+                        description: teleportFailureMessage(squashAtomCommandFailure(result)),
+                      }),
+                    );
+                    return;
+                  }
+
                   const result = await exportSession({
                     environmentId,
                     input: { threadId },
@@ -96,14 +147,20 @@ export function TeleportOutButton({
               })();
             }}
           >
-            <LogOutIcon className="size-3" />
+            {teleportedOut ? <LogInIcon className="size-3" /> : <LogOutIcon className="size-3" />}
           </Button>
         }
       />
       <TooltipPopup side="bottom">
-        {busy
-          ? "Teleport out is available when this provider thread is idle"
-          : "Write this idle thread to the native CLI session"}
+        {teleportedOut
+          ? importNeedsCwd
+            ? "Import needs the project workspace path"
+            : sessionBusy
+              ? "Import is available when this provider thread is idle"
+              : "Read this thread back from the native CLI session"
+          : sessionBusy
+            ? "Teleport out is available when this provider thread is idle"
+            : "Write this idle thread to the native CLI session"}
       </TooltipPopup>
     </Tooltip>
   );

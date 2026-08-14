@@ -22,6 +22,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { TeleportThreadState } from "./teleport.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -405,6 +406,8 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  // Optional so payloads from pre-teleport servers still decode.
+  teleport: Schema.optional(Schema.NullOr(TeleportThreadState)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -1031,6 +1034,14 @@ const ThreadHistoryReplaceCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTeleportSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.teleport.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  teleport: TeleportThreadState,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1041,6 +1052,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
   ThreadHistoryReplaceCommand,
+  ThreadTeleportSetCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1081,6 +1093,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.turn-diff-completed",
   "thread.activity-appended",
   "thread.history-replaced",
+  "thread.teleported",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1321,6 +1334,12 @@ export const ThreadHistoryReplacedPayload = Schema.Struct({
   replacedAt: IsoDateTime,
 });
 
+export const ThreadTeleportedPayload = Schema.Struct({
+  threadId: ThreadId,
+  teleport: TeleportThreadState,
+  updatedAt: IsoDateTime,
+});
+
 export const OrchestrationEventMetadata = Schema.Struct({
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
@@ -1492,6 +1511,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.history-replaced"),
     payload: ThreadHistoryReplacedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.teleported"),
+    payload: ThreadTeleportedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

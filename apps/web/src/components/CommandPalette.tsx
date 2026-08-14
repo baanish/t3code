@@ -128,7 +128,7 @@ import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog"
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
-import { teleportFailureMessage, teleportProviderLabel } from "../lib/teleport";
+import { isTeleportedOut, teleportFailureMessage, teleportProviderLabel } from "../lib/teleport";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
 import { teleportEnvironment } from "../state/teleport";
 import {
@@ -1649,6 +1649,39 @@ function OpenCommandPaletteDialog(props: {
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
     });
+
+    const boundTeleport = isTeleportedOut(activeThread?.teleport)
+      ? (activeThread?.teleport ?? null)
+      : null;
+    const boundImportProject =
+      boundTeleport && activeThread
+        ? (pickerProjects.find(
+            (project) =>
+              project.id === activeThread.projectId &&
+              project.environmentId === activeThread.environmentId,
+          ) ?? null)
+        : null;
+    if (boundTeleport && boundImportProject) {
+      actionItems.push({
+        kind: "action",
+        value: "action:import-this-thread",
+        searchTerms: [
+          "import this thread",
+          "teleport in",
+          "native",
+          "cli",
+          teleportProviderLabel(boundTeleport.provider),
+        ],
+        title: "Import this thread from native CLI",
+        icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await importNativeSession(boundImportProject, {
+            provider: boundTeleport.provider,
+            externalSessionId: boundTeleport.externalSessionId,
+          });
+        },
+      });
+    }
 
     actionItems.push({
       kind: "action",

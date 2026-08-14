@@ -978,6 +978,42 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("thread.teleported", () => {
+    it("stores teleport presence on the thread", () => {
+      const result = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 14,
+        occurredAt: "2026-08-14T22:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.teleported",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          teleport: {
+            presence: "native",
+            provider: "codex",
+            externalSessionId: "session-1",
+            nativePath: "/tmp/session.jsonl",
+            lastSyncedAt: "2026-08-14T22:00:00.000Z",
+          },
+          updatedAt: "2026-08-14T22:00:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.teleport).toEqual({
+          presence: "native",
+          provider: "codex",
+          externalSessionId: "session-1",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncedAt: "2026-08-14T22:00:00.000Z",
+        });
+        expect(result.thread.updatedAt).toBe("2026-08-14T22:00:00.000Z");
+      }
+    });
+  });
+
   describe("no-op events", () => {
     it("returns unchanged for approval-response-requested", () => {
       const result = applyThreadDetailEvent(baseThread, {

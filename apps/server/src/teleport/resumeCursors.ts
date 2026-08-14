@@ -1,12 +1,19 @@
 import {
   isTeleportProvider,
   ProviderDriverKind,
+  resolveTeleportPresence,
+  TeleportRuntimePayload,
   TeleportUnsupportedProviderError,
   type TeleportProvider,
+  type TeleportThreadState,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { isRecord, nonEmptyString } from "./json.ts";
+
+const decodeTeleportRuntimePayload = Schema.decodeUnknownOption(TeleportRuntimePayload);
 
 const CODEX = ProviderDriverKind.make("codex");
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
@@ -44,6 +51,28 @@ export function buildTeleportResumeCursor(input: {
       return _exhaustive;
     }
   }
+}
+
+export function readTeleportRuntimePayload(
+  runtimePayload: unknown,
+): TeleportRuntimePayload | undefined {
+  if (!isRecord(runtimePayload)) {
+    return undefined;
+  }
+  return Option.getOrUndefined(decodeTeleportRuntimePayload(runtimePayload.teleport));
+}
+
+export function teleportThreadStateFromPayload(input: {
+  readonly provider: TeleportProvider;
+  readonly payload: TeleportRuntimePayload;
+}): TeleportThreadState {
+  return {
+    presence: resolveTeleportPresence(input.payload),
+    provider: input.provider,
+    externalSessionId: input.payload.externalSessionId,
+    nativePath: input.payload.nativePath,
+    lastSyncedAt: input.payload.lastSyncedAt,
+  };
 }
 
 export function readTeleportExternalSessionId(input: {

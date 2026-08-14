@@ -340,6 +340,7 @@ export const ChatHeader = memo(function ChatHeader({
           environmentId={activeThreadEnvironmentId}
           threadId={activeThreadId}
           isServerThread={isServerThread}
+          cwd={activeProjectCwd}
         />
       </div>
     </div>
