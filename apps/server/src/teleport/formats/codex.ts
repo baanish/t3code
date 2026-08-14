@@ -16,6 +16,7 @@ import {
   definedField,
   firstUserTitle,
   isRecord,
+  isSyntheticNativeUserText,
   nonEmptyString,
   parseJsonObject,
   uuidFromPath,
@@ -63,6 +64,9 @@ function extractMessage(event: Record<string, unknown>): NativeTextMessage | und
   }
   const text = collectCodexText(payload.content);
   if (!text) {
+    return undefined;
+  }
+  if (isSyntheticNativeUserText(text)) {
     return undefined;
   }
   return nativeTextMessage({

@@ -30,6 +30,15 @@ import {
 
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
 
+function isToolResultOnlyContent(content: unknown): boolean {
+  if (!Array.isArray(content) || content.length === 0) {
+    return false;
+  }
+  return content.every(
+    (part) => isRecord(part) && (part.type === "tool_result" || part.type === "tool_use"),
+  );
+}
+
 export function encodeClaudeProjectPath(cwd: string): string {
   const encoded = cwd.replace(/[^a-zA-Z0-9]/gu, "-");
   if (encoded.length <= 200) {
@@ -59,6 +68,9 @@ function extractClaudeMessage(record: Record<string, unknown>): NativeTextMessag
   }
   const text = collectTextParts(message?.content) ?? collectTextParts(record.content);
   if (!text) {
+    return undefined;
+  }
+  if (role === "user" && isToolResultOnlyContent(message?.content ?? record.content)) {
     return undefined;
   }
   return nativeTextMessage({

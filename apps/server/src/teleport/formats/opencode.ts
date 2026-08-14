@@ -70,9 +70,9 @@ export function opencodeDbPath(
 
 export const requireOpenCodeSessionUnlocked = Effect.fn("requireOpenCodeSessionUnlocked")(
   function* (input: { readonly nativePath: string; readonly opencodeRoot: string }) {
-    const path = yield* Path.Path;
+    // T3's idle OpenCode process keeps opencode.db open. Treat that as the live
+    // store, not a foreign lock. Only refuse when the session JSON itself is held.
     yield* requireNativePathUnlocked(input.nativePath);
-    yield* requireNativePathUnlocked(opencodeDbPath(input.opencodeRoot, path.join));
   },
 );
 

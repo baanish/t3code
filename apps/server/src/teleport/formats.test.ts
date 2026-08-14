@@ -77,6 +77,44 @@ describe("teleport formats", () => {
     }),
   );
 
+  it.effect("skips Codex environment_context user wrappers", () =>
+    Effect.gen(function* () {
+      const contents = `${JSON.stringify({
+        timestamp: CREATED_AT,
+        type: "session_meta",
+        payload: { id: SESSION_ID, cwd: "/workspace" },
+      })}\n${JSON.stringify({
+        timestamp: CREATED_AT,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "<environment_context>\n  <cwd>/workspace</cwd>\n" },
+          ],
+        },
+      })}\n${JSON.stringify({
+        timestamp: CREATED_AT,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "KEEP_NAT_CODEX_U1_CEDAR: add a --json flag" }],
+        },
+      })}\n`;
+      const parsed = yield* parseCodexSessionContents({
+        contents,
+        nativePath: "/tmp/codex-env.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.messages.length, 1);
+        assert.equal(parsed.value.messages[0]?.text, "KEEP_NAT_CODEX_U1_CEDAR: add a --json flag");
+        assert.equal(parsed.value.title, "KEEP_NAT_CODEX_U1_CEDAR: add a --json flag");
+      }
+    }),
+  );
+
   it.effect("skips forked Codex sessions", () =>
     Effect.gen(function* () {
       const contents = `${JSON.stringify({
@@ -111,6 +149,49 @@ describe("teleport formats", () => {
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
         assert.equal(result.failure._tag, "TeleportSchemaVersionError");
+      }
+    }),
+  );
+
+  it.effect("skips Claude tool_result-only user records", () =>
+    Effect.gen(function* () {
+      const contents = `${JSON.stringify({
+        type: "user",
+        sessionId: SESSION_ID,
+        cwd: "/workspace",
+        timestamp: CREATED_AT,
+        message: { role: "user", content: "KEEP_NAT_CLAUDE_U1_PINE: create receipts/.gitkeep" },
+      })}\n${JSON.stringify({
+        type: "user",
+        sessionId: SESSION_ID,
+        cwd: "/workspace",
+        timestamp: CREATED_AT,
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "call-1", content: "ok" }],
+        },
+      })}\n${JSON.stringify({
+        type: "assistant",
+        sessionId: SESSION_ID,
+        cwd: "/workspace",
+        timestamp: CREATED_AT,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Created the gitkeep file." }],
+        },
+      })}\n`;
+      const parsed = yield* parseClaudeSessionContents({
+        contents,
+        nativePath: "/tmp/claude-tools.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.messages.length, 2);
+        assert.equal(
+          parsed.value.messages[0]?.text,
+          "KEEP_NAT_CLAUDE_U1_PINE: create receipts/.gitkeep",
+        );
+        assert.equal(parsed.value.messages[1]?.role, "assistant");
       }
     }),
   );

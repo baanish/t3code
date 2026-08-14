@@ -58,11 +58,23 @@ export function truncateTitle(input: string): string {
   return `${normalized.slice(0, 77).trimEnd()}...`;
 }
 
+export function isSyntheticNativeUserText(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    trimmed.startsWith("<environment_context>") ||
+    trimmed.startsWith("<skills_instructions>") ||
+    trimmed.startsWith("<permissions instructions>")
+  );
+}
+
 export function firstUserTitle(
   messages: ReadonlyArray<{ role: string; text: string }>,
 ): string | undefined {
   for (const message of messages) {
     if (message.role !== "user") {
+      continue;
+    }
+    if (isSyntheticNativeUserText(message.text)) {
       continue;
     }
     const line = message.text
