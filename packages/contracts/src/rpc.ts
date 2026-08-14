@@ -189,6 +189,22 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+
+export class TeleportError extends Schema.TaggedErrorClass<TeleportError>()("TeleportError", {
+  message: TrimmedNonEmptyString,
+}) {}
+
+export const TeleportSessionInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type TeleportSessionInput = typeof TeleportSessionInput.Type;
+
+export const TeleportSessionResult = Schema.Struct({
+  nativePath: TrimmedNonEmptyString,
+  externalSessionId: TrimmedNonEmptyString,
+});
+export type TeleportSessionResult = typeof TeleportSessionResult.Type;
 
 export const WS_METHODS = {
   // Project registry methods
@@ -297,6 +313,9 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+
+  teleportExportSession: "teleport.exportSession",
+  teleportImportSession: "teleport.importSession",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -970,6 +989,18 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
   stream: true,
 });
 
+export const WsTeleportExportSessionRpc = Rpc.make(WS_METHODS.teleportExportSession, {
+  payload: TeleportSessionInput,
+  success: TeleportSessionResult,
+  error: Schema.Union([TeleportError, EnvironmentAuthorizationError]),
+});
+
+export const WsTeleportImportSessionRpc = Rpc.make(WS_METHODS.teleportImportSession, {
+  payload: TeleportSessionInput,
+  success: TeleportSessionResult,
+  error: Schema.Union([TeleportError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1061,6 +1092,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsTeleportExportSessionRpc,
+  WsTeleportImportSessionRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
