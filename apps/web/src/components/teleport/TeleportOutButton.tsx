@@ -5,6 +5,7 @@ import {
 import { isTeleportProvider, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { LogOutIcon } from "lucide-react";
+import { useRef, useState } from "react";
 
 import { teleportFailureMessage } from "../../lib/teleport";
 import { teleportEnvironment } from "../../state/teleport";
@@ -29,6 +30,8 @@ export function TeleportOutButton({
   const exportSession = useAtomCommand(teleportEnvironment.exportSession, {
     reportFailure: false,
   });
+  const pendingRef = useRef(false);
+  const [pending, setPending] = useState(false);
   const thread = Option.getOrUndefined(threadState.data);
   if (!isServerThread || thread === undefined) {
     return null;
@@ -42,7 +45,8 @@ export function TeleportOutButton({
     return null;
   }
 
-  const busy = thread.session?.status === "starting" || thread.session?.status === "running";
+  const busy =
+    pending || thread.session?.status === "starting" || thread.session?.status === "running";
 
   return (
     <Tooltip>
@@ -56,29 +60,39 @@ export function TeleportOutButton({
             aria-label="Teleport this thread to the native CLI"
             disabled={busy}
             onClick={() => {
+              if (pendingRef.current || busy) {
+                return;
+              }
+              pendingRef.current = true;
+              setPending(true);
               void (async () => {
-                const result = await exportSession({
-                  environmentId,
-                  input: { threadId },
-                });
-                if (result._tag === "Success") {
-                  toastManager.add({
-                    type: "success",
-                    title: "Teleported to native session",
-                    description: result.value.nativePath,
+                try {
+                  const result = await exportSession({
+                    environmentId,
+                    input: { threadId },
                   });
-                  return;
+                  if (result._tag === "Success") {
+                    toastManager.add({
+                      type: "success",
+                      title: "Teleported to native session",
+                      description: result.value.nativePath,
+                    });
+                    return;
+                  }
+                  if (isAtomCommandInterrupted(result)) {
+                    return;
+                  }
+                  toastManager.add(
+                    stackedThreadToast({
+                      type: "error",
+                      title: "Could not teleport out",
+                      description: teleportFailureMessage(squashAtomCommandFailure(result)),
+                    }),
+                  );
+                } finally {
+                  pendingRef.current = false;
+                  setPending(false);
                 }
-                if (isAtomCommandInterrupted(result)) {
-                  return;
-                }
-                toastManager.add(
-                  stackedThreadToast({
-                    type: "error",
-                    title: "Could not teleport out",
-                    description: teleportFailureMessage(squashAtomCommandFailure(result)),
-                  }),
-                );
               })();
             }}
           >

@@ -52,8 +52,8 @@ import {
   parseCodexSessionContents,
   serializeCodexSession,
 } from "../formats/codex.ts";
-import { writeGrokSession } from "../formats/grok.ts";
-import { writeOpenCodeSession } from "../formats/opencode.ts";
+import { requireGrokSessionUnlocked, writeGrokSession } from "../formats/grok.ts";
+import { requireOpenCodeSessionUnlocked, writeOpenCodeSession } from "../formats/opencode.ts";
 import { resolveTeleportHomes } from "../homes.ts";
 import { writeNativeSessionAtomically } from "../nativeWrite.ts";
 import {
@@ -146,12 +146,74 @@ export const TeleportServiceLive = Layer.effect(
 
     const nextId = () => crypto.randomUUIDv4;
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+    const inFlight = new Set<string>();
+    const alreadyInFlightError = () =>
+      new TeleportInvalidInputError({
+        message: "Teleport already in progress for this session.",
+      });
+    const withInFlight = <A, E, R = never>(
+      keys: string[],
+      effect: Effect.Effect<A, E, R>,
+    ): Effect.Effect<A, E | TeleportInvalidInputError, R> =>
+      Effect.suspend((): Effect.Effect<A, E | TeleportInvalidInputError, R> => {
+        for (const key of keys) {
+          if (inFlight.has(key)) {
+            return alreadyInFlightError();
+          }
+        }
+        for (const key of keys) {
+          inFlight.add(key);
+        }
+        return effect.pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              for (const key of keys) {
+                inFlight.delete(key);
+              }
+            }),
+          ),
+        );
+      });
+    const claimExtraInFlight = (keys: string[], extra: string) =>
+      Effect.suspend((): Effect.Effect<void, TeleportInvalidInputError> => {
+        if (keys.includes(extra)) {
+          return Effect.void;
+        }
+        if (inFlight.has(extra)) {
+          return alreadyInFlightError();
+        }
+        inFlight.add(extra);
+        keys.push(extra);
+        return Effect.void;
+      });
 
     const mapDispatchError = (message: string) => (cause: unknown) =>
       new TeleportInvalidInputError({
         message,
         cause,
       });
+
+    const requireParsedSessionUnlocked = (
+      parsed: ParsedNativeSession,
+      homes: { opencodeRoot: string },
+    ) => {
+      switch (parsed.provider) {
+        case "grok":
+          return requireGrokSessionUnlocked(parsed.nativePath);
+        case "opencode":
+          return requireOpenCodeSessionUnlocked({
+            nativePath: parsed.nativePath,
+            opencodeRoot: homes.opencodeRoot,
+          });
+        case "codex":
+        case "claudeAgent":
+          return requireNativePathUnlocked(parsed.nativePath);
+        default: {
+          const _exhaustive: never = parsed.provider;
+          return Effect.die(_exhaustive);
+        }
+      }
+    };
 
     const listSessions = (input: TeleportListSessionsInput) =>
       provideNative(
@@ -175,498 +237,560 @@ export const TeleportServiceLive = Layer.effect(
         }),
       );
 
-    const importSessions = (input: TeleportImportSessionsInput) =>
-      provideNative(
-        Effect.gen(function* () {
-          const project = yield* snapshotQuery.getProjectShellById(input.projectId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new TeleportProjectResolutionError({
-                  message: "Failed to load the target project.",
-                  cause,
-                }),
-            ),
-          );
-          if (Option.isNone(project)) {
-            return yield* new TeleportProjectResolutionError({
-              message: `Project '${input.projectId}' was not found.`,
-            });
-          }
-          const cwd = yield* canonicalizeTeleportCwd(input.cwd);
-          if (!teleportCwdsMatch(project.value.workspaceRoot, cwd)) {
-            return yield* new TeleportInvalidInputError({
-              message: "Import cwd must match the selected project's workspace root.",
-            });
-          }
-          const seenRefs = new Set<string>();
-          for (const ref of input.sessions) {
-            const key = `${ref.provider}:${ref.externalSessionId}`;
-            if (seenRefs.has(key)) {
-              return yield* new TeleportInvalidInputError({
-                message: `Duplicate session '${ref.externalSessionId}' in the import batch.`,
-              });
-            }
-            seenRefs.add(key);
-          }
-
-          const settings = yield* settingsService.getSettings.pipe(
-            Effect.mapError(
-              (cause) =>
-                new TeleportDiscoveryError({
-                  message: "Server settings could not be read for teleport import.",
-                  cause,
-                }),
-            ),
-          );
-          const homes = yield* resolveTeleportHomes(settings);
-          const bindings = yield* directory.listBindings().pipe(
-            Effect.mapError(
-              (cause) =>
-                new TeleportDiscoveryError({
-                  message: "Failed to read provider session bindings.",
-                  cause,
-                }),
-            ),
-          );
-
-          const parsedSessions: ParsedNativeSession[] = [];
-          for (const ref of input.sessions) {
-            const parsed = yield* loadTeleportSession({
-              homes,
-              provider: ref.provider,
-              externalSessionId: ref.externalSessionId,
-              cwd,
-            });
-            yield* requireNativePathUnlocked(parsed.nativePath);
-            parsedSessions.push({
-              ...parsed,
-              messages: capMessages(parsed.messages),
-            });
-          }
-
-          const imported: TeleportImportedSession[] = [];
-          const now = yield* nowIso;
-
-          for (const parsed of parsedSessions) {
-            const driver = ProviderDriverKind.make(parsed.provider);
-            let existingThreadId: ThreadId | undefined;
-            let existingProjectId = input.projectId;
-            for (const binding of bindings) {
-              if (binding.provider !== driver) {
-                continue;
-              }
-              const externalSessionId = readTeleportExternalSessionId({
-                provider: binding.provider,
-                resumeCursor: binding.resumeCursor,
-                runtimePayload: binding.runtimePayload,
-              });
-              if (externalSessionId !== parsed.externalSessionId) {
-                continue;
-              }
-              const shell = yield* snapshotQuery.getThreadShellById(binding.threadId).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new TeleportDiscoveryError({
-                      message: "Failed to load an existing teleport thread.",
-                      cause,
-                    }),
-                ),
-              );
-              if (Option.isNone(shell) || shell.value.archivedAt !== null) {
-                continue;
-              }
-              if (shell.value.projectId !== input.projectId) {
-                return yield* new TeleportIdentityConflictError({
-                  provider: parsed.provider,
-                  externalSessionId: parsed.externalSessionId,
-                  existingThreadId: binding.threadId,
-                  existingProjectId: shell.value.projectId,
-                  message: `Session '${parsed.externalSessionId}' is already bound to another T3 project.`,
-                });
-              }
-              existingThreadId = binding.threadId;
-              existingProjectId = shell.value.projectId;
-              if (isBusySessionStatus(shell.value.session?.status)) {
-                return yield* new TeleportInvalidInputError({
-                  message: `Cannot import while T3 session '${parsed.externalSessionId}' is running.`,
-                });
-              }
-              break;
-            }
-
-            const messageIds = yield* Effect.forEach(parsed.messages, () => nextId(), {
-              concurrency: 1,
-            });
-            const messages = nativeMessagesToOrchestration(parsed.messages, messageIds, now);
-            const title =
-              truncateTitle(
-                parsed.title ?? firstUserTitle(parsed.messages) ?? "Imported session",
-              ) || "Imported session";
-            let threadId = existingThreadId;
-            let updatedInPlace = false;
-
-            if (threadId) {
-              updatedInPlace = true;
-              const replaceCommandId = CommandId.make(yield* nextId());
-              yield* engine
-                .dispatch({
-                  type: "thread.history.replace",
-                  commandId: replaceCommandId,
-                  threadId,
-                  messages,
-                  createdAt: now,
-                })
-                .pipe(Effect.mapError(mapDispatchError("Failed to replace thread history.")));
-              yield* engine
-                .dispatch({
-                  type: "thread.meta.update",
-                  commandId: CommandId.make(yield* nextId()),
-                  threadId,
-                  title,
-                })
-                .pipe(Effect.mapError(mapDispatchError("Failed to update imported thread title.")));
-            } else {
-              threadId = ThreadId.make(yield* nextId());
-              yield* engine
-                .dispatch({
-                  type: "thread.create",
-                  commandId: CommandId.make(yield* nextId()),
-                  threadId,
-                  projectId: input.projectId,
-                  title,
-                  modelSelection: modelSelectionForProvider(parsed.provider),
-                  runtimeMode: DEFAULT_RUNTIME_MODE,
-                  interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-                  branch: null,
-                  worktreePath: null,
-                  createdAt: now,
-                })
-                .pipe(Effect.mapError(mapDispatchError("Failed to create an imported thread.")));
-              yield* engine
-                .dispatch({
-                  type: "thread.history.replace",
-                  commandId: CommandId.make(yield* nextId()),
-                  threadId,
-                  messages,
-                  createdAt: now,
-                })
-                .pipe(
-                  Effect.mapError(mapDispatchError("Failed to write imported thread history.")),
-                );
-            }
-
-            const teleportPayload: TeleportRuntimePayload = {
-              schemaVersion: TELEPORT_SCHEMA_VERSION,
-              externalSessionId: parsed.externalSessionId,
-              nativePath: parsed.nativePath,
-              lastSyncDirection: "import",
-              lastSyncedAt: now,
-              nativeFormatVersion: parsed.nativeFormatVersion,
-            };
-            yield* directory
-              .upsert({
-                threadId,
-                provider: driver,
-                providerInstanceId: defaultInstanceIdForDriver(driver),
-                status: "stopped",
-                resumeCursor: buildTeleportResumeCursor({
-                  provider: parsed.provider,
-                  externalSessionId: parsed.externalSessionId,
-                }),
-                runtimePayload: { teleport: teleportPayload },
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new TeleportDiscoveryError({
-                      message: "Failed to bind the imported native session.",
-                      cause,
-                    }),
-                ),
-              );
-
-            imported.push({
-              threadId,
-              projectId: existingProjectId,
-              provider: parsed.provider,
-              providerInstanceId: defaultInstanceIdForDriver(driver),
-              externalSessionId: parsed.externalSessionId,
-              updatedInPlace,
-            });
-          }
-
-          return {
-            schemaVersion: TELEPORT_SCHEMA_VERSION,
-            imported,
-          };
-        }),
-      ).pipe(
-        Effect.catchTag(
-          "PlatformError",
-          (cause: PlatformError.PlatformError) =>
-            new TeleportDiscoveryError({
-              message: "Native filesystem error during teleport import.",
-              cause,
-            }),
-        ),
+    const importSessions = (input: TeleportImportSessionsInput) => {
+      const inFlightKeys = input.sessions.map(
+        (session) => `session:${session.provider}:${session.externalSessionId}`,
       );
-
-    const exportSession = (input: TeleportExportSessionInput) =>
-      provideNative(
-        Effect.gen(function* () {
-          const thread = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new TeleportInvalidInputError({
-                  message: "Failed to load the thread for export.",
-                  cause,
-                }),
-            ),
-          );
-          if (Option.isNone(thread)) {
-            return yield* new TeleportInvalidInputError({
-              message: `Thread '${input.threadId}' was not found.`,
-            });
-          }
-          if (isBusySessionStatus(thread.value.session?.status)) {
-            return yield* new TeleportInvalidInputError({
-              message: "Cannot export while this T3 session is running.",
-            });
-          }
-
-          const project = yield* snapshotQuery.getProjectShellById(thread.value.projectId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new TeleportProjectResolutionError({
-                  message: "Failed to load the thread's project.",
-                  cause,
-                }),
-            ),
-          );
-          if (Option.isNone(project)) {
-            return yield* new TeleportProjectResolutionError({
-              message: "The thread's project was not found.",
-            });
-          }
-
-          const binding = yield* directory.getBinding(input.threadId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new TeleportInvalidInputError({
-                  message: "Failed to read the thread's provider binding.",
-                  cause,
-                }),
-            ),
-          );
-          const instance = yield* instanceRegistry.getInstance(
-            thread.value.modelSelection.instanceId,
-          );
-          const driverKind =
-            Option.getOrUndefined(binding)?.provider ??
-            instance?.driverKind ??
-            (isTeleportProvider(thread.value.modelSelection.instanceId)
-              ? ProviderDriverKind.make(thread.value.modelSelection.instanceId)
-              : undefined);
-          if (!driverKind) {
-            return yield* new TeleportInvalidInputError({
-              message: "Teleport export could not resolve a supported provider for this thread.",
-            });
-          }
-          const provider = yield* toTeleportProvider(driverKind);
-          const cwd = yield* canonicalizeTeleportCwd(project.value.workspaceRoot);
-          const settings = yield* settingsService.getSettings.pipe(
-            Effect.mapError(
-              (cause) =>
-                new TeleportNativeWriteError({
-                  nativePath: cwd,
-                  message: "Server settings could not be read for teleport export.",
-                  cause,
-                }),
-            ),
-          );
-          const homes = yield* resolveTeleportHomes(settings);
-          const now = yield* nowIso;
-          const existingExternalId = Option.isSome(binding)
-            ? readTeleportExternalSessionId({
-                provider: driverKind,
-                resumeCursor: binding.value.resumeCursor,
-                runtimePayload: binding.value.runtimePayload,
-              })
-            : undefined;
-          const externalSessionId = existingExternalId ?? (yield* nextId());
-          const messages = capMessages(orchestrationToNative(thread.value.messages));
-          const nativeSession: ParsedNativeSession = {
-            provider,
-            externalSessionId,
-            cwd,
-            nativePath: "",
-            nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-            title: thread.value.title,
-            createdAt: thread.value.createdAt,
-            updatedAt: now,
-            messages,
-          };
-
-          const path = yield* Path.Path;
-          const existingNativePath =
-            Option.isSome(binding) &&
-            binding.value.runtimePayload &&
-            typeof binding.value.runtimePayload === "object" &&
-            binding.value.runtimePayload !== null &&
-            "teleport" in binding.value.runtimePayload &&
-            typeof (binding.value.runtimePayload as { teleport?: { nativePath?: unknown } })
-              .teleport?.nativePath === "string"
-              ? (binding.value.runtimePayload as { teleport: { nativePath: string } }).teleport
-                  .nativePath
-              : undefined;
-
-          let nativePath: string;
-          switch (provider) {
-            case "codex": {
-              nativePath =
-                existingNativePath ??
-                allocateCodexSessionPath({
-                  sessionsRoot: homes.codexSessionsRoot,
-                  sessionId: externalSessionId,
-                  createdAt: thread.value.createdAt,
-                  join: path.join,
-                });
-              const contents = serializeCodexSession({ ...nativeSession, nativePath });
-              yield* writeNativeSessionAtomically({
-                filePath: nativePath,
-                contents,
-                verify: (written) =>
-                  parseCodexSessionContents({ contents: written, nativePath }).pipe(
-                    Effect.flatMap((parsed) =>
-                      Option.isSome(parsed)
-                        ? Effect.void
-                        : new TeleportNativeWriteError({
-                            nativePath,
-                            message: `Exported Codex session failed verification: ${nativePath}`,
-                          }),
-                    ),
-                    Effect.mapError((error) =>
-                      error._tag === "TeleportSchemaVersionError"
-                        ? new TeleportNativeWriteError({
-                            nativePath,
-                            message: error.message,
-                            cause: error,
-                          })
-                        : error,
-                    ),
-                  ),
-              });
-              break;
-            }
-            case "claudeAgent": {
-              nativePath =
-                existingNativePath ??
-                allocateClaudeSessionPath({
-                  projectsRoot: homes.claudeProjectsRoot,
-                  cwd,
-                  sessionId: externalSessionId,
-                  join: path.join,
-                });
-              const contents = serializeClaudeSession({ ...nativeSession, nativePath });
-              yield* writeNativeSessionAtomically({
-                filePath: nativePath,
-                contents,
-                verify: (written) =>
-                  parseClaudeSessionContents({ contents: written, nativePath }).pipe(
-                    Effect.flatMap((parsed) =>
-                      Option.isSome(parsed)
-                        ? Effect.void
-                        : new TeleportNativeWriteError({
-                            nativePath,
-                            message: `Exported Claude session failed verification: ${nativePath}`,
-                          }),
-                    ),
-                    Effect.mapError((error) =>
-                      error._tag === "TeleportSchemaVersionError"
-                        ? new TeleportNativeWriteError({
-                            nativePath,
-                            message: error.message,
-                            cause: error,
-                          })
-                        : error,
-                    ),
-                  ),
-              });
-              break;
-            }
-            case "opencode": {
-              yield* requireNativePathUnlocked(homes.opencodeRoot);
-              nativePath = yield* writeOpenCodeSession({
-                opencodeRoot: homes.opencodeRoot,
-                session: { ...nativeSession, nativePath: homes.opencodeRoot },
-              });
-              break;
-            }
-            case "grok": {
-              yield* requireNativePathUnlocked(homes.grokSessionsRoot);
-              nativePath = yield* writeGrokSession({
-                sessionsRoot: homes.grokSessionsRoot,
-                session: { ...nativeSession, nativePath: existingNativePath ?? "" },
-                ...definedField("existingNativePath", existingNativePath),
-              });
-              break;
-            }
-            default: {
-              const _exhaustive: never = provider;
-              return _exhaustive;
-            }
-          }
-
-          const teleportPayload: TeleportRuntimePayload = {
-            schemaVersion: TELEPORT_SCHEMA_VERSION,
-            externalSessionId,
-            nativePath,
-            lastSyncDirection: "export",
-            lastSyncedAt: now,
-            nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-          };
-          yield* directory
-            .upsert({
-              threadId: input.threadId,
-              provider: driverKind,
-              providerInstanceId:
-                Option.getOrUndefined(binding)?.providerInstanceId ??
-                defaultInstanceIdForDriver(driverKind),
-              status: "stopped",
-              resumeCursor: buildTeleportResumeCursor({ provider, externalSessionId }),
-              runtimePayload: { teleport: teleportPayload },
-            })
-            .pipe(
+      return withInFlight(
+        inFlightKeys,
+        provideNative(
+          Effect.gen(function* () {
+            const project = yield* snapshotQuery.getProjectShellById(input.projectId).pipe(
               Effect.mapError(
                 (cause) =>
-                  new TeleportNativeWriteError({
-                    nativePath,
-                    message: "Failed to bind the exported native session.",
+                  new TeleportProjectResolutionError({
+                    message: "Failed to load the target project.",
+                    cause,
+                  }),
+              ),
+            );
+            if (Option.isNone(project)) {
+              return yield* new TeleportProjectResolutionError({
+                message: `Project '${input.projectId}' was not found.`,
+              });
+            }
+            const cwd = yield* canonicalizeTeleportCwd(input.cwd);
+            if (!teleportCwdsMatch(project.value.workspaceRoot, cwd)) {
+              return yield* new TeleportInvalidInputError({
+                message: "Import cwd must match the selected project's workspace root.",
+              });
+            }
+            const seenRefs = new Set<string>();
+            for (const ref of input.sessions) {
+              const key = `${ref.provider}:${ref.externalSessionId}`;
+              if (seenRefs.has(key)) {
+                return yield* new TeleportInvalidInputError({
+                  message: `Duplicate session '${ref.externalSessionId}' in the import batch.`,
+                });
+              }
+              seenRefs.add(key);
+            }
+
+            const settings = yield* settingsService.getSettings.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TeleportDiscoveryError({
+                    message: "Server settings could not be read for teleport import.",
+                    cause,
+                  }),
+              ),
+            );
+            const homes = yield* resolveTeleportHomes(settings);
+            const bindings = yield* directory.listBindings().pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TeleportDiscoveryError({
+                    message: "Failed to read provider session bindings.",
                     cause,
                   }),
               ),
             );
 
-          return {
-            schemaVersion: TELEPORT_SCHEMA_VERSION,
-            provider,
-            providerInstanceId: defaultInstanceIdForDriver(driverKind),
-            externalSessionId,
-            nativePath,
-            cwd,
-          };
-        }),
-      ).pipe(
-        Effect.catchTag(
-          "PlatformError",
-          (cause: PlatformError.PlatformError) =>
-            new TeleportNativeWriteError({
-              nativePath: "native session",
-              message: "Native filesystem error during teleport export.",
-              cause,
-            }),
+            const parsedSessions: ParsedNativeSession[] = [];
+            for (const ref of input.sessions) {
+              const parsed = yield* loadTeleportSession({
+                homes,
+                provider: ref.provider,
+                externalSessionId: ref.externalSessionId,
+                cwd,
+              });
+              yield* requireParsedSessionUnlocked(parsed, homes);
+              parsedSessions.push({
+                ...parsed,
+                messages: capMessages(parsed.messages),
+              });
+            }
+
+            const imported: TeleportImportedSession[] = [];
+            const now = yield* nowIso;
+
+            for (const parsed of parsedSessions) {
+              const driver = ProviderDriverKind.make(parsed.provider);
+              let existingThreadId: ThreadId | undefined;
+              let existingProjectId = input.projectId;
+              let existingStatus: (typeof bindings)[number]["status"];
+              for (const binding of bindings) {
+                if (binding.provider !== driver) {
+                  continue;
+                }
+                const externalSessionId = readTeleportExternalSessionId({
+                  provider: binding.provider,
+                  resumeCursor: binding.resumeCursor,
+                  runtimePayload: binding.runtimePayload,
+                });
+                if (externalSessionId !== parsed.externalSessionId) {
+                  continue;
+                }
+                const shell = yield* snapshotQuery.getThreadShellById(binding.threadId).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new TeleportDiscoveryError({
+                        message: "Failed to load an existing teleport thread.",
+                        cause,
+                      }),
+                  ),
+                );
+                if (Option.isNone(shell) || shell.value.archivedAt !== null) {
+                  continue;
+                }
+                if (shell.value.projectId !== input.projectId) {
+                  return yield* new TeleportIdentityConflictError({
+                    provider: parsed.provider,
+                    externalSessionId: parsed.externalSessionId,
+                    existingThreadId: binding.threadId,
+                    existingProjectId: shell.value.projectId,
+                    message: `Session '${parsed.externalSessionId}' is already bound to another T3 project.`,
+                  });
+                }
+                existingThreadId = binding.threadId;
+                existingProjectId = shell.value.projectId;
+                existingStatus = binding.status;
+                if (isBusySessionStatus(shell.value.session?.status)) {
+                  return yield* new TeleportInvalidInputError({
+                    message: `Cannot import while T3 session '${parsed.externalSessionId}' is running.`,
+                  });
+                }
+                break;
+              }
+
+              const messageIds = yield* Effect.forEach(parsed.messages, () => nextId(), {
+                concurrency: 1,
+              });
+              const messages = nativeMessagesToOrchestration(parsed.messages, messageIds, now);
+              const title =
+                truncateTitle(
+                  parsed.title ?? firstUserTitle(parsed.messages) ?? "Imported session",
+                ) || "Imported session";
+              let threadId = existingThreadId;
+              let updatedInPlace = false;
+
+              if (threadId) {
+                yield* claimExtraInFlight(inFlightKeys, `thread:${threadId}`);
+                const latest = yield* snapshotQuery.getThreadDetailById(threadId).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new TeleportDiscoveryError({
+                        message: "Failed to load the existing thread for in-place import.",
+                        cause,
+                      }),
+                  ),
+                );
+                if (Option.isNone(latest)) {
+                  return yield* new TeleportDiscoveryError({
+                    message: `Thread '${threadId}' was not found for in-place import.`,
+                  });
+                }
+                if (isBusySessionStatus(latest.value.session?.status)) {
+                  return yield* new TeleportInvalidInputError({
+                    message: `Cannot import while T3 session '${parsed.externalSessionId}' is running.`,
+                  });
+                }
+                if (
+                  parsed.messages.length === 0 &&
+                  orchestrationToNative(latest.value.messages).length > 0
+                ) {
+                  return yield* new TeleportInvalidInputError({
+                    message: "Native session has no messages; refusing to wipe this thread.",
+                  });
+                }
+                updatedInPlace = true;
+                const replaceCommandId = CommandId.make(yield* nextId());
+                yield* engine
+                  .dispatch({
+                    type: "thread.history.replace",
+                    commandId: replaceCommandId,
+                    threadId,
+                    messages,
+                    createdAt: now,
+                  })
+                  .pipe(Effect.mapError(mapDispatchError("Failed to replace thread history.")));
+                yield* engine
+                  .dispatch({
+                    type: "thread.meta.update",
+                    commandId: CommandId.make(yield* nextId()),
+                    threadId,
+                    title,
+                  })
+                  .pipe(
+                    Effect.mapError(mapDispatchError("Failed to update imported thread title.")),
+                  );
+              } else {
+                threadId = ThreadId.make(yield* nextId());
+                yield* engine
+                  .dispatch({
+                    type: "thread.create",
+                    commandId: CommandId.make(yield* nextId()),
+                    threadId,
+                    projectId: input.projectId,
+                    title,
+                    modelSelection: modelSelectionForProvider(parsed.provider),
+                    runtimeMode: DEFAULT_RUNTIME_MODE,
+                    interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+                    branch: null,
+                    worktreePath: null,
+                    createdAt: now,
+                  })
+                  .pipe(Effect.mapError(mapDispatchError("Failed to create an imported thread.")));
+                yield* engine
+                  .dispatch({
+                    type: "thread.history.replace",
+                    commandId: CommandId.make(yield* nextId()),
+                    threadId,
+                    messages,
+                    createdAt: now,
+                  })
+                  .pipe(
+                    Effect.mapError(mapDispatchError("Failed to write imported thread history.")),
+                  );
+              }
+
+              const teleportPayload: TeleportRuntimePayload = {
+                schemaVersion: TELEPORT_SCHEMA_VERSION,
+                externalSessionId: parsed.externalSessionId,
+                nativePath: parsed.nativePath,
+                lastSyncDirection: "import",
+                lastSyncedAt: now,
+                nativeFormatVersion: parsed.nativeFormatVersion,
+              };
+              yield* directory
+                .upsert({
+                  threadId,
+                  provider: driver,
+                  providerInstanceId: defaultInstanceIdForDriver(driver),
+                  status: existingStatus ?? "stopped",
+                  resumeCursor: buildTeleportResumeCursor({
+                    provider: parsed.provider,
+                    externalSessionId: parsed.externalSessionId,
+                  }),
+                  runtimePayload: { teleport: teleportPayload },
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new TeleportDiscoveryError({
+                        message: "Failed to bind the imported native session.",
+                        cause,
+                      }),
+                  ),
+                );
+
+              imported.push({
+                threadId,
+                projectId: existingProjectId,
+                provider: parsed.provider,
+                providerInstanceId: defaultInstanceIdForDriver(driver),
+                externalSessionId: parsed.externalSessionId,
+                updatedInPlace,
+              });
+            }
+
+            return {
+              schemaVersion: TELEPORT_SCHEMA_VERSION,
+              imported,
+            };
+          }),
+        ).pipe(
+          Effect.catchTag(
+            "PlatformError",
+            (cause: PlatformError.PlatformError) =>
+              new TeleportDiscoveryError({
+                message: "Native filesystem error during teleport import.",
+                cause,
+              }),
+          ),
         ),
       );
+    };
+
+    const exportSession = (input: TeleportExportSessionInput) => {
+      const inFlightKeys = [`thread:${input.threadId}`];
+      return withInFlight(
+        inFlightKeys,
+        provideNative(
+          Effect.gen(function* () {
+            const thread = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TeleportInvalidInputError({
+                    message: "Failed to load the thread for export.",
+                    cause,
+                  }),
+              ),
+            );
+            if (Option.isNone(thread)) {
+              return yield* new TeleportInvalidInputError({
+                message: `Thread '${input.threadId}' was not found.`,
+              });
+            }
+            if (isBusySessionStatus(thread.value.session?.status)) {
+              return yield* new TeleportInvalidInputError({
+                message: "Cannot export while this T3 session is running.",
+              });
+            }
+
+            const project = yield* snapshotQuery.getProjectShellById(thread.value.projectId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TeleportProjectResolutionError({
+                    message: "Failed to load the thread's project.",
+                    cause,
+                  }),
+              ),
+            );
+            if (Option.isNone(project)) {
+              return yield* new TeleportProjectResolutionError({
+                message: "The thread's project was not found.",
+              });
+            }
+
+            const binding = yield* directory.getBinding(input.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TeleportInvalidInputError({
+                    message: "Failed to read the thread's provider binding.",
+                    cause,
+                  }),
+              ),
+            );
+            const instance = yield* instanceRegistry.getInstance(
+              thread.value.modelSelection.instanceId,
+            );
+            const driverKind =
+              Option.getOrUndefined(binding)?.provider ??
+              instance?.driverKind ??
+              (isTeleportProvider(thread.value.modelSelection.instanceId)
+                ? ProviderDriverKind.make(thread.value.modelSelection.instanceId)
+                : undefined);
+            if (!driverKind) {
+              return yield* new TeleportInvalidInputError({
+                message: "Teleport export could not resolve a supported provider for this thread.",
+              });
+            }
+            const provider = yield* toTeleportProvider(driverKind);
+            const cwd = yield* canonicalizeTeleportCwd(project.value.workspaceRoot);
+            const settings = yield* settingsService.getSettings.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TeleportNativeWriteError({
+                    nativePath: cwd,
+                    message: "Server settings could not be read for teleport export.",
+                    cause,
+                  }),
+              ),
+            );
+            const homes = yield* resolveTeleportHomes(settings);
+            const now = yield* nowIso;
+            const existingExternalId = Option.isSome(binding)
+              ? readTeleportExternalSessionId({
+                  provider: driverKind,
+                  resumeCursor: binding.value.resumeCursor,
+                  runtimePayload: binding.value.runtimePayload,
+                })
+              : undefined;
+            const externalSessionId = existingExternalId ?? (yield* nextId());
+            yield* claimExtraInFlight(inFlightKeys, `session:${provider}:${externalSessionId}`);
+            const latest = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TeleportInvalidInputError({
+                    message: "Failed to re-check the thread before export.",
+                    cause,
+                  }),
+              ),
+            );
+            if (Option.isNone(latest)) {
+              return yield* new TeleportInvalidInputError({
+                message: `Thread '${input.threadId}' was not found.`,
+              });
+            }
+            if (isBusySessionStatus(latest.value.session?.status)) {
+              return yield* new TeleportInvalidInputError({
+                message: "Cannot export while this T3 session is running.",
+              });
+            }
+            const messages = capMessages(orchestrationToNative(latest.value.messages));
+            const nativeSession: ParsedNativeSession = {
+              provider,
+              externalSessionId,
+              cwd,
+              nativePath: "",
+              nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+              title: thread.value.title,
+              createdAt: thread.value.createdAt,
+              updatedAt: now,
+              messages,
+            };
+
+            const path = yield* Path.Path;
+            const existingNativePath =
+              Option.isSome(binding) &&
+              binding.value.runtimePayload &&
+              typeof binding.value.runtimePayload === "object" &&
+              binding.value.runtimePayload !== null &&
+              "teleport" in binding.value.runtimePayload &&
+              typeof (binding.value.runtimePayload as { teleport?: { nativePath?: unknown } })
+                .teleport?.nativePath === "string"
+                ? (binding.value.runtimePayload as { teleport: { nativePath: string } }).teleport
+                    .nativePath
+                : undefined;
+
+            let nativePath: string;
+            switch (provider) {
+              case "codex": {
+                nativePath =
+                  existingNativePath ??
+                  allocateCodexSessionPath({
+                    sessionsRoot: homes.codexSessionsRoot,
+                    sessionId: externalSessionId,
+                    createdAt: thread.value.createdAt,
+                    join: path.join,
+                  });
+                const contents = serializeCodexSession({ ...nativeSession, nativePath });
+                yield* writeNativeSessionAtomically({
+                  filePath: nativePath,
+                  contents,
+                  verify: (written) =>
+                    parseCodexSessionContents({ contents: written, nativePath }).pipe(
+                      Effect.flatMap((parsed) =>
+                        Option.isSome(parsed)
+                          ? Effect.void
+                          : new TeleportNativeWriteError({
+                              nativePath,
+                              message: `Exported Codex session failed verification: ${nativePath}`,
+                            }),
+                      ),
+                      Effect.mapError((error) =>
+                        error._tag === "TeleportSchemaVersionError"
+                          ? new TeleportNativeWriteError({
+                              nativePath,
+                              message: error.message,
+                              cause: error,
+                            })
+                          : error,
+                      ),
+                    ),
+                });
+                break;
+              }
+              case "claudeAgent": {
+                nativePath =
+                  existingNativePath ??
+                  allocateClaudeSessionPath({
+                    projectsRoot: homes.claudeProjectsRoot,
+                    cwd,
+                    sessionId: externalSessionId,
+                    join: path.join,
+                  });
+                const contents = serializeClaudeSession({ ...nativeSession, nativePath });
+                yield* writeNativeSessionAtomically({
+                  filePath: nativePath,
+                  contents,
+                  verify: (written) =>
+                    parseClaudeSessionContents({ contents: written, nativePath }).pipe(
+                      Effect.flatMap((parsed) =>
+                        Option.isSome(parsed)
+                          ? Effect.void
+                          : new TeleportNativeWriteError({
+                              nativePath,
+                              message: `Exported Claude session failed verification: ${nativePath}`,
+                            }),
+                      ),
+                      Effect.mapError((error) =>
+                        error._tag === "TeleportSchemaVersionError"
+                          ? new TeleportNativeWriteError({
+                              nativePath,
+                              message: error.message,
+                              cause: error,
+                            })
+                          : error,
+                      ),
+                    ),
+                });
+                break;
+              }
+              case "opencode": {
+                nativePath = yield* writeOpenCodeSession({
+                  opencodeRoot: homes.opencodeRoot,
+                  session: { ...nativeSession, nativePath: homes.opencodeRoot },
+                });
+                break;
+              }
+              case "grok": {
+                nativePath = yield* writeGrokSession({
+                  sessionsRoot: homes.grokSessionsRoot,
+                  session: { ...nativeSession, nativePath: existingNativePath ?? "" },
+                  ...definedField("existingNativePath", existingNativePath),
+                });
+                break;
+              }
+              default: {
+                const _exhaustive: never = provider;
+                return _exhaustive;
+              }
+            }
+
+            const teleportPayload: TeleportRuntimePayload = {
+              schemaVersion: TELEPORT_SCHEMA_VERSION,
+              externalSessionId,
+              nativePath,
+              lastSyncDirection: "export",
+              lastSyncedAt: now,
+              nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+            };
+            yield* directory
+              .upsert({
+                threadId: input.threadId,
+                provider: driverKind,
+                providerInstanceId:
+                  Option.getOrUndefined(binding)?.providerInstanceId ??
+                  defaultInstanceIdForDriver(driverKind),
+                status: Option.getOrUndefined(binding)?.status ?? "stopped",
+                resumeCursor: buildTeleportResumeCursor({ provider, externalSessionId }),
+                runtimePayload: { teleport: teleportPayload },
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new TeleportNativeWriteError({
+                      nativePath,
+                      message: "Failed to bind the exported native session.",
+                      cause,
+                    }),
+                ),
+              );
+
+            return {
+              schemaVersion: TELEPORT_SCHEMA_VERSION,
+              provider,
+              providerInstanceId: defaultInstanceIdForDriver(driverKind),
+              externalSessionId,
+              nativePath,
+              cwd,
+            };
+          }),
+        ).pipe(
+          Effect.catchTag(
+            "PlatformError",
+            (cause: PlatformError.PlatformError) =>
+              new TeleportNativeWriteError({
+                nativePath: "native session",
+                message: "Native filesystem error during teleport export.",
+                cause,
+              }),
+          ),
+        ),
+      );
+    };
 
     return TeleportService.of({
       listSessions,

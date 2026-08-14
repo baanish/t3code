@@ -655,6 +655,7 @@ function OpenCommandPaletteDialog(props: {
     browseNavigationRef.current = createBrowseNavigationCoordinator();
   }
   const browseNavigation = browseNavigationRef.current;
+  const teleportImportPendingRef = useRef(false);
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
@@ -1158,48 +1159,56 @@ function OpenCommandPaletteDialog(props: {
         readonly externalSessionId: string;
       },
     ): Promise<void> => {
-      const result = await importTeleportSessions({
-        environmentId: project.environmentId,
-        input: {
-          projectId: project.id,
-          cwd: project.workspaceRoot,
-          sessions: [
-            {
-              provider: session.provider,
-              externalSessionId: session.externalSessionId,
-            },
-          ],
-        },
-      });
-      if (result._tag === "Success") {
-        const imported = result.value.imported[0];
-        if (imported) {
-          await navigate({
-            to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(
-              scopeThreadRef(project.environmentId, imported.threadId),
-            ),
-          });
-          toastManager.add({
-            type: "success",
-            title: imported.updatedInPlace
-              ? "Updated thread from native session"
-              : "Imported native session",
-          });
+      if (teleportImportPendingRef.current) {
+        return;
+      }
+      teleportImportPendingRef.current = true;
+      try {
+        const result = await importTeleportSessions({
+          environmentId: project.environmentId,
+          input: {
+            projectId: project.id,
+            cwd: project.workspaceRoot,
+            sessions: [
+              {
+                provider: session.provider,
+                externalSessionId: session.externalSessionId,
+              },
+            ],
+          },
+        });
+        if (result._tag === "Success") {
+          const imported = result.value.imported[0];
+          if (imported) {
+            await navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(
+                scopeThreadRef(project.environmentId, imported.threadId),
+              ),
+            });
+            toastManager.add({
+              type: "success",
+              title: imported.updatedInPlace
+                ? "Updated thread from native session"
+                : "Imported native session",
+            });
+          }
+          setOpen(false);
+          return;
         }
-        setOpen(false);
-        return;
+        if (isAtomCommandInterrupted(result)) {
+          return;
+        }
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not import session",
+            description: teleportFailureMessage(squashAtomCommandFailure(result)),
+          }),
+        );
+      } finally {
+        teleportImportPendingRef.current = false;
       }
-      if (isAtomCommandInterrupted(result)) {
-        return;
-      }
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not import session",
-          description: teleportFailureMessage(squashAtomCommandFailure(result)),
-        }),
-      );
     },
     [importTeleportSessions, navigate, setOpen],
   );

@@ -14,6 +14,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import { requireNativePathUnlocked } from "../fileLock.ts";
 import { firstUserTitle, isRecord, nonEmptyString, parseJsonObject } from "../json.ts";
 import {
   nativeTextMessage,
@@ -66,6 +67,14 @@ export function opencodeDbPath(
 ): string {
   return join(opencodeRoot, "opencode.db");
 }
+
+export const requireOpenCodeSessionUnlocked = Effect.fn("requireOpenCodeSessionUnlocked")(
+  function* (input: { readonly nativePath: string; readonly opencodeRoot: string }) {
+    const path = yield* Path.Path;
+    yield* requireNativePathUnlocked(input.nativePath);
+    yield* requireNativePathUnlocked(opencodeDbPath(input.opencodeRoot, path.join));
+  },
+);
 
 export const listOpenCodeSessions = Effect.fn("listOpenCodeSessions")(function* (input: {
   readonly opencodeRoot: string;
@@ -332,6 +341,10 @@ export const writeOpenCodeSession = Effect.fn("writeOpenCodeSession")(function* 
       message,
       cause,
     });
+  yield* requireOpenCodeSessionUnlocked({
+    nativePath: sessionPath,
+    opencodeRoot: input.opencodeRoot,
+  }).pipe(Effect.mapError(mapWriteError(`Native OpenCode session is locked: ${sessionPath}`)));
   yield* fs
     .makeDirectory(sessionDir, { recursive: true })
     .pipe(

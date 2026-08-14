@@ -31,6 +31,15 @@ const SUMMARY_FILE = "summary.json";
 const UPDATES_FILE = "updates.jsonl";
 const CHAT_HISTORY_FILE = "chat_history.jsonl";
 
+export const requireGrokSessionUnlocked = Effect.fn("requireGrokSessionUnlocked")(function* (
+  nativePath: string,
+) {
+  const path = yield* Path.Path;
+  yield* requireNativePathUnlocked(nativePath);
+  yield* requireNativePathUnlocked(path.join(nativePath, SUMMARY_FILE));
+  yield* requireNativePathUnlocked(path.join(nativePath, UPDATES_FILE));
+});
+
 export function encodeGrokCwdGroup(cwd: string): string {
   return encodeURIComponent(normalizeTeleportCwd(cwd));
 }
@@ -134,13 +143,7 @@ export const writeGrokSession = Effect.fn("writeGrokSession")(function* (input: 
   const updatesContents = serializeGrokUpdates(input.session);
   const chatHistoryContents = serializeGrokChatHistory(input.session);
 
-  yield* requireNativePathUnlocked(nativePath).pipe(
-    Effect.mapError(mapWriteError(`Native Grok session is locked: ${nativePath}`)),
-  );
-  yield* requireNativePathUnlocked(path.join(nativePath, SUMMARY_FILE)).pipe(
-    Effect.mapError(mapWriteError(`Native Grok session is locked: ${nativePath}`)),
-  );
-  yield* requireNativePathUnlocked(path.join(nativePath, UPDATES_FILE)).pipe(
+  yield* requireGrokSessionUnlocked(nativePath).pipe(
     Effect.mapError(mapWriteError(`Native Grok session is locked: ${nativePath}`)),
   );
 
@@ -198,7 +201,7 @@ export const writeGrokSession = Effect.fn("writeGrokSession")(function* (input: 
           message: `Exported Grok session failed verification: ${nativePath}`,
         });
       }
-      yield* requireNativePathUnlocked(nativePath).pipe(
+      yield* requireGrokSessionUnlocked(nativePath).pipe(
         Effect.mapError(mapWriteError(`Native Grok session is locked: ${nativePath}`)),
       );
       const destStat = yield* fs.stat(nativePath).pipe(Effect.orElseSucceed(() => null));

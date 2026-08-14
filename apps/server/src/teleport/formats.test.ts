@@ -12,7 +12,11 @@ import { teleportCwdsMatch } from "./cwd.ts";
 import { discoverTeleportSessions } from "./discovery.ts";
 import { parseClaudeSessionContents, serializeClaudeSession } from "./formats/claude.ts";
 import { parseCodexSessionContents, serializeCodexSession } from "./formats/codex.ts";
-import { parseGrokSessionDirectory, writeGrokSession } from "./formats/grok.ts";
+import {
+  parseGrokSessionDirectory,
+  requireGrokSessionUnlocked,
+  writeGrokSession,
+} from "./formats/grok.ts";
 import { readOpenCodeSessionById, writeOpenCodeSession } from "./formats/opencode.ts";
 import type { TeleportHomes } from "./homes.ts";
 import { buildTeleportResumeCursor, readTeleportExternalSessionId } from "./resumeCursors.ts";
@@ -238,6 +242,35 @@ describe("teleport formats", () => {
         assert.equal(result.failure._tag, "TeleportSchemaVersionError");
       }
     }),
+  );
+
+  it.effect("parses an empty Grok transcript as zero messages", () =>
+    Effect.gen(function* () {
+      const parsed = yield* parseGrokSessionDirectory({
+        summaryContents: JSON.stringify({
+          info: { id: SESSION_ID, cwd: "/workspace" },
+          chat_format_version: 1,
+        }),
+        updatesContents: "",
+        nativePath: "/tmp/empty-grok",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.messages.length, 0);
+      }
+    }),
+  );
+
+  it.effect("treats unlocked Grok session files as writable", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-grok-unlocked-" });
+      const nativePath = yield* writeGrokSession({
+        sessionsRoot: root,
+        session: sampleSession("grok"),
+      });
+      yield* requireGrokSessionUnlocked(nativePath);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("roundtrips OpenCode json storage", () =>
