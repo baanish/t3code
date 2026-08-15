@@ -118,14 +118,14 @@ describe("teleport OpenCode format", () => {
         dbPath: path.join(root, "opencode.db"),
         sessions: [
           {
-            id: "ses_meal",
-            directory: "/home/ubuntu/baanish-testing/native",
-            title: "Weekly meal planning webapp",
+            id: "ses_sample",
+            directory: "/home/user/projects/native",
+            title: "Sample webapp",
             messages: [
               {
                 id: "msg_user",
                 role: "user",
-                parts: [{ type: "text", text: "Make light mode pastel themed" }],
+                parts: [{ type: "text", text: "Use a light theme" }],
               },
               {
                 id: "msg_assistant",
@@ -133,7 +133,7 @@ describe("teleport OpenCode format", () => {
                 parts: [
                   { type: "step-start" },
                   { type: "reasoning", text: "I will restyle the page." },
-                  { type: "text", text: "Updated the palette to pastels." },
+                  { type: "text", text: "Updated the palette." },
                   { type: "tool", tool: "edit", state: { status: "completed" } },
                   {
                     type: "step-finish",
@@ -149,15 +149,15 @@ describe("teleport OpenCode format", () => {
       });
       const parsed = yield* readOpenCodeSessionById({
         opencodeRoot: root,
-        sessionId: "ses_meal",
+        sessionId: "ses_sample",
       });
       assert.equal(Option.isSome(parsed), true);
       if (Option.isSome(parsed)) {
         assert.deepStrictEqual(
           parsed.value.messages.map((message) => ({ role: message.role, text: message.text })),
           [
-            { role: "user", text: "Make light mode pastel themed" },
-            { role: "assistant", text: "Updated the palette to pastels." },
+            { role: "user", text: "Use a light theme" },
+            { role: "assistant", text: "Updated the palette." },
           ],
         );
       }
@@ -174,8 +174,8 @@ describe("teleport OpenCode format", () => {
         sessions: [
           {
             id: "ses_parent",
-            directory: "/home/ubuntu/baanish-testing/native",
-            title: "Weekly meal planning webapp",
+            directory: "/home/user/projects/native",
+            title: "Sample webapp",
             messages: [
               {
                 id: "msg_user",
@@ -200,7 +200,7 @@ describe("teleport OpenCode format", () => {
       });
       const listed = yield* listOpenCodeSessions({
         opencodeRoot: root,
-        cwd: "/home/ubuntu/baanish-testing/native/opencode",
+        cwd: "/home/user/projects/native/opencode",
       });
       assert.deepStrictEqual(
         listed.map((session) => session.externalSessionId),
@@ -216,7 +216,7 @@ describe("teleport OpenCode format", () => {
       );
       const codexListed = yield* listOpenCodeSessions({
         opencodeRoot: root,
-        cwd: "/home/ubuntu/baanish-testing/native/codex",
+        cwd: "/home/user/projects/native/codex",
       });
       assert.deepStrictEqual(
         codexListed.map((session) => session.externalSessionId),
@@ -230,17 +230,17 @@ describe("teleport OpenCode format", () => {
   );
 
   it("treats opencode.db as the shared live store, not a session file", () => {
-    assert.equal(isOpenCodeSharedStorePath("/home/ubuntu/.local/share/opencode/opencode.db"), true);
+    assert.equal(isOpenCodeSharedStorePath("/home/user/.local/share/opencode/opencode.db"), true);
     assert.equal(
-      isOpenCodeSharedStorePath("/home/ubuntu/.local/share/opencode/storage/session/t3/abc.json"),
+      isOpenCodeSharedStorePath("/home/user/.local/share/opencode/storage/session/t3/abc.json"),
       false,
     );
   });
 
   it.effect("does not refuse import when T3 already has opencode.db open", () =>
     requireOpenCodeSessionUnlocked({
-      nativePath: "/home/ubuntu/.local/share/opencode/opencode.db",
-      opencodeRoot: "/home/ubuntu/.local/share/opencode",
+      nativePath: "/home/user/.local/share/opencode/opencode.db",
+      opencodeRoot: "/home/user/.local/share/opencode",
     }).pipe(
       Effect.provideService(HostProcessPlatform, "linux"),
       Effect.provide(NodeServices.layer),
