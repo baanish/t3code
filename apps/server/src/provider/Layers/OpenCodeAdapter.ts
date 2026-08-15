@@ -1540,14 +1540,19 @@ export function makeOpenCodeAdapter(
     const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
       function* (threadId, turnId) {
         const context = yield* ensureSessionContext(sessions, threadId);
+        const abortedTurnId = turnId ?? context.activeTurnId;
+        // Settle local state first. `session.abort` can hang on a stuck
+        // OpenCode turn; waiting on it left T3 "Working" after Stop.
+        context.activeTurnId = undefined;
+        yield* updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
         yield* runOpenCodeSdk("session.abort", () =>
           context.client.session.abort({ sessionID: context.openCodeSessionId }),
-        ).pipe(Effect.mapError(toRequestError));
-        if (turnId ?? context.activeTurnId) {
+        ).pipe(Effect.timeout("2 seconds"), Effect.ignore({ log: true }));
+        if (abortedTurnId) {
           yield* emit({
             ...(yield* buildEventBase({
               threadId,
-              turnId: turnId ?? context.activeTurnId,
+              turnId: abortedTurnId,
             })),
             type: "turn.aborted",
             payload: {
