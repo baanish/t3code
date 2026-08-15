@@ -49,7 +49,7 @@ export function isTeleportCwdWithin(inner: string, outer: string): boolean {
 /**
  * Home folders, temp roots, and drive roots. OpenCode often records the
  * process cwd, which can be a parent of the T3 project — but matching `/tmp`
- * or `/home/ubuntu` would pull in unrelated sessions.
+ * or `/home/user` would pull in unrelated sessions.
  */
 export function isGenericTeleportCwd(cwd: string): boolean {
   const posix = normalizeTeleportCwd(cwd).replaceAll("\\", "/").replace(/\/+$/u, "");

@@ -25,8 +25,8 @@ describe("teleport cwd matching", () => {
   it("treats a project folder as inside its OpenCode launch cwd", () => {
     assert.equal(
       isTeleportCwdWithin(
-        "/home/ubuntu/baanish-testing/native/opencode",
-        "/home/ubuntu/baanish-testing/native",
+        "/home/user/projects/native/opencode",
+        "/home/user/projects/native",
       ),
       true,
     );
@@ -37,16 +37,16 @@ describe("teleport cwd matching", () => {
   it("rejects home and temp roots as OpenCode launch directories", () => {
     assert.equal(isGenericTeleportCwd("/"), true);
     assert.equal(isGenericTeleportCwd("/tmp"), true);
-    assert.equal(isGenericTeleportCwd("/home/ubuntu"), true);
-    assert.equal(isGenericTeleportCwd("/home/ubuntu/baanish-testing/native"), false);
+    assert.equal(isGenericTeleportCwd("/home/user"), true);
+    assert.equal(isGenericTeleportCwd("/home/user/projects/native"), false);
     assert.equal(isGenericTeleportCwd("C:\\Users\\Foo"), true);
     assert.equal(isGenericTeleportCwd("C:\\Users\\Foo\\proj"), false);
   });
 
   it.effect("matches an OpenCode session whose cwd is a parent of the project", () =>
     opencodeSessionMatchesProjectCwd(
-      "/home/ubuntu/baanish-testing/native",
-      "/home/ubuntu/baanish-testing/native/opencode",
+      "/home/user/projects/native",
+      "/home/user/projects/native/opencode",
     ).pipe(
       Effect.provideService(HostProcessPlatform, "linux"),
       Effect.provide(NodeServices.layer),
@@ -67,21 +67,21 @@ describe("teleport cwd matching", () => {
   );
 
   it("does not treat sibling harness folders as OpenCode parent matches", () => {
-    assert.equal(isForeignOpenCodeProjectFolder("/home/ubuntu/baanish-testing/native/codex"), true);
+    assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/codex"), true);
     assert.equal(
-      isForeignOpenCodeProjectFolder("/home/ubuntu/baanish-testing/native/claude"),
+      isForeignOpenCodeProjectFolder("/home/user/projects/native/claude"),
       true,
     );
     assert.equal(
-      isForeignOpenCodeProjectFolder("/home/ubuntu/baanish-testing/native/opencode"),
+      isForeignOpenCodeProjectFolder("/home/user/projects/native/opencode"),
       false,
     );
   });
 
   it.effect("does not list a parent OpenCode session under a Codex project folder", () =>
     opencodeSessionMatchesProjectCwd(
-      "/home/ubuntu/baanish-testing/native",
-      "/home/ubuntu/baanish-testing/native/codex",
+      "/home/user/projects/native",
+      "/home/user/projects/native/codex",
     ).pipe(
       Effect.provideService(HostProcessPlatform, "linux"),
       Effect.provide(NodeServices.layer),
