@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
+  type OrchestrationThread,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -1184,6 +1185,32 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
   });
 
+  const settleInterruptedThreadSession = (input: {
+    readonly thread: OrchestrationThread;
+    readonly createdAt: string;
+  }) => {
+    const session = input.thread.session;
+    if (!session || session.status === "stopped") {
+      return Effect.void;
+    }
+    return setThreadSession({
+      threadId: input.thread.id,
+      session: {
+        threadId: input.thread.id,
+        status: "ready",
+        providerName: session.providerName,
+        ...(session.providerInstanceId !== undefined
+          ? { providerInstanceId: session.providerInstanceId }
+          : {}),
+        runtimeMode: session.runtimeMode,
+        activeTurnId: null,
+        lastError: session.lastError,
+        updatedAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  };
+
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
@@ -1203,8 +1230,36 @@ const make = Effect.gen(function* () {
       });
     }
 
-    // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+    const liveSession = (yield* providerService.listSessions()).find(
+      (session) => session.threadId === thread.id,
+    );
+    if (!liveSession) {
+      // Projection can stay "running" after the in-memory provider session
+      // is gone (restart, earlier stop). Do not recover just to interrupt.
+      return yield* settleInterruptedThreadSession({
+        thread,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    // Orchestration turn ids are not provider turn ids, so interrupt by
+    // session. Passing the orchestration id would make Codex interrupt the
+    // wrong turn and make Grok ignore the request.
+    yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
+      Effect.catchCause((cause) =>
+        settleInterruptedThreadSession({
+          thread,
+          createdAt: event.payload.createdAt,
+        }).pipe(
+          Effect.andThen(
+            Effect.logWarning("provider turn interrupt failed; settled projected session", {
+              threadId: thread.id,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      ),
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
