@@ -65,6 +65,21 @@ describe("reduceCommandPaletteUiState", () => {
       mode: "command",
       openIntent: { kind: "import-sessions" },
     });
+    expect(
+      reduceCommandPaletteUiState(filesOpen, {
+        _tag: "OpenImportSessions",
+        environmentId: EnvironmentId.make("environment-local"),
+        projectId: ProjectId.make("project-1"),
+      }),
+    ).toEqual({
+      open: true,
+      mode: "command",
+      openIntent: {
+        kind: "import-sessions",
+        environmentId: EnvironmentId.make("environment-local"),
+        projectId: ProjectId.make("project-1"),
+      },
+    });
   });
 
   it("resets to command mode for dialog-driven opens and closes", () => {

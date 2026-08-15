@@ -1,6 +1,8 @@
 import {
+  type EnvironmentId,
   type FilesystemBrowseEntry,
   type KeybindingCommand,
+  type ProjectId,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
@@ -23,9 +25,14 @@ export const ADDON_ICON_CLASS = "size-4";
  */
 export type SearchOverlayMode = "command" | "files" | "content";
 
-export interface CommandPaletteOpenIntent {
-  readonly kind: "add-project" | "new-thread-in" | "import-sessions";
-}
+export type CommandPaletteOpenIntent =
+  | { readonly kind: "add-project" }
+  | { readonly kind: "new-thread-in" }
+  | {
+      readonly kind: "import-sessions";
+      readonly environmentId?: EnvironmentId;
+      readonly projectId?: ProjectId;
+    };
 
 export interface CommandPaletteUiState {
   readonly open: boolean;
@@ -38,7 +45,11 @@ export type CommandPaletteUiAction =
   | { readonly _tag: "ToggleMode"; readonly mode: SearchOverlayMode }
   | { readonly _tag: "OpenAddProject" }
   | { readonly _tag: "OpenNewThreadIn" }
-  | { readonly _tag: "OpenImportSessions" }
+  | {
+      readonly _tag: "OpenImportSessions";
+      readonly environmentId?: EnvironmentId;
+      readonly projectId?: ProjectId;
+    }
   | { readonly _tag: "ClearOpenIntent" };
 
 export function reduceCommandPaletteUiState(
@@ -61,7 +72,15 @@ export function reduceCommandPaletteUiState(
     case "OpenNewThreadIn":
       return { open: true, mode: "command", openIntent: { kind: "new-thread-in" } };
     case "OpenImportSessions":
-      return { open: true, mode: "command", openIntent: { kind: "import-sessions" } };
+      return {
+        open: true,
+        mode: "command",
+        openIntent: {
+          kind: "import-sessions",
+          ...(action.environmentId === undefined ? {} : { environmentId: action.environmentId }),
+          ...(action.projectId === undefined ? {} : { projectId: action.projectId }),
+        },
+      };
     case "ClearOpenIntent":
       return state.openIntent ? { ...state, openIntent: null } : state;
     default: {

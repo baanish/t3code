@@ -397,7 +397,15 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
-  const openImportSessions = useCallback(() => dispatch({ _tag: "OpenImportSessions" }), []);
+  const openImportSessions = useCallback(
+    (input?: { readonly environmentId?: EnvironmentId; readonly projectId?: ProjectId }) =>
+      dispatch({
+        _tag: "OpenImportSessions",
+        ...(input?.environmentId === undefined ? {} : { environmentId: input.environmentId }),
+        ...(input?.projectId === undefined ? {} : { projectId: input.projectId }),
+      }),
+    [],
+  );
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
@@ -481,7 +489,12 @@ export function CommandPalette({ children }: { children: ReactNode }) {
             openAddProject();
             return;
           case "import-sessions":
-            openImportSessions();
+            openImportSessions({
+              ...(detail.environmentId === undefined
+                ? {}
+                : { environmentId: detail.environmentId }),
+              ...(detail.projectId === undefined ? {} : { projectId: detail.projectId }),
+            });
             return;
           default: {
             const _exhaustive: never = open;
@@ -1302,17 +1315,27 @@ function OpenCommandPaletteDialog(props: {
       );
       return;
     }
+    const currentPrefix =
+      currentProjectEnvironmentId && currentProjectId
+        ? `import-sessions:${currentProjectEnvironmentId}:${currentProjectId}`
+        : null;
+    const prioritized = currentPrefix
+      ? [
+          ...importProjectItems.filter((item) => item.value === currentPrefix),
+          ...importProjectItems.filter((item) => item.value !== currentPrefix),
+        ]
+      : importProjectItems;
     pushPaletteView({
       addonIcon: <ImportIcon className={ADDON_ICON_CLASS} />,
       groups: [
         {
           value: "projects",
-          label: "Projects",
-          items: importProjectItems,
+          label: "Import into project",
+          items: enumerateCommandPaletteItems(prioritized),
         },
       ],
     });
-  }, [importProjectItems, pushPaletteView]);
+  }, [currentProjectEnvironmentId, currentProjectId, importProjectItems, pushPaletteView]);
 
   const startAddProjectBrowse = useCallback(
     async (environmentId: EnvironmentId): Promise<void> => {
@@ -1606,9 +1629,26 @@ function OpenCommandPaletteDialog(props: {
     if (openIntent?.kind !== "import-sessions") {
       return;
     }
+    const environmentId = openIntent.environmentId;
+    const projectId = openIntent.projectId;
     clearOpenIntent();
+    if (environmentId !== undefined && projectId !== undefined) {
+      const project = pickerProjects.find(
+        (candidate) => candidate.environmentId === environmentId && candidate.id === projectId,
+      );
+      if (project) {
+        void openImportSessionsForProject(project);
+        return;
+      }
+    }
     openImportSessionsFlow();
-  }, [clearOpenIntent, openImportSessionsFlow, openIntent]);
+  }, [
+    clearOpenIntent,
+    openImportSessionsFlow,
+    openImportSessionsForProject,
+    openIntent,
+    pickerProjects,
+  ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
