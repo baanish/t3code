@@ -116,10 +116,26 @@ export const teleportCwdsEquivalent = Effect.fn("teleportCwdsEquivalent")(functi
   return false;
 });
 
+const FOREIGN_OPENCODE_PROJECT_FOLDERS = new Set([
+  "codex",
+  "claude",
+  "grok",
+  "claude-code",
+  "claudeagent",
+]);
+
+export function isForeignOpenCodeProjectFolder(projectCwd: string): boolean {
+  const posix = normalizeTeleportCwd(projectCwd).replaceAll("\\", "/");
+  const lastSlash = posix.lastIndexOf("/");
+  const base = (lastSlash === -1 ? posix : posix.slice(lastSlash + 1)).toLowerCase();
+  return base.length > 0 && FOREIGN_OPENCODE_PROJECT_FOLDERS.has(base);
+}
+
 /**
  * OpenCode stores the process cwd, which is often a parent of the T3 project
  * folder. Exact match still wins; otherwise the project may sit under the
- * session directory unless that directory is a generic root.
+ * session directory unless that directory is a generic root or a sibling
+ * harness folder such as `codex` / `claude` / `grok`.
  */
 export const opencodeSessionMatchesProjectCwd = Effect.fn("opencodeSessionMatchesProjectCwd")(
   function* (sessionCwd: string, projectCwd: string) {
@@ -128,7 +144,7 @@ export const opencodeSessionMatchesProjectCwd = Effect.fn("opencodeSessionMatche
     }
     const sessionCanon = yield* canonicalizeTeleportCwd(sessionCwd);
     const projectCanon = yield* canonicalizeTeleportCwd(projectCwd);
-    if (isGenericTeleportCwd(sessionCanon)) {
+    if (isGenericTeleportCwd(sessionCanon) || isForeignOpenCodeProjectFolder(projectCanon)) {
       return false;
     }
     return isTeleportCwdWithin(projectCanon, sessionCanon);

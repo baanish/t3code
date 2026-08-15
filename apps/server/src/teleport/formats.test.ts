@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import {
+  isForeignOpenCodeProjectFolder,
   isGenericTeleportCwd,
   isTeleportCwdWithin,
   opencodeSessionMatchesProjectCwd,
@@ -35,8 +36,10 @@ import {
   writeGrokSession,
 } from "./formats/grok.ts";
 import {
+  isOpenCodeSharedStorePath,
   listOpenCodeSessions,
   readOpenCodeSessionById,
+  requireOpenCodeSessionUnlocked,
   writeOpenCodeSession,
 } from "./formats/opencode.ts";
 import type { TeleportHomes } from "./homes.ts";
@@ -566,6 +569,14 @@ describe("teleport formats", () => {
         tmpListed.map((session) => session.externalSessionId),
         [],
       );
+      const codexListed = yield* listOpenCodeSessions({
+        opencodeRoot: root,
+        cwd: "/home/ubuntu/baanish-testing/native/codex",
+      });
+      assert.deepStrictEqual(
+        codexListed.map((session) => session.externalSessionId),
+        [],
+      );
     }).pipe(
       Effect.scoped,
       Effect.provideService(HostProcessPlatform, "linux"),
@@ -621,6 +632,49 @@ describe("teleport cwd matching", () => {
       Effect.map((matched) => {
         assert.equal(matched, false);
       }),
+    ),
+  );
+
+  it("does not treat sibling harness folders as OpenCode parent matches", () => {
+    assert.equal(isForeignOpenCodeProjectFolder("/home/ubuntu/baanish-testing/native/codex"), true);
+    assert.equal(
+      isForeignOpenCodeProjectFolder("/home/ubuntu/baanish-testing/native/claude"),
+      true,
+    );
+    assert.equal(
+      isForeignOpenCodeProjectFolder("/home/ubuntu/baanish-testing/native/opencode"),
+      false,
+    );
+  });
+
+  it.effect("does not list a parent OpenCode session under a Codex project folder", () =>
+    opencodeSessionMatchesProjectCwd(
+      "/home/ubuntu/baanish-testing/native",
+      "/home/ubuntu/baanish-testing/native/codex",
+    ).pipe(
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, false);
+      }),
+    ),
+  );
+
+  it("treats opencode.db as the shared live store, not a session file", () => {
+    assert.equal(isOpenCodeSharedStorePath("/home/ubuntu/.local/share/opencode/opencode.db"), true);
+    assert.equal(
+      isOpenCodeSharedStorePath("/home/ubuntu/.local/share/opencode/storage/session/t3/abc.json"),
+      false,
+    );
+  });
+
+  it.effect("does not refuse import when T3 already has opencode.db open", () =>
+    requireOpenCodeSessionUnlocked({
+      nativePath: "/home/ubuntu/.local/share/opencode/opencode.db",
+      opencodeRoot: "/home/ubuntu/.local/share/opencode",
+    }).pipe(
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(NodeServices.layer),
     ),
   );
 

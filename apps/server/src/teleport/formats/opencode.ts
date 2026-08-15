@@ -14,7 +14,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { opencodeSessionMatchesProjectCwd } from "../cwd.ts";
+import { opencodeSessionMatchesProjectCwd, teleportCwdsMatch } from "../cwd.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { firstUserTitle, isRecord, nonEmptyString, parseJsonObject } from "../json.ts";
 import {
@@ -89,10 +89,22 @@ export function opencodeDbPath(
   return join(opencodeRoot, "opencode.db");
 }
 
+export function isOpenCodeSharedStorePath(nativePath: string): boolean {
+  const normalized = nativePath.replaceAll("\\", "/");
+  return normalized.endsWith("/opencode.db");
+}
+
 export const requireOpenCodeSessionUnlocked = Effect.fn("requireOpenCodeSessionUnlocked")(
   function* (input: { readonly nativePath: string; readonly opencodeRoot: string }) {
     // T3's idle OpenCode process keeps opencode.db open. Treat that as the live
     // store, not a foreign lock. Only refuse when the session JSON itself is held.
+    const path = yield* Path.Path;
+    if (
+      isOpenCodeSharedStorePath(input.nativePath) ||
+      teleportCwdsMatch(input.nativePath, opencodeDbPath(input.opencodeRoot, path.join))
+    ) {
+      return;
+    }
     yield* requireNativePathUnlocked(input.nativePath);
   },
 );
