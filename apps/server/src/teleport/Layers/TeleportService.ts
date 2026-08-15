@@ -41,7 +41,7 @@ import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstan
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerSettings from "../../serverSettings.ts";
-import { canonicalizeTeleportCwd, teleportCwdsMatch } from "../cwd.ts";
+import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "../cwd.ts";
 import { discoverTeleportSessions, loadTeleportSession } from "../discovery.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import {
@@ -234,7 +234,7 @@ export const TeleportServiceLive = Layer.effect(
     const listSessions = (input: TeleportListSessionsInput) =>
       provideNative(
         Effect.gen(function* () {
-          const cwd = yield* canonicalizeTeleportCwd(input.cwd);
+          const cwd = yield* resolveTeleportCwdPath(input.cwd);
           const settings = yield* settingsService.getSettings.pipe(
             Effect.mapError(
               (cause) =>
@@ -275,8 +275,8 @@ export const TeleportServiceLive = Layer.effect(
                 message: `Project '${input.projectId}' was not found.`,
               });
             }
-            const cwd = yield* canonicalizeTeleportCwd(input.cwd);
-            if (!teleportCwdsMatch(project.value.workspaceRoot, cwd)) {
+            const cwd = yield* resolveTeleportCwdPath(input.cwd);
+            if (!(yield* teleportCwdsEquivalent(project.value.workspaceRoot, cwd))) {
               return yield* new TeleportInvalidInputError({
                 message: "Import cwd must match the selected project's workspace root.",
               });
@@ -647,7 +647,7 @@ export const TeleportServiceLive = Layer.effect(
                 ),
               );
 
-            const cwd = yield* canonicalizeTeleportCwd(project.value.workspaceRoot);
+            const cwd = yield* resolveTeleportCwdPath(project.value.workspaceRoot);
             const settings = yield* settingsService.getSettings.pipe(
               Effect.mapError(
                 (cause) =>

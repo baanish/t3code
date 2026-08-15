@@ -27,6 +27,8 @@ export const resolveTeleportHomes = Effect.fn("resolveTeleportHomes")(function* 
   const nestedClaude = path.join(claudeHome, ".claude", "projects");
   const nestedExists = yield* fs.exists(nestedClaude).pipe(Effect.orElseSucceed(() => false));
   const claudeProjectsRoot = nestedExists ? nestedClaude : path.join(claudeHome, "projects");
+  // OpenCode stores sessions at ~/.local/share/opencode on macOS/Linux and
+  // %USERPROFILE%\.local\share\opencode on Windows. XDG_DATA_HOME still wins.
   const xdgData =
     process.env.XDG_DATA_HOME && process.env.XDG_DATA_HOME.trim().length > 0
       ? expandHomePath(process.env.XDG_DATA_HOME)

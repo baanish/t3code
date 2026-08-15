@@ -8,11 +8,13 @@ import {
   ProviderDriverKind,
   type TeleportSessionCandidate,
 } from "@t3tools/contracts";
+import { normalizeProjectPathForDispatch } from "@t3tools/shared/path";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import { resolveTeleportCwdPath } from "../cwd.ts";
 import {
   collectTextParts,
   firstUserTitle,
@@ -40,7 +42,7 @@ function isToolResultOnlyContent(content: unknown): boolean {
 }
 
 export function encodeClaudeProjectPath(cwd: string): string {
-  const encoded = cwd.replace(/[^a-zA-Z0-9]/gu, "-");
+  const encoded = normalizeProjectPathForDispatch(cwd).replace(/[^a-zA-Z0-9]/gu, "-");
   if (encoded.length <= 200) {
     return encoded;
   }
@@ -193,9 +195,20 @@ export const listClaudeJsonlFiles = Effect.fn("listClaudeJsonlFiles")(function* 
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const encodedDir = path.join(projectsRoot, encodeClaudeProjectPath(cwd));
-  const encodedExists = yield* fs.exists(encodedDir).pipe(Effect.orElseSucceed(() => false));
-  const roots = encodedExists ? [encodedDir] : [projectsRoot];
+  const resolved = yield* resolveTeleportCwdPath(cwd);
+  const encodedNames = [
+    ...new Set([encodeClaudeProjectPath(cwd), encodeClaudeProjectPath(resolved)]),
+  ];
+  const roots: string[] = [];
+  for (const encoded of encodedNames) {
+    const encodedDir = path.join(projectsRoot, encoded);
+    if (yield* fs.exists(encodedDir).pipe(Effect.orElseSucceed(() => false))) {
+      roots.push(encodedDir);
+    }
+  }
+  if (roots.length === 0) {
+    roots.push(projectsRoot);
+  }
   const files: string[] = [];
   for (const root of roots) {
     files.push(...(yield* walkJsonl(root)));
@@ -216,7 +229,7 @@ export function toClaudeCandidate(session: ParsedNativeSession): TeleportSession
 }
 
 function fileStem(filePath: string): string | undefined {
-  const base = filePath.split("/").at(-1) ?? filePath;
+  const base = filePath.replaceAll("\\", "/").split("/").at(-1) ?? filePath;
   return nonEmptyString(base.replace(/\.jsonl$/u, ""));
 }
 

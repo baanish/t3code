@@ -14,6 +14,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import { teleportCwdsEquivalent } from "../cwd.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { firstUserTitle, isRecord, nonEmptyString, parseJsonObject } from "../json.ts";
 import {
@@ -79,18 +80,23 @@ export const requireOpenCodeSessionUnlocked = Effect.fn("requireOpenCodeSessionU
 export const listOpenCodeSessions = Effect.fn("listOpenCodeSessions")(function* (input: {
   readonly opencodeRoot: string;
   readonly cwd: string;
-  readonly pathsMatch: (left: string, right: string) => boolean;
-}): Effect.fn.Return<
-  ReadonlyArray<ParsedNativeSession>,
-  TeleportSchemaVersionError,
-  FileSystem.FileSystem | Path.Path
-> {
-  const sqliteSessions = yield* readOpenCodeSqliteSessions(input);
-  if (sqliteSessions.length > 0) {
-    return sqliteSessions.filter((session) => input.pathsMatch(session.cwd, input.cwd));
+}) {
+  const sqliteSessions = yield* readOpenCodeSqliteSessions({
+    opencodeRoot: input.opencodeRoot,
+    cwd: input.cwd,
+    pathsMatch: () => true,
+  });
+  const candidates =
+    sqliteSessions.length > 0
+      ? sqliteSessions
+      : yield* readOpenCodeJsonSessions(input.opencodeRoot);
+  const sessions: ParsedNativeSession[] = [];
+  for (const session of candidates) {
+    if (yield* teleportCwdsEquivalent(session.cwd, input.cwd)) {
+      sessions.push(session);
+    }
   }
-  const jsonSessions = yield* readOpenCodeJsonSessions(input.opencodeRoot);
-  return jsonSessions.filter((session) => input.pathsMatch(session.cwd, input.cwd));
+  return sessions;
 });
 
 export const readOpenCodeSessionById = Effect.fn("readOpenCodeSessionById")(function* (input: {

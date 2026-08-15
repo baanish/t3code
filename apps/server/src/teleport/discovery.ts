@@ -11,7 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { teleportCwdsMatch } from "./cwd.ts";
+import { teleportCwdsEquivalent } from "./cwd.ts";
 import {
   listClaudeJsonlFiles,
   parseClaudeSessionContents,
@@ -57,7 +57,7 @@ export const discoverTeleportSessions = Effect.fn("discoverTeleportSessions")(fu
           if (Option.isNone(parsed)) {
             continue;
           }
-          if (!teleportCwdsMatch(parsed.value.cwd, input.cwd)) {
+          if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
             continue;
           }
           sessions.push(toCodexCandidate(parsed.value));
@@ -74,7 +74,7 @@ export const discoverTeleportSessions = Effect.fn("discoverTeleportSessions")(fu
           if (Option.isNone(parsed)) {
             continue;
           }
-          if (!teleportCwdsMatch(parsed.value.cwd, input.cwd)) {
+          if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
             continue;
           }
           sessions.push(toClaudeCandidate(parsed.value));
@@ -85,7 +85,6 @@ export const discoverTeleportSessions = Effect.fn("discoverTeleportSessions")(fu
         const parsedSessions = yield* listOpenCodeSessions({
           opencodeRoot: input.homes.opencodeRoot,
           cwd: input.cwd,
-          pathsMatch: teleportCwdsMatch,
         });
         sessions.push(...parsedSessions.map(toOpenCodeCandidate));
         break;
@@ -97,7 +96,7 @@ export const discoverTeleportSessions = Effect.fn("discoverTeleportSessions")(fu
           if (Option.isNone(parsed)) {
             continue;
           }
-          if (!teleportCwdsMatch(parsed.value.cwd, input.cwd)) {
+          if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
             continue;
           }
           sessions.push(toGrokCandidate(parsed.value));

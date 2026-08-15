@@ -13,8 +13,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { normalizeTeleportCwd } from "../cwd.ts";
+import { normalizeProjectPathForDispatch } from "@t3tools/shared/path";
+
 import { requireNativePathUnlocked } from "../fileLock.ts";
+import { replaceNativeFile } from "../nativeWrite.ts";
 import { firstUserTitle, isRecord, nonEmptyString, parseJsonObject } from "../json.ts";
 import {
   MAX_TELEPORT_SESSION_BYTES,
@@ -41,7 +43,10 @@ export const requireGrokSessionUnlocked = Effect.fn("requireGrokSessionUnlocked"
 });
 
 export function encodeGrokCwdGroup(cwd: string): string {
-  return encodeURIComponent(normalizeTeleportCwd(cwd));
+  // Encode the cwd spelling we persist, not the comparison form. Comparison
+  // lowercases Windows paths and forces backslashes, which would write a
+  // different folder than the native Grok CLI looks up.
+  return encodeURIComponent(normalizeProjectPathForDispatch(cwd));
 }
 
 export function allocateGrokSessionPath(input: {
@@ -216,11 +221,12 @@ export const writeGrokSession = Effect.fn("writeGrokSession")(function* (input: 
           Effect.mapError(mapWriteError(`Failed to create Grok session directory ${nativePath}.`)),
         );
       for (const name of [SUMMARY_FILE, UPDATES_FILE, CHAT_HISTORY_FILE] as const) {
-        yield* fs
-          .rename(path.join(tempDirectory, name), path.join(nativePath, name))
-          .pipe(
-            Effect.mapError(mapWriteError(`Failed to replace ${path.join(nativePath, name)}.`)),
-          );
+        yield* replaceNativeFile({
+          from: path.join(tempDirectory, name),
+          to: path.join(nativePath, name),
+        }).pipe(
+          Effect.mapError(mapWriteError(`Failed to replace ${path.join(nativePath, name)}.`)),
+        );
       }
     }),
   );

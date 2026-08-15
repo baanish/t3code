@@ -8,11 +8,19 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { teleportCwdsMatch } from "./cwd.ts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
+import { resolveTeleportCwdPath, teleportCwdsEquivalent, teleportCwdsMatch } from "./cwd.ts";
 import { discoverTeleportSessions } from "./discovery.ts";
-import { parseClaudeSessionContents, serializeClaudeSession } from "./formats/claude.ts";
+import {
+  encodeClaudeProjectPath,
+  listClaudeJsonlFiles,
+  parseClaudeSessionContents,
+  serializeClaudeSession,
+} from "./formats/claude.ts";
 import { parseCodexSessionContents, serializeCodexSession } from "./formats/codex.ts";
 import {
+  encodeGrokCwdGroup,
   parseGrokSessionDirectory,
   requireGrokSessionUnlocked,
   writeGrokSession,
@@ -383,6 +391,120 @@ describe("teleport cwd matching", () => {
     assert.equal(teleportCwdsMatch("/workspace", "/workspace/"), true);
     assert.equal(teleportCwdsMatch("/workspace", "/other"), false);
   });
+
+  it("encodes Grok cwd groups from the persisted spelling, not the comparison form", () => {
+    assert.equal(encodeGrokCwdGroup("/workspace/"), encodeURIComponent("/workspace"));
+    assert.equal(
+      encodeGrokCwdGroup("C:\\Users\\Foo\\proj"),
+      encodeURIComponent("C:\\Users\\Foo\\proj"),
+    );
+    assert.notEqual(
+      encodeGrokCwdGroup("C:\\Users\\Foo\\proj"),
+      encodeURIComponent("c:\\users\\foo\\proj"),
+    );
+  });
+
+  it("encodes Claude project folders without a trailing separator", () => {
+    assert.equal(encodeClaudeProjectPath("/workspace/"), encodeClaudeProjectPath("/workspace"));
+    assert.equal(
+      encodeClaudeProjectPath("C:\\Users\\Foo\\proj\\"),
+      encodeClaudeProjectPath("C:\\Users\\Foo\\proj"),
+    );
+  });
+
+  it.effect("treats a symlink cwd as the same project", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-cwd-" });
+      const real = path.join(root, "real-project");
+      const link = path.join(root, "link-project");
+      yield* fs.makeDirectory(real, { recursive: true });
+      yield* fs.symlink(real, link);
+      assert.equal(yield* teleportCwdsEquivalent(real, link), true);
+      assert.equal(yield* teleportCwdsEquivalent(real, path.join(root, "other")), false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("treats macOS cwd spellings as the same when they differ only by case", () =>
+    teleportCwdsEquivalent("/Users/Alex/proj", "/Users/alex/proj").pipe(
+      Effect.provideService(HostProcessPlatform, "darwin"),
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, true);
+      }),
+    ),
+  );
+
+  it.effect("does not case-fold missing Unix paths on Linux", () =>
+    teleportCwdsEquivalent("/Users/Alex/proj", "/Users/alex/proj").pipe(
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, false);
+      }),
+    ),
+  );
+
+  it.effect("lists Claude sessions from the realpath-encoded folder", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-claude-cwd-" });
+      const real = path.join(root, "real-project");
+      const link = path.join(root, "link-project");
+      const projectsRoot = path.join(root, "projects");
+      yield* fs.makeDirectory(real, { recursive: true });
+      yield* fs.symlink(real, link);
+      const lexicalDir = path.join(projectsRoot, encodeClaudeProjectPath(link));
+      const realDir = path.join(projectsRoot, encodeClaudeProjectPath(real));
+      yield* fs.makeDirectory(lexicalDir, { recursive: true });
+      yield* fs.makeDirectory(realDir, { recursive: true });
+      const nativePath = path.join(realDir, `${SESSION_ID}.jsonl`);
+      yield* fs.writeFileString(
+        nativePath,
+        `${JSON.stringify({
+          type: "user",
+          sessionId: SESSION_ID,
+          cwd: real,
+          timestamp: CREATED_AT,
+          message: { role: "user", content: [{ type: "text", text: "hello" }] },
+        })}\n`,
+      );
+      const files = yield* listClaudeJsonlFiles(projectsRoot, link);
+      assert.equal(files.includes(nativePath), true);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("resolves a persist cwd without lowercasing Unix paths", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-persist-cwd-" });
+      const project = path.join(root, "MixedCase");
+      yield* fs.makeDirectory(project, { recursive: true });
+      const resolved = yield* resolveTeleportCwdPath(`${project}/`);
+      assert.equal(resolved, yield* fs.realPath(project));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reads a Claude session id from a Windows native path", () =>
+    Effect.gen(function* () {
+      const parsed = yield* parseClaudeSessionContents({
+        nativePath: "C:\\Users\\Foo\\.claude\\projects\\proj\\abc-session.jsonl",
+        contents: `${JSON.stringify({
+          type: "user",
+          cwd: "C:\\Users\\Foo\\proj",
+          timestamp: CREATED_AT,
+          message: { role: "user", content: [{ type: "text", text: "hello" }] },
+        })}\n`,
+      });
+      assert.equal(parsed._tag, "Some");
+      if (parsed._tag === "Some") {
+        assert.equal(parsed.value.externalSessionId, "abc-session");
+      }
+    }),
+  );
 });
 
 describe("teleport resume cursors", () => {
