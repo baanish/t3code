@@ -1,15 +1,16 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { isTeleportProvider, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
-import * as Option from "effect/Option";
 import { LogInIcon, LogOutIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { buildLoadingThreadFromShell } from "../ChatView.logic";
 import { isTeleportedOut, teleportFailureMessage } from "../../lib/teleport";
+import { useThread, useThreadShell } from "../../state/entities";
 import { teleportEnvironment } from "../../state/teleport";
-import { useEnvironmentThread } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -28,7 +29,9 @@ export function TeleportOutButton({
   isServerThread,
   cwd,
 }: TeleportOutButtonProps) {
-  const threadState = useEnvironmentThread(environmentId, threadId);
+  const threadRef = scopeThreadRef(environmentId, threadId);
+  const detail = useThread(threadRef);
+  const shell = useThreadShell(threadRef);
   const exportSession = useAtomCommand(teleportEnvironment.exportSession, {
     reportFailure: false,
   });
@@ -37,8 +40,8 @@ export function TeleportOutButton({
   });
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
-  const thread = Option.getOrUndefined(threadState.data);
-  if (!isServerThread || thread === undefined) {
+  const thread = detail ?? (shell === null ? null : buildLoadingThreadFromShell(shell));
+  if (!isServerThread || thread === null) {
     return null;
   }
 

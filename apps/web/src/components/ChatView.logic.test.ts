@@ -168,6 +168,46 @@ describe("buildLoadingThreadFromShell", () => {
       checkpoints: [],
     });
   });
+
+  it("preserves shell teleport presence while detail is still loading", () => {
+    const teleport = {
+      presence: "native" as const,
+      provider: "grok" as const,
+      externalSessionId: "session-1",
+      nativePath: "/tmp/native",
+      lastSyncedAt: now,
+    };
+    const shell = {
+      environmentId,
+      id: threadId,
+      projectId,
+      title: "Loading thread",
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      branch: "main",
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      snoozedUntil: null,
+      snoozedAt: null,
+      session: null,
+      latestUserMessageAt: now,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+      teleport,
+    } satisfies ThreadShell;
+
+    expect(buildLoadingThreadFromShell(shell).teleport).toEqual(teleport);
+  });
 });
 
 describe("resolveThreadMetadataUpdateForNextTurn", () => {

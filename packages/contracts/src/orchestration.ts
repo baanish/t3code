@@ -483,6 +483,11 @@ export const OrchestrationThreadShell = Schema.Struct({
       }),
     ),
   ),
+  // Thread-level native/T3 presence. Optional so payloads from pre-teleport
+  // servers still decode. Lives on the shell because the environment snapshot
+  // is refreshed on every new session, unlike cached thread detail which can
+  // resume from events and miss a backfilled projection column.
+  teleport: Schema.optional(Schema.NullOr(TeleportThreadState)),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 

@@ -1594,7 +1594,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 activities: activitiesByThread.get(row.threadId) ?? [],
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
-                teleport: row.teleport ?? null,
+                ...(row.teleport == null ? {} : { teleport: row.teleport }),
               }));
 
               const snapshot = {
@@ -1802,7 +1802,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   activities: [],
                   checkpoints: [],
                   session: sessionByThread.get(row.threadId) ?? null,
-                  teleport: row.teleport ?? null,
+                  ...(row.teleport == null ? {} : { teleport: row.teleport }),
                 });
               }
 
@@ -1942,6 +1942,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         row.threadId,
                       ),
                       planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
+                      ...(row.teleport == null ? {} : { teleport: row.teleport }),
                     } satisfies OrchestrationThreadShell)
                   : Result.failVoid,
               ),
@@ -2366,6 +2367,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           threadRow.value.threadId,
         ),
         planProgress: threadPlanProgress.getThreadPlanProgress(threadRow.value.threadId),
+        ...(threadRow.value.teleport == null ? {} : { teleport: threadRow.value.teleport }),
       } satisfies OrchestrationThreadShell);
     });
 
@@ -2520,7 +2522,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           completedAt: row.completedAt,
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
-        teleport: threadRow.value.teleport ?? null,
+        ...(threadRow.value.teleport == null ? {} : { teleport: threadRow.value.teleport }),
       };
 
       return Option.some(
