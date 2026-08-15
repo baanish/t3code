@@ -628,6 +628,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
             deletedAt: null,
+            teleport: null,
           });
           return;
 
@@ -850,9 +851,25 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.teleported": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            teleport: event.payload.teleport,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
         case "thread.message-sent":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
+        case "thread.history-replaced":
         case "thread.approval-response-requested":
         case "thread.user-input-response-requested": {
           const existingRow = yield* projectionThreadRepository.getById({
@@ -1019,6 +1036,31 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.history-replaced": {
+          yield* projectionThreadMessageRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(
+            event.payload.messages,
+            (message) =>
+              projectionThreadMessageRepository.upsert({
+                messageId: message.id,
+                threadId: event.payload.threadId,
+                turnId: message.turnId,
+                role: message.role,
+                text: message.text,
+                ...(message.attachments !== undefined
+                  ? { attachments: [...message.attachments] }
+                  : {}),
+                isStreaming: message.streaming,
+                createdAt: message.createdAt,
+                updatedAt: message.updatedAt,
+              }),
+            { concurrency: 1 },
+          ).pipe(Effect.asVoid);
+          return;
+        }
+
         default:
           return;
       }
@@ -1038,6 +1080,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             implementationThreadId: event.payload.proposedPlan.implementationThreadId,
             createdAt: event.payload.proposedPlan.createdAt,
             updatedAt: event.payload.proposedPlan.updatedAt,
+          });
+          return;
+
+        case "thread.history-replaced":
+          yield* projectionThreadProposedPlanRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
           });
           return;
 
@@ -1092,6 +1140,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? { sequence: event.payload.activity.sequence }
               : {}),
             createdAt: event.payload.activity.createdAt,
+          });
+          return;
+
+        case "thread.history-replaced":
+          yield* projectionThreadActivityRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
           });
           return;
 
@@ -1447,6 +1501,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
         }
+
+        case "thread.history-replaced":
+          yield* projectionTurnRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
 
         case "thread.reverted": {
           const existingTurns = yield* projectionTurnRepository.listByThreadId({

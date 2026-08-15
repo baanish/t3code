@@ -2335,4 +2335,62 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       }
     }),
   );
+
+  it.effect("hydrates teleport presence onto thread detail and shell snapshots", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+        )
+        VALUES (
+          'project-teleport', 'Teleport', '/tmp/project-teleport', '[]',
+          '2026-08-14T00:00:00.000Z', '2026-08-14T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+          pending_approval_count, pending_user_input_count, has_actionable_proposed_plan,
+          created_at, updated_at, deleted_at, teleport_json
+        )
+        VALUES (
+          'thread-teleport', 'project-teleport', 'Native thread',
+          '{"provider":"grok","model":"grok-4"}', 'full-access', 'default',
+          0, 0, 0, '2026-08-14T00:00:00.000Z', '2026-08-14T00:00:00.000Z', NULL,
+          '{"presence":"native","provider":"grok","externalSessionId":"session-1","nativePath":"/tmp/native","lastSyncedAt":"2026-08-14T00:00:01.000Z"}'
+        )
+      `;
+      for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
+        yield* sql`
+          INSERT INTO projection_state (projector, last_applied_sequence, updated_at)
+          VALUES (${projector}, 1, '2026-08-14T00:00:01.000Z')
+        `;
+      }
+
+      const expectedTeleport = {
+        presence: "native",
+        provider: "grok",
+        externalSessionId: "session-1",
+        nativePath: "/tmp/native",
+        lastSyncedAt: "2026-08-14T00:00:01.000Z",
+      };
+      const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-teleport"));
+      assert.equal(detail._tag, "Some");
+      if (detail._tag === "Some") {
+        assert.deepEqual(detail.value.teleport, expectedTeleport);
+      }
+      const shell = yield* snapshotQuery.getThreadShellById(ThreadId.make("thread-teleport"));
+      assert.equal(shell._tag, "Some");
+      if (shell._tag === "Some") {
+        assert.deepEqual(shell.value.teleport, expectedTeleport);
+      }
+    }),
+  );
 });

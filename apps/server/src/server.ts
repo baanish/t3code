@@ -42,6 +42,7 @@ import * as GitHubCli from "./sourceControl/GitHubCli.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
+import { TeleportServiceLive } from "./teleport/Layers/TeleportService.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
@@ -412,7 +413,10 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const RuntimeDependenciesLive = Layer.mergeAll(
+  RuntimeCoreDependenciesLive,
+  TeleportServiceLive.pipe(Layer.provide(RuntimeCoreDependenciesLive)),
+).pipe(
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
