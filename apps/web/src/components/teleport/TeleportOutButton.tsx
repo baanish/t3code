@@ -4,7 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { isTeleportProvider, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
-import { LogInIcon, LogOutIcon } from "lucide-react";
+import { LogOutIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { buildLoadingThreadFromShell } from "../ChatView.logic";
@@ -150,7 +150,7 @@ export function TeleportOutButton({
               })();
             }}
           >
-            {teleportedOut ? <LogInIcon className="size-3" /> : <LogOutIcon className="size-3" />}
+            <LogOutIcon className={teleportedOut ? "size-3 -scale-x-100" : "size-3"} />
           </Button>
         }
       />
