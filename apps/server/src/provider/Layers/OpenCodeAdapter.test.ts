@@ -20,6 +20,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
@@ -847,6 +848,30 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         true,
       );
     }),
+  );
+
+  it.effect(
+    "emits turn.aborted without starting a session when interrupt has no live context",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-opencode-zombie-interrupt");
+        const turnId = TurnId.make("opencode-turn-zombie");
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId && event.type === "turn.aborted"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.interruptTurn(threadId, turnId);
+
+        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+        NodeAssert.equal(events[0]?.type, "turn.aborted");
+        NodeAssert.equal(String(events[0]?.turnId), String(turnId));
+        NodeAssert.equal(runtimeMock.state.startCalls.length, 0);
+        NodeAssert.equal(runtimeMock.state.abortCalls.length, 0);
+      }),
   );
 
   it.effect("passes agent and variant options for the adapter's bound custom instance id", () => {
