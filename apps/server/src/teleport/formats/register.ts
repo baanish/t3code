@@ -2,4 +2,5 @@
 import "./claude.ts";
 import "./codex.ts";
 import "./grok.ts";
+import "./opencode.ts";
 export function loadTeleportFormats(): void {}
