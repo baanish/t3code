@@ -13,7 +13,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import {
-  definedField,
   firstUserTitle,
   isRecord,
   isSyntheticNativeUserText,
@@ -190,24 +189,38 @@ export function parseCodexSessionContents(input: {
   );
 }
 
+const CODEX_EXPORT_ORIGINATOR = "t3-teleport";
+const CODEX_EXPORT_CLI_VERSION = "0.0.0";
+
+/**
+ * Codex TUI bootstrap requires the first parseable rollout line to be
+ * `session_meta`. Extra top-level fields (including our format version) make
+ * that line fail serde, so resume then treats the first `response_item` as
+ * the header and errors with "does not start with session metadata".
+ * `cli_version` is required on SessionMeta.
+ */
 export function serializeCodexSession(session: ParsedNativeSession): string {
   const timestamp = session.createdAt ?? new Date().toISOString();
+  let ordinal = 0;
   const lines: string[] = [
     JSON.stringify({
       timestamp,
+      ordinal: ordinal++,
       type: "session_meta",
-      nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
       payload: {
         id: session.externalSessionId,
-        cwd: session.cwd,
+        session_id: session.externalSessionId,
         timestamp,
-        originator: "t3-teleport",
+        cwd: session.cwd,
+        originator: CODEX_EXPORT_ORIGINATOR,
+        cli_version: CODEX_EXPORT_CLI_VERSION,
         source: "cli",
-        ...definedField("title", session.title),
+        thread_source: "user",
       },
     }),
     JSON.stringify({
       timestamp,
+      ordinal: ordinal++,
       type: "turn_context",
       payload: {
         cwd: session.cwd,
@@ -220,6 +233,7 @@ export function serializeCodexSession(session: ParsedNativeSession): string {
     lines.push(
       JSON.stringify({
         timestamp: at,
+        ordinal: ordinal++,
         type: "response_item",
         payload: {
           type: "message",

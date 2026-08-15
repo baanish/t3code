@@ -164,6 +164,34 @@ describe("teleport formats", () => {
     }),
   );
 
+  it("writes Codex session_meta the CLI can resume", () => {
+    const contents = serializeCodexSession(sampleSession("codex"));
+    const firstLine = contents.split("\n")[0] ?? "";
+    const event = JSON.parse(firstLine) as {
+      type?: unknown;
+      ordinal?: unknown;
+      nativeFormatVersion?: unknown;
+      payload?: {
+        id?: unknown;
+        session_id?: unknown;
+        cwd?: unknown;
+        originator?: unknown;
+        cli_version?: unknown;
+        source?: unknown;
+      };
+    };
+    assert.equal(event.type, "session_meta");
+    assert.equal(event.ordinal, 0);
+    assert.equal(event.nativeFormatVersion, undefined);
+    assert.equal(event.payload?.id, SESSION_ID);
+    assert.equal(event.payload?.session_id, SESSION_ID);
+    assert.equal(event.payload?.cwd, "/workspace");
+    assert.equal(typeof event.payload?.cli_version, "string");
+    assert.notEqual(event.payload?.cli_version, "");
+    assert.equal(event.payload?.originator, "t3-teleport");
+    assert.equal(event.payload?.source, "cli");
+  });
+
   it.effect("skips Codex environment_context user wrappers", () =>
     Effect.gen(function* () {
       const contents = `${JSON.stringify({
