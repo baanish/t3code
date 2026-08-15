@@ -21,6 +21,7 @@ import {
   ProviderDriverKind,
   RuntimeMode,
   TerminalOpenInput,
+  isTeleportedOut,
 } from "@t3tools/contracts";
 import {
   connectionStatusTitle,
@@ -166,6 +167,7 @@ import {
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
+import { TELEPORTED_OUT_SEND_DISABLED_REASON } from "~/lib/teleport";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
@@ -4894,6 +4896,16 @@ function ChatViewContent(props: ChatViewProps) {
       notifyDirectAnnotationAttached();
       return;
     }
+    if (isTeleportedOut(activeThread.teleport)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Thread is in the native CLI",
+          description: TELEPORTED_OUT_SEND_DISABLED_REASON,
+        }),
+      );
+      return;
+    }
     if (activeEnvironmentUnavailable) {
       toastManager.add(
         stackedThreadToast({
@@ -6349,7 +6361,13 @@ function ChatViewContent(props: ChatViewProps) {
                             phase={phase}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}
-                            sendDisabledReason={threadDetailLoading ? "Messages loading" : null}
+                            sendDisabledReason={
+                              threadDetailLoading
+                                ? "Messages loading"
+                                : isTeleportedOut(activeThread?.teleport)
+                                  ? TELEPORTED_OUT_SEND_DISABLED_REASON
+                                  : null
+                            }
                             isPreparingWorktree={isPreparingWorktree}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}
