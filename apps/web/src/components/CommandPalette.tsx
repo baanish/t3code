@@ -35,6 +35,7 @@ import {
   FolderPlusIcon,
   ImportIcon,
   LinkIcon,
+  LoaderIcon,
   MessageSquareIcon,
   PaletteIcon,
   SettingsIcon,
@@ -117,6 +118,73 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
+
+function nativeSessionsPaletteView(
+  projectTitle: string,
+  items: CommandPaletteActionItem[],
+): CommandPaletteView {
+  return {
+    addonIcon: <ImportIcon className={ADDON_ICON_CLASS} />,
+    groups: [
+      {
+        value: "native-sessions",
+        label: `Sessions in ${projectTitle}`,
+        items,
+      },
+    ],
+  };
+}
+
+function importSessionsStatusItem(input: {
+  readonly value: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly icon: ReactNode;
+}): CommandPaletteActionItem {
+  return {
+    kind: "action",
+    value: input.value,
+    searchTerms: [],
+    title: input.title,
+    ...(input.description === undefined ? {} : { description: input.description }),
+    icon: input.icon,
+    disabled: true,
+    run: async () => undefined,
+  };
+}
+
+function importSessionsLoadingView(projectTitle: string): CommandPaletteView {
+  return nativeSessionsPaletteView(projectTitle, [
+    importSessionsStatusItem({
+      value: "import-sessions-loading",
+      title: "Looking for native sessions…",
+      icon: <LoaderIcon className={`${ITEM_ICON_CLASS} animate-spin`} />,
+    }),
+  ]);
+}
+
+function importIntoProjectPaletteView(
+  items: ReadonlyArray<CommandPaletteActionItem>,
+): CommandPaletteView {
+  return {
+    addonIcon: <ImportIcon className={ADDON_ICON_CLASS} />,
+    groups: [
+      {
+        value: "projects",
+        label: "Import into project",
+        items: enumerateCommandPaletteItems(items),
+      },
+    ],
+  };
+}
+
+function toInstalledPaletteView(view: CommandPaletteView): CommandPaletteView {
+  return {
+    addonIcon: view.addonIcon,
+    groups: view.groups,
+    ...(view.initialQuery ? { initialQuery: view.initialQuery } : {}),
+  };
+}
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
@@ -669,6 +737,7 @@ function OpenCommandPaletteDialog(props: {
   }
   const browseNavigation = browseNavigationRef.current;
   const teleportImportPendingRef = useRef(false);
+  const importListGenerationRef = useRef(0);
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
@@ -1122,14 +1191,31 @@ function OpenCommandPaletteDialog(props: {
   const pushPaletteView = useCallback(
     (view: CommandPaletteView): void => {
       browseNavigation.invalidate();
-      setViewStack((previousViews) => [
-        ...previousViews,
-        {
-          addonIcon: view.addonIcon,
-          groups: view.groups,
-          ...(view.initialQuery ? { initialQuery: view.initialQuery } : {}),
-        },
-      ]);
+      setViewStack((previousViews) => [...previousViews, toInstalledPaletteView(view)]);
+      setHighlightedItemValue(null);
+      setQuery(view.initialQuery ?? "");
+    },
+    [browseNavigation],
+  );
+
+  const replacePaletteView = useCallback(
+    (view: CommandPaletteView): void => {
+      browseNavigation.invalidate();
+      setAddProjectCloneFlow(null);
+      setViewStack([toInstalledPaletteView(view)]);
+      setHighlightedItemValue(null);
+      setQuery(view.initialQuery ?? "");
+    },
+    [browseNavigation],
+  );
+
+  const replaceTopPaletteView = useCallback(
+    (view: CommandPaletteView): void => {
+      browseNavigation.invalidate();
+      setViewStack((previousViews) => {
+        const nextView = toInstalledPaletteView(view);
+        return previousViews.length === 0 ? [nextView] : [...previousViews.slice(0, -1), nextView];
+      });
       setHighlightedItemValue(null);
       setQuery(view.initialQuery ?? "");
     },
@@ -1226,65 +1312,81 @@ function OpenCommandPaletteDialog(props: {
     [importTeleportSessions, navigate, setOpen],
   );
 
-  const openImportSessionsForProject = useCallback(
+  const loadNativeSessionsIntoView = useCallback(
     async (project: Project): Promise<void> => {
+      const generation = (importListGenerationRef.current += 1);
       const result = await listTeleportSessions({
         environmentId: project.environmentId,
         input: { cwd: project.workspaceRoot },
       });
+      if (generation !== importListGenerationRef.current) {
+        return;
+      }
       if (result._tag !== "Success") {
-        if (!isAtomCommandInterrupted(result)) {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
+        if (isAtomCommandInterrupted(result)) {
+          return;
+        }
+        replaceTopPaletteView(
+          nativeSessionsPaletteView(project.title, [
+            importSessionsStatusItem({
+              value: "import-sessions-error",
               title: "Could not list native sessions",
               description: teleportFailureMessage(squashAtomCommandFailure(result)),
+              icon: <ImportIcon className={ITEM_ICON_CLASS} />,
             }),
-          );
-        }
+          ]),
+        );
         return;
       }
       if (result.value.sessions.length === 0) {
-        toastManager.add({
-          type: "info",
-          title: "No native sessions found",
-          description: `No Codex, Claude, OpenCode, or Grok sessions match ${project.workspaceRoot}.`,
-        });
+        replaceTopPaletteView(
+          nativeSessionsPaletteView(project.title, [
+            importSessionsStatusItem({
+              value: "import-sessions-empty",
+              title: "No native sessions in this project",
+              description: project.workspaceRoot,
+              icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+            }),
+          ]),
+        );
         return;
       }
-      const items: CommandPaletteActionItem[] = result.value.sessions.map((session) => ({
-        kind: "action",
-        value: `import-session:${session.provider}:${session.externalSessionId}`,
-        searchTerms: [
-          session.title ?? "",
-          session.externalSessionId,
-          teleportProviderLabel(session.provider),
-          session.cwd,
-        ],
-        title: session.title ?? session.externalSessionId,
-        description: [
-          teleportProviderLabel(session.provider),
-          session.updatedAt ? formatRelativeTimeLabel(session.updatedAt) : null,
-        ]
-          .filter((part): part is string => part !== null)
-          .join(" · "),
-        icon: <ImportIcon className={ITEM_ICON_CLASS} />,
-        run: async () => {
-          await importNativeSession(project, session);
-        },
-      }));
-      pushPaletteView({
-        addonIcon: <ImportIcon className={ADDON_ICON_CLASS} />,
-        groups: [
-          {
-            value: "native-sessions",
-            label: `Sessions in ${project.title}`,
-            items,
-          },
-        ],
-      });
+      replaceTopPaletteView(
+        nativeSessionsPaletteView(
+          project.title,
+          result.value.sessions.map((session) => ({
+            kind: "action" as const,
+            value: `import-session:${session.provider}:${session.externalSessionId}`,
+            searchTerms: [
+              session.title ?? "",
+              session.externalSessionId,
+              teleportProviderLabel(session.provider),
+              session.cwd,
+            ],
+            title: session.title ?? session.externalSessionId,
+            description: [
+              teleportProviderLabel(session.provider),
+              session.updatedAt ? formatRelativeTimeLabel(session.updatedAt) : null,
+            ]
+              .filter((part): part is string => part !== null)
+              .join(" · "),
+            icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              await importNativeSession(project, session);
+            },
+          })),
+        ),
+      );
     },
-    [importNativeSession, listTeleportSessions, pushPaletteView],
+    [importNativeSession, listTeleportSessions, replaceTopPaletteView],
+  );
+
+  const openImportSessionsForProject = useCallback(
+    (project: Project): void => {
+      pushPaletteView(importSessionsLoadingView(project.title));
+      void loadNativeSessionsIntoView(project);
+    },
+    [loadNativeSessionsIntoView, pushPaletteView],
   );
 
   const importProjectItems = useMemo(
@@ -1298,7 +1400,7 @@ function OpenCommandPaletteDialog(props: {
         icon: projectFavicon(project),
         keepOpen: true,
         run: async () => {
-          await openImportSessionsForProject(project);
+          openImportSessionsForProject(project);
         },
       })),
     [openImportSessionsForProject, pickerProjects],
@@ -1325,16 +1427,7 @@ function OpenCommandPaletteDialog(props: {
           ...importProjectItems.filter((item) => item.value !== currentPrefix),
         ]
       : importProjectItems;
-    pushPaletteView({
-      addonIcon: <ImportIcon className={ADDON_ICON_CLASS} />,
-      groups: [
-        {
-          value: "projects",
-          label: "Import into project",
-          items: enumerateCommandPaletteItems(prioritized),
-        },
-      ],
-    });
+    pushPaletteView(importIntoProjectPaletteView(prioritized));
   }, [currentProjectEnvironmentId, currentProjectId, importProjectItems, pushPaletteView]);
 
   const startAddProjectBrowse = useCallback(
@@ -1632,22 +1725,55 @@ function OpenCommandPaletteDialog(props: {
     const environmentId = openIntent.environmentId;
     const projectId = openIntent.projectId;
     clearOpenIntent();
+    browseNavigation.invalidate();
+    setAddProjectCloneFlow(null);
+    setQuery("");
     if (environmentId !== undefined && projectId !== undefined) {
       const project = pickerProjects.find(
         (candidate) => candidate.environmentId === environmentId && candidate.id === projectId,
       );
       if (project) {
-        void openImportSessionsForProject(project);
+        replacePaletteView(importSessionsLoadingView(project.title));
+        void loadNativeSessionsIntoView(project);
         return;
       }
     }
-    openImportSessionsFlow();
+    if (importProjectItems.length === 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "No projects available",
+          description: "Add a project before importing native sessions.",
+        }),
+      );
+      setOpen(false);
+      return;
+    }
+    const currentPrefix =
+      currentProjectEnvironmentId && currentProjectId
+        ? `import-sessions:${currentProjectEnvironmentId}:${currentProjectId}`
+        : null;
+    replacePaletteView(
+      importIntoProjectPaletteView(
+        currentPrefix
+          ? [
+              ...importProjectItems.filter((item) => item.value === currentPrefix),
+              ...importProjectItems.filter((item) => item.value !== currentPrefix),
+            ]
+          : importProjectItems,
+      ),
+    );
   }, [
+    browseNavigation,
     clearOpenIntent,
-    openImportSessionsFlow,
-    openImportSessionsForProject,
+    currentProjectEnvironmentId,
+    currentProjectId,
+    importProjectItems,
+    loadNativeSessionsIntoView,
     openIntent,
     pickerProjects,
+    replacePaletteView,
+    setOpen,
   ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
