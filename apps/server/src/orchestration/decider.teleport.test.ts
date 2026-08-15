@@ -20,7 +20,7 @@ const NATIVE_TELEPORT: TeleportThreadState = {
   presence: "native",
   provider: "codex",
   externalSessionId: "01a00270-6f96-7ce3-9244-ab159194e668",
-  nativePath: "/home/ubuntu/.codex/sessions/session.jsonl",
+  nativePath: "/home/user/.codex/sessions/session.jsonl",
   lastSyncedAt: NOW,
 };
 

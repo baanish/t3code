@@ -16,7 +16,7 @@ describe("teleport presence", () => {
       presence: "native",
       provider: "grok",
       externalSessionId: "session-1",
-      nativePath: "/home/ubuntu/.grok/sessions/session-1",
+      nativePath: "/home/user/.grok/sessions/session-1",
       lastSyncedAt: "2026-08-14T22:00:00.000Z",
     });
     expect(parsed.presence).toBe("native");
