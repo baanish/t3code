@@ -1,5 +1,7 @@
 // Native session fixtures are JSON/JSONL records, not Effect schemas.
-// @effect-diagnostics preferSchemaOverJson:off
+// @effect-diagnostics preferSchemaOverJson:off nodeBuiltinImport:off
+import * as NodeSqlite from "node:sqlite";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderDriverKind, TELEPORT_NATIVE_FORMAT_VERSION } from "@t3tools/contracts";
@@ -10,7 +12,14 @@ import * as Path from "effect/Path";
 
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
-import { resolveTeleportCwdPath, teleportCwdsEquivalent, teleportCwdsMatch } from "./cwd.ts";
+import {
+  isGenericTeleportCwd,
+  isTeleportCwdWithin,
+  opencodeSessionMatchesProjectCwd,
+  resolveTeleportCwdPath,
+  teleportCwdsEquivalent,
+  teleportCwdsMatch,
+} from "./cwd.ts";
 import { discoverTeleportSessions } from "./discovery.ts";
 import {
   encodeClaudeProjectPath,
@@ -25,13 +34,80 @@ import {
   requireGrokSessionUnlocked,
   writeGrokSession,
 } from "./formats/grok.ts";
-import { readOpenCodeSessionById, writeOpenCodeSession } from "./formats/opencode.ts";
+import {
+  listOpenCodeSessions,
+  readOpenCodeSessionById,
+  writeOpenCodeSession,
+} from "./formats/opencode.ts";
 import type { TeleportHomes } from "./homes.ts";
 import { buildTeleportResumeCursor, readTeleportExternalSessionId } from "./resumeCursors.ts";
 import type { ParsedNativeSession } from "./types.ts";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const CREATED_AT = "2026-08-14T06:00:00.000Z";
+
+function writeOpenCodeSqliteFixture(input: {
+  readonly dbPath: string;
+  readonly sessions: ReadonlyArray<{
+    readonly id: string;
+    readonly directory: string;
+    readonly title: string;
+    readonly messages: ReadonlyArray<{
+      readonly id: string;
+      readonly role: "user" | "assistant";
+      readonly parts: ReadonlyArray<unknown>;
+    }>;
+  }>;
+}): void {
+  const db = new NodeSqlite.DatabaseSync(input.dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE session (
+        id TEXT,
+        directory TEXT,
+        title TEXT,
+        time_created INTEGER,
+        time_updated INTEGER,
+        time_archived INTEGER
+      );
+      CREATE TABLE message (
+        id TEXT,
+        session_id TEXT,
+        time_created INTEGER,
+        data TEXT
+      );
+      CREATE TABLE part (
+        id TEXT,
+        message_id TEXT,
+        time_created INTEGER,
+        data TEXT
+      );
+    `);
+    let time = 1;
+    for (const session of input.sessions) {
+      db.prepare(
+        `
+          INSERT INTO session (id, directory, title, time_created, time_updated, time_archived)
+          VALUES (?, ?, ?, ?, ?, NULL)
+        `,
+      ).run(session.id, session.directory, session.title, time, time);
+      for (const message of session.messages) {
+        time += 1;
+        db.prepare(
+          `INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)`,
+        ).run(message.id, session.id, time, JSON.stringify({ role: message.role }));
+        for (const [index, part] of message.parts.entries()) {
+          time += 1;
+          db.prepare(
+            `INSERT INTO part (id, message_id, time_created, data) VALUES (?, ?, ?, ?)`,
+          ).run(`${message.id}-p${index}`, message.id, time, JSON.stringify(part));
+        }
+      }
+    }
+  } finally {
+    db.close();
+  }
+}
 
 function sampleSession(
   provider: ParsedNativeSession["provider"],
@@ -384,6 +460,118 @@ describe("teleport formats", () => {
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("imports OpenCode sqlite text parts and skips step-finish telemetry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-opencode-sqlite-" });
+      writeOpenCodeSqliteFixture({
+        dbPath: path.join(root, "opencode.db"),
+        sessions: [
+          {
+            id: "ses_meal",
+            directory: "/home/ubuntu/baanish-testing/native",
+            title: "Weekly meal planning webapp",
+            messages: [
+              {
+                id: "msg_user",
+                role: "user",
+                parts: [{ type: "text", text: "Make light mode pastel themed" }],
+              },
+              {
+                id: "msg_assistant",
+                role: "assistant",
+                parts: [
+                  { type: "step-start" },
+                  { type: "reasoning", text: "I will restyle the page." },
+                  { type: "text", text: "Updated the palette to pastels." },
+                  { type: "tool", tool: "edit", state: { status: "completed" } },
+                  {
+                    type: "step-finish",
+                    reason: "stop",
+                    tokens: { total: 12, input: 8, output: 4 },
+                    cost: 0,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      const parsed = yield* readOpenCodeSessionById({
+        opencodeRoot: root,
+        sessionId: "ses_meal",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.deepStrictEqual(
+          parsed.value.messages.map((message) => ({ role: message.role, text: message.text })),
+          [
+            { role: "user", text: "Make light mode pastel themed" },
+            { role: "assistant", text: "Updated the palette to pastels." },
+          ],
+        );
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("lists OpenCode sessions launched from a parent project cwd", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-opencode-parent-" });
+      writeOpenCodeSqliteFixture({
+        dbPath: path.join(root, "opencode.db"),
+        sessions: [
+          {
+            id: "ses_parent",
+            directory: "/home/ubuntu/baanish-testing/native",
+            title: "Weekly meal planning webapp",
+            messages: [
+              {
+                id: "msg_user",
+                role: "user",
+                parts: [{ type: "text", text: "make a simple webapp" }],
+              },
+            ],
+          },
+          {
+            id: "ses_tmp",
+            directory: "/tmp",
+            title: "tmp session",
+            messages: [
+              {
+                id: "msg_tmp",
+                role: "user",
+                parts: [{ type: "text", text: "should not match a tmp child project" }],
+              },
+            ],
+          },
+        ],
+      });
+      const listed = yield* listOpenCodeSessions({
+        opencodeRoot: root,
+        cwd: "/home/ubuntu/baanish-testing/native/opencode",
+      });
+      assert.deepStrictEqual(
+        listed.map((session) => session.externalSessionId),
+        ["ses_parent"],
+      );
+      const tmpListed = yield* listOpenCodeSessions({
+        opencodeRoot: root,
+        cwd: "/tmp/oc-wire-test",
+      });
+      assert.deepStrictEqual(
+        tmpListed.map((session) => session.externalSessionId),
+        [],
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
 });
 
 describe("teleport cwd matching", () => {
@@ -391,6 +579,50 @@ describe("teleport cwd matching", () => {
     assert.equal(teleportCwdsMatch("/workspace", "/workspace/"), true);
     assert.equal(teleportCwdsMatch("/workspace", "/other"), false);
   });
+
+  it("treats a project folder as inside its OpenCode launch cwd", () => {
+    assert.equal(
+      isTeleportCwdWithin(
+        "/home/ubuntu/baanish-testing/native/opencode",
+        "/home/ubuntu/baanish-testing/native",
+      ),
+      true,
+    );
+    assert.equal(isTeleportCwdWithin("/tmp/oc-wire-test", "/tmp"), true);
+    assert.equal(isTeleportCwdWithin("/foobar", "/foo"), false);
+  });
+
+  it("rejects home and temp roots as OpenCode launch directories", () => {
+    assert.equal(isGenericTeleportCwd("/"), true);
+    assert.equal(isGenericTeleportCwd("/tmp"), true);
+    assert.equal(isGenericTeleportCwd("/home/ubuntu"), true);
+    assert.equal(isGenericTeleportCwd("/home/ubuntu/baanish-testing/native"), false);
+    assert.equal(isGenericTeleportCwd("C:\\Users\\Foo"), true);
+    assert.equal(isGenericTeleportCwd("C:\\Users\\Foo\\proj"), false);
+  });
+
+  it.effect("matches an OpenCode session whose cwd is a parent of the project", () =>
+    opencodeSessionMatchesProjectCwd(
+      "/home/ubuntu/baanish-testing/native",
+      "/home/ubuntu/baanish-testing/native/opencode",
+    ).pipe(
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, true);
+      }),
+    ),
+  );
+
+  it.effect("does not match an OpenCode session launched from /tmp", () =>
+    opencodeSessionMatchesProjectCwd("/tmp", "/tmp/oc-wire-test").pipe(
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, false);
+      }),
+    ),
+  );
 
   it("encodes Grok cwd groups from the persisted spelling, not the comparison form", () => {
     assert.equal(encodeGrokCwdGroup("/workspace/"), encodeURIComponent("/workspace"));

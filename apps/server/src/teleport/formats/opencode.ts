@@ -14,7 +14,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { teleportCwdsEquivalent } from "../cwd.ts";
+import { opencodeSessionMatchesProjectCwd } from "../cwd.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { firstUserTitle, isRecord, nonEmptyString, parseJsonObject } from "../json.ts";
 import {
@@ -53,13 +53,33 @@ function normalizeOpenCodeText(text: string): string {
   return text;
 }
 
-function textFromPartData(data: unknown): string | undefined {
-  const record = isRecord(data) ? data : parseJsonObject(typeof data === "string" ? data : "");
-  if (!record || record.type !== "text") {
-    return nonEmptyString(typeof data === "string" ? normalizeOpenCodeText(data) : undefined);
+function textFromOpenCodePartRecord(record: Record<string, unknown>): string | undefined {
+  if (record.type !== undefined && record.type !== "text") {
+    return undefined;
   }
   const text = nonEmptyString(record.text);
-  return text ? normalizeOpenCodeText(text) : undefined;
+  return text === undefined ? undefined : normalizeOpenCodeText(text);
+}
+
+function textFromPartData(data: unknown): string | undefined {
+  if (isRecord(data)) {
+    return textFromOpenCodePartRecord(data);
+  }
+  if (typeof data !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(data);
+    if (isRecord(parsed)) {
+      return textFromOpenCodePartRecord(parsed);
+    }
+    if (typeof parsed === "string") {
+      return nonEmptyString(parsed);
+    }
+    return undefined;
+  } catch {
+    return nonEmptyString(data);
+  }
 }
 
 export function opencodeDbPath(
@@ -92,7 +112,7 @@ export const listOpenCodeSessions = Effect.fn("listOpenCodeSessions")(function* 
       : yield* readOpenCodeJsonSessions(input.opencodeRoot);
   const sessions: ParsedNativeSession[] = [];
   for (const session of candidates) {
-    if (yield* teleportCwdsEquivalent(session.cwd, input.cwd)) {
+    if (yield* opencodeSessionMatchesProjectCwd(session.cwd, input.cwd)) {
       sessions.push(session);
     }
   }
@@ -174,6 +194,7 @@ const readOpenCodeSqliteSessions = Effect.fn("readOpenCodeSqliteSessions")(funct
             )
             .all(id) as ReadonlyArray<Record<string, unknown>>;
           const messages: NativeTextMessage[] = [];
+          const messageIndexById = new Map<string, number>();
           for (const messageRow of messageRows) {
             const data =
               parseJsonObject(typeof messageRow.data === "string" ? messageRow.data : "") ??
@@ -184,12 +205,29 @@ const readOpenCodeSqliteSessions = Effect.fn("readOpenCodeSqliteSessions")(funct
             if (!role || !text) {
               continue;
             }
+            const id = nonEmptyString(messageRow.id);
+            const existingIndex = id === undefined ? undefined : messageIndexById.get(id);
+            if (existingIndex !== undefined) {
+              const existing = messages[existingIndex];
+              if (existing) {
+                messages[existingIndex] = nativeTextMessage({
+                  role: existing.role,
+                  text: `${existing.text}\n${text}`,
+                  createdAt: existing.createdAt,
+                  id: existing.id,
+                });
+              }
+              continue;
+            }
+            if (id !== undefined) {
+              messageIndexById.set(id, messages.length);
+            }
             messages.push(
               nativeTextMessage({
                 role,
                 text,
                 createdAt: dateFromMillis(messageRow.time_created),
-                id: nonEmptyString(messageRow.id),
+                id,
               }),
             );
           }
