@@ -4,6 +4,8 @@ import * as NodeSqlite from "node:sqlite";
 import {
   TELEPORT_NATIVE_FORMAT_VERSION,
   TeleportDiscoveryError,
+  TeleportFileLockedError,
+  TeleportLockProbeError,
   TeleportNativeWriteError,
   TeleportSchemaVersionError,
   defaultInstanceIdForDriver,
@@ -427,7 +429,11 @@ const readOpenCodePartText = Effect.fn("readOpenCodePartText")(function* (
 export const writeOpenCodeSession = Effect.fn("writeOpenCodeSession")(function* (input: {
   readonly opencodeRoot: string;
   readonly session: ParsedNativeSession;
-}): Effect.fn.Return<string, TeleportNativeWriteError, FileSystem.FileSystem | Path.Path> {
+}): Effect.fn.Return<
+  string,
+  TeleportNativeWriteError | TeleportFileLockedError | TeleportLockProbeError,
+  FileSystem.FileSystem | Path.Path
+> {
   if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
     return yield* new TeleportNativeWriteError({
       nativePath: input.opencodeRoot,
@@ -449,7 +455,7 @@ export const writeOpenCodeSession = Effect.fn("writeOpenCodeSession")(function* 
   yield* requireOpenCodeSessionUnlocked({
     nativePath: sessionPath,
     opencodeRoot: input.opencodeRoot,
-  }).pipe(Effect.mapError(mapWriteError(`Native OpenCode session is locked: ${sessionPath}`)));
+  });
   yield* fs
     .makeDirectory(sessionDir, { recursive: true })
     .pipe(

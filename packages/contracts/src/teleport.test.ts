@@ -3,12 +3,15 @@ import * as Schema from "effect/Schema";
 
 import {
   resolveTeleportPresence,
+  TeleportExportError,
+  TeleportLockProbeError,
   TeleportRuntimePayload,
   TeleportThreadState,
 } from "./teleport.ts";
 
 const decodeTeleportThreadState = Schema.decodeUnknownSync(TeleportThreadState);
 const decodeTeleportRuntimePayload = Schema.decodeUnknownSync(TeleportRuntimePayload);
+const decodeTeleportExportError = Schema.decodeUnknownSync(TeleportExportError);
 
 describe("teleport presence", () => {
   it("decodes a complete thread teleport state", () => {
@@ -55,5 +58,17 @@ describe("teleport presence", () => {
         lastSyncDirection: "import",
       }),
     ).toBe("t3");
+  });
+});
+
+describe("teleport lock probe errors", () => {
+  it("are part of the export error union", () => {
+    const parsed = decodeTeleportExportError({
+      _tag: "TeleportLockProbeError",
+      nativePath: "/tmp/session.jsonl",
+      message: "Failed to check whether /tmp/session.jsonl is locked.",
+    });
+    expect(parsed._tag).toBe("TeleportLockProbeError");
+    expect(parsed).toBeInstanceOf(TeleportLockProbeError);
   });
 });

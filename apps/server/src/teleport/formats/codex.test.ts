@@ -12,9 +12,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
 import { discoverTeleportSessions } from "../discovery.ts";
 import type { TeleportHomes } from "../homes.ts";
 import { buildTeleportResumeCursor, readTeleportExternalSessionId } from "../resumeCursors.ts";
+import { getTeleportFormat } from "./registry.ts";
 import {
   sampleTeleportSession,
   TELEPORT_TEST_CREATED_AT,
@@ -265,5 +268,44 @@ describe("teleport Codex format", () => {
       assert.equal(listed.sessions[0]?.externalSessionId, workSessionId);
       assert.equal(listed.sessions[0]?.providerInstanceId, "codex_work");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("writes a new Codex session under the selected instance home", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-codex-write-" });
+      const extraRoot = path.join(root, "codex-work", "sessions");
+      const defaultRoot = path.join(root, "codex", "sessions");
+      const homes: TeleportHomes = {
+        codexSessionsRoot: defaultRoot,
+        extraCodexSessionsRoots: [
+          {
+            root: extraRoot,
+            instanceId: ProviderInstanceId.make("codex_work"),
+          },
+        ],
+        claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
+        opencodeRoot: path.join(root, "opencode"),
+        grokSessionsRoot: path.join(root, "grok", "sessions"),
+      };
+      const adapter = getTeleportFormat("codex");
+      assert.ok(adapter);
+      const nativePath = yield* adapter.write({
+        homes,
+        session: {
+          ...sampleTeleportSession("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+        },
+      });
+      assert.equal(nativePath.startsWith(`${extraRoot}${path.sep}`), true);
+      assert.equal(nativePath.startsWith(`${defaultRoot}${path.sep}`), false);
+      assert.equal(yield* fs.exists(nativePath), true);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      Effect.provideService(HostProcessPlatform, "linux"),
+    ),
   );
 });

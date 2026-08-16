@@ -18,7 +18,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "../cwd.ts";
-import { claudeSearchRoots } from "../homes.ts";
+import { claudeSearchRoots, resolveClaudeProjectsRootForInstance } from "../homes.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { writeNativeSessionAtomically } from "../nativeWrite.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
@@ -332,16 +332,20 @@ registerTeleportFormat({
   }),
   write: Effect.fn("writeClaudeSession")(function* (input) {
     const path = yield* Path.Path;
+    const projectsRoot = resolveClaudeProjectsRootForInstance(
+      input.homes,
+      input.session.providerInstanceId ?? defaultInstanceIdForDriver(CLAUDE),
+    );
     if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
       return yield* new TeleportNativeWriteError({
-        nativePath: input.homes.claudeProjectsRoot,
+        nativePath: projectsRoot,
         message: `Refusing to write a Claude session with an unsafe id '${input.session.externalSessionId}'.`,
       });
     }
     const nativePath =
       input.existingNativePath ??
       allocateClaudeSessionPath({
-        projectsRoot: input.homes.claudeProjectsRoot,
+        projectsRoot,
         cwd: input.session.cwd,
         sessionId: input.session.externalSessionId,
         join: path.join,

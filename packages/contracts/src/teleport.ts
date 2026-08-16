@@ -166,6 +166,15 @@ export class TeleportFileLockedError extends Schema.TaggedErrorClass<TeleportFil
   },
 ) {}
 
+export class TeleportLockProbeError extends Schema.TaggedErrorClass<TeleportLockProbeError>()(
+  "TeleportLockProbeError",
+  {
+    nativePath: TrimmedNonEmptyString,
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 export class TeleportIdentityConflictError extends Schema.TaggedErrorClass<TeleportIdentityConflictError>()(
   "TeleportIdentityConflictError",
   {
@@ -214,6 +223,7 @@ export const TeleportImportError = Schema.Union([
   TeleportUnsupportedProviderError,
   TeleportSchemaVersionError,
   TeleportFileLockedError,
+  TeleportLockProbeError,
   TeleportIdentityConflictError,
   TeleportProjectResolutionError,
   TeleportDiscoveryError,
@@ -225,6 +235,7 @@ export const TeleportExportError = Schema.Union([
   TeleportUnsupportedProviderError,
   TeleportSchemaVersionError,
   TeleportFileLockedError,
+  TeleportLockProbeError,
   TeleportProjectResolutionError,
   TeleportNativeWriteError,
 ]);

@@ -1,4 +1,8 @@
-import { TeleportFileLockedError, TeleportNativeWriteError } from "@t3tools/contracts";
+import {
+  TeleportFileLockedError,
+  TeleportLockProbeError,
+  TeleportNativeWriteError,
+} from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -111,7 +115,7 @@ export const writeNativeSessionAtomically = Effect.fn("writeNativeSessionAtomica
     readonly verify: (contents: string) => Effect.Effect<unknown, TeleportNativeWriteError>;
   }): Effect.fn.Return<
     void,
-    TeleportNativeWriteError | TeleportFileLockedError,
+    TeleportNativeWriteError | TeleportFileLockedError | TeleportLockProbeError,
     FileSystem.FileSystem | Path.Path
   > {
     const fs = yield* FileSystem.FileSystem;

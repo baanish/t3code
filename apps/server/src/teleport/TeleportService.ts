@@ -712,6 +712,9 @@ export const make = Effect.gen(function* () {
             : undefined;
           const externalSessionId = existingExternalId ?? (yield* nextId());
           yield* claimExtraInFlight(inFlightKeys, `session:${provider}:${externalSessionId}`);
+          const providerInstanceId =
+            Option.getOrUndefined(binding)?.providerInstanceId ??
+            thread.value.modelSelection.instanceId;
           const latest = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
             Effect.mapError(
               (cause) =>
@@ -742,6 +745,7 @@ export const make = Effect.gen(function* () {
             createdAt: thread.value.createdAt,
             updatedAt: now,
             messages,
+            providerInstanceId,
           };
 
           const existingNativePath = existingPayload?.nativePath;
@@ -771,9 +775,7 @@ export const make = Effect.gen(function* () {
             .upsert({
               threadId: input.threadId,
               provider: driverKind,
-              providerInstanceId:
-                Option.getOrUndefined(binding)?.providerInstanceId ??
-                defaultInstanceIdForDriver(driverKind),
+              providerInstanceId,
               status: "stopped",
               resumeCursor: buildTeleportResumeCursor({ provider, externalSessionId }),
               runtimePayload: { teleport: teleportPayload },
@@ -812,7 +814,7 @@ export const make = Effect.gen(function* () {
           return {
             schemaVersion: TELEPORT_SCHEMA_VERSION,
             provider,
-            providerInstanceId: defaultInstanceIdForDriver(driverKind),
+            providerInstanceId,
             externalSessionId,
             nativePath,
             cwd,

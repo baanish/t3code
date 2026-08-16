@@ -17,7 +17,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { teleportCwdsEquivalent } from "../cwd.ts";
-import { codexSearchRoots } from "../homes.ts";
+import { codexSearchRoots, resolveCodexSessionsRoot } from "../homes.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import {
@@ -382,9 +382,13 @@ registerTeleportFormat({
   }),
   write: Effect.fn("writeCodexSession")(function* (input) {
     const path = yield* Path.Path;
+    const sessionsRoot = resolveCodexSessionsRoot(
+      input.homes,
+      input.session.providerInstanceId ?? defaultInstanceIdForDriver(CODEX),
+    );
     if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
       return yield* new TeleportNativeWriteError({
-        nativePath: input.homes.codexSessionsRoot,
+        nativePath: sessionsRoot,
         message: `Refusing to write a Codex session with an unsafe id '${input.session.externalSessionId}'.`,
       });
     }
@@ -392,7 +396,7 @@ registerTeleportFormat({
     const nativePath =
       input.existingNativePath ??
       allocateCodexSessionPath({
-        sessionsRoot: input.homes.codexSessionsRoot,
+        sessionsRoot,
         sessionId: input.session.externalSessionId,
         createdAt: input.session.createdAt ?? input.session.updatedAt ?? DateTime.formatIso(now),
         join: path.join,

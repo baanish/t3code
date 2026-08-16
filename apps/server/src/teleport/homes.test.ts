@@ -6,7 +6,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { resolveTeleportHomes } from "./homes.ts";
+import {
+  resolveClaudeProjectsRootForInstance,
+  resolveCodexSessionsRoot,
+  resolveTeleportHomes,
+} from "./homes.ts";
 
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 
@@ -36,6 +40,14 @@ describe("resolveTeleportHomes", () => {
       assert.equal(homes.extraCodexSessionsRoots.length, 1);
       assert.equal(homes.extraCodexSessionsRoots[0]?.instanceId, "codex_work");
       assert.equal(homes.extraCodexSessionsRoots[0]?.root, path.join(workHome, "sessions"));
+      assert.equal(
+        resolveCodexSessionsRoot(homes, ProviderInstanceId.make("codex_work")),
+        path.join(workHome, "sessions"),
+      );
+      assert.equal(
+        resolveCodexSessionsRoot(homes, ProviderInstanceId.make("codex")),
+        path.join(defaultHome, "sessions"),
+      );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -92,6 +104,14 @@ describe("resolveTeleportHomes", () => {
       assert.equal(
         homes.extraClaudeProjectsRoots[0]?.root,
         path.join(workHome, ".claude", "projects"),
+      );
+      assert.equal(
+        resolveClaudeProjectsRootForInstance(homes, ProviderInstanceId.make("claude_work")),
+        path.join(workHome, ".claude", "projects"),
+      );
+      assert.equal(
+        resolveClaudeProjectsRootForInstance(homes, ProviderInstanceId.make("claudeAgent")),
+        path.join(defaultHome, "projects"),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

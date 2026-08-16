@@ -3,7 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeUtil from "node:util";
 
-import { TeleportFileLockedError } from "@t3tools/contracts";
+import { TeleportFileLockedError, TeleportLockProbeError } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 
@@ -57,7 +57,7 @@ const isWindowsPathInUse = Effect.fn("isWindowsPathInUse")(function* (nativePath
       }
     },
     catch: (cause) =>
-      new TeleportFileLockedError({
+      new TeleportLockProbeError({
         nativePath,
         message: `Failed to check whether ${nativePath} is locked.`,
         cause,
@@ -86,7 +86,7 @@ export const isNativePathLocked = Effect.fn("isNativePathLocked")(function* (nat
       }
     },
     catch: (cause) =>
-      new TeleportFileLockedError({
+      new TeleportLockProbeError({
         nativePath,
         message: `Failed to check whether ${nativePath} is locked.`,
         cause,

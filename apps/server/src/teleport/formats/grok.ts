@@ -3,6 +3,8 @@
 import {
   TELEPORT_NATIVE_FORMAT_VERSION,
   TeleportDiscoveryError,
+  TeleportFileLockedError,
+  TeleportLockProbeError,
   TeleportNativeWriteError,
   TeleportSchemaVersionError,
   defaultInstanceIdForDriver,
@@ -139,7 +141,11 @@ export const writeGrokSession = Effect.fn("writeGrokSession")(function* (input: 
   readonly sessionsRoot: string;
   readonly session: ParsedNativeSession;
   readonly existingNativePath?: string;
-}): Effect.fn.Return<string, TeleportNativeWriteError, FileSystem.FileSystem | Path.Path> {
+}): Effect.fn.Return<
+  string,
+  TeleportNativeWriteError | TeleportFileLockedError | TeleportLockProbeError,
+  FileSystem.FileSystem | Path.Path
+> {
   if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
     return yield* new TeleportNativeWriteError({
       nativePath: input.sessionsRoot,
@@ -164,9 +170,7 @@ export const writeGrokSession = Effect.fn("writeGrokSession")(function* (input: 
   const updatesContents = serializeGrokUpdates(input.session);
   const chatHistoryContents = serializeGrokChatHistory(input.session);
 
-  yield* requireGrokSessionUnlocked(nativePath).pipe(
-    Effect.mapError(mapWriteError(`Native Grok session is locked: ${nativePath}`)),
-  );
+  yield* requireGrokSessionUnlocked(nativePath);
 
   yield* fs
     .makeDirectory(path.dirname(nativePath), { recursive: true })
@@ -222,9 +226,7 @@ export const writeGrokSession = Effect.fn("writeGrokSession")(function* (input: 
           message: `Exported Grok session failed verification: ${nativePath}`,
         });
       }
-      yield* requireGrokSessionUnlocked(nativePath).pipe(
-        Effect.mapError(mapWriteError(`Native Grok session is locked: ${nativePath}`)),
-      );
+      yield* requireGrokSessionUnlocked(nativePath);
       const destStat = yield* fs.stat(nativePath).pipe(Effect.orElseSucceed(() => null));
       if (destStat?.type === "File") {
         yield* fs
