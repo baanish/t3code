@@ -1,11 +1,13 @@
-import type {
-  EnvironmentId,
-  MessageId,
-  ModelSelection,
-  OrchestrationThreadShell,
-  ProviderInteractionMode,
-  RuntimeMode,
-  ServerConfig as T3ServerConfig,
+import {
+  isTeleportedOut,
+  TELEPORTED_OUT_SEND_DISABLED_REASON,
+  type EnvironmentId,
+  type MessageId,
+  type ModelSelection,
+  type OrchestrationThreadShell,
+  type ProviderInteractionMode,
+  type RuntimeMode,
+  type ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
   detectComposerTrigger,
@@ -284,10 +286,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
+  const teleportedOut = isTeleportedOut(props.selectedThread.teleport);
   // Opening and presentation count as active so the composer stays expanded
   // while focus moves between its native editor and the settings picker.
   const isExpanded = isFocused || settingsSheetPresentation.isActive;
-  const canSend = hasContent;
+  const canSend = hasContent && !teleportedOut;
+  const placeholder = teleportedOut ? TELEPORTED_OUT_SEND_DISABLED_REASON : props.placeholder;
 
   // Notify the parent from the derived value, not focus events: the parent
   // sizes the feed inset from this, and blur-during-sheet would otherwise
@@ -528,6 +532,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
 
   const handleSend = useCallback(async () => {
+    if (isTeleportedOut(props.selectedThread.teleport)) {
+      return;
+    }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
@@ -551,6 +558,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.environmentLabel,
     props.selectedThread.id,
     props.selectedThread.title,
+    props.selectedThread.teleport,
   ]);
   const handleCommandSelect = useCallback(
     (item: ComposerCommandItem) => {
@@ -781,7 +789,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               onChangeText={props.onChangeDraftMessage}
               onSelectionChange={handleSelectionChange}
               onPasteImages={(uris) => void props.onNativePasteImages(uris)}
-              placeholder={props.placeholder}
+              placeholder={placeholder}
               onFocus={handleFocus}
               onBlur={handleBlur}
               onSubmit={handleSend}
