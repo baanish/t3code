@@ -2,7 +2,11 @@
 // @effect-diagnostics preferSchemaOverJson:off
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderDriverKind, TELEPORT_NATIVE_FORMAT_VERSION } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  TELEPORT_NATIVE_FORMAT_VERSION,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -191,7 +195,9 @@ describe("teleport Codex format", () => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-codex-homes-" });
       const homes: TeleportHomes = {
         codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [],
         claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
         opencodeRoot: path.join(root, "opencode"),
         grokSessionsRoot: path.join(root, "grok", "sessions"),
       };
@@ -212,6 +218,52 @@ describe("teleport Codex format", () => {
       assert.equal(listed.sessions.length, 1);
       assert.equal(listed.sessions[0]?.provider, "codex");
       assert.equal(listed.sessions[0]?.externalSessionId, TELEPORT_TEST_SESSION_ID);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("lists Codex sessions from extra instance homePaths", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-codex-extra-" });
+      const workSessionId = "22222222-2222-4222-8222-222222222222";
+      const extraRoot = path.join(root, "codex-work", "sessions");
+      const homes: TeleportHomes = {
+        codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [
+          {
+            root: extraRoot,
+            instanceId: ProviderInstanceId.make("codex_work"),
+          },
+        ],
+        claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
+        opencodeRoot: path.join(root, "opencode"),
+        grokSessionsRoot: path.join(root, "grok", "sessions"),
+      };
+      const extraPath = path.join(
+        extraRoot,
+        "2026",
+        "08",
+        "14",
+        `rollout-2026-08-14T06-00-00-${workSessionId}.jsonl`,
+      );
+      yield* fs.makeDirectory(path.dirname(extraPath), { recursive: true });
+      yield* fs.writeFileString(
+        extraPath,
+        serializeCodexSession({
+          ...sampleTeleportSession("codex"),
+          externalSessionId: workSessionId,
+        }),
+      );
+      const listed = yield* discoverTeleportSessions({
+        homes,
+        cwd: "/workspace",
+        providers: ["codex"],
+      });
+      assert.equal(listed.sessions.length, 1);
+      assert.equal(listed.sessions[0]?.externalSessionId, workSessionId);
+      assert.equal(listed.sessions[0]?.providerInstanceId, "codex_work");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

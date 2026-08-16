@@ -179,7 +179,9 @@ describe("teleport Grok format", () => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-grok-homes-" });
       const homes: TeleportHomes = {
         codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [],
         claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
         opencodeRoot: path.join(root, "opencode"),
         grokSessionsRoot: path.join(root, "grok", "sessions"),
       };
@@ -208,7 +210,9 @@ describe("teleport Grok format", () => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-grok-newer-" });
       const homes: TeleportHomes = {
         codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [],
         claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
         opencodeRoot: path.join(root, "opencode"),
         grokSessionsRoot: path.join(root, "grok", "sessions"),
       };

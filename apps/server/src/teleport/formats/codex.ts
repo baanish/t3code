@@ -7,6 +7,7 @@ import {
   TeleportSchemaVersionError,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
+  type ProviderInstanceId,
   type TeleportSessionCandidate,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -16,6 +17,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { teleportCwdsEquivalent } from "../cwd.ts";
+import { codexSearchRoots } from "../homes.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import {
@@ -289,10 +291,13 @@ export const listCodexJsonlFiles = Effect.fn("listCodexJsonlFiles")(function* (
   return yield* walkFiles(sessionsRoot, (filePath) => filePath.endsWith(".jsonl"));
 });
 
-export function toCodexCandidate(session: ParsedNativeSession): TeleportSessionCandidate {
+export function toCodexCandidate(
+  session: ParsedNativeSession,
+  instanceId: ProviderInstanceId = defaultInstanceIdForDriver(CODEX),
+): TeleportSessionCandidate {
   return {
     provider: "codex",
-    providerInstanceId: defaultInstanceIdForDriver(CODEX),
+    providerInstanceId: instanceId,
     externalSessionId: session.externalSessionId,
     cwd: session.cwd,
     nativePath: session.nativePath,
@@ -339,20 +344,27 @@ const walkFiles = Effect.fn("walkFiles")(function* (
 registerTeleportFormat({
   provider: "codex",
   list: Effect.fn("listCodexSessions")(function* (input) {
-    const files = yield* listCodexJsonlFiles(input.homes.codexSessionsRoot);
     const sessions = [];
-    for (const nativePath of files) {
-      const parsed = yield* readNativeSessionFile({
-        nativePath,
-        parse: parseCodexSessionContents,
-      });
-      if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
-        continue;
+    const seen = new Set<string>();
+    for (const home of codexSearchRoots(input.homes)) {
+      const files = yield* listCodexJsonlFiles(home.root);
+      for (const nativePath of files) {
+        if (seen.has(nativePath)) {
+          continue;
+        }
+        const parsed = yield* readNativeSessionFile({
+          nativePath,
+          parse: parseCodexSessionContents,
+        });
+        if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
+          continue;
+        }
+        if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
+          continue;
+        }
+        seen.add(nativePath);
+        sessions.push(toCodexCandidate(parsed.value, home.instanceId));
       }
-      if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
-        continue;
-      }
-      sessions.push(toCodexCandidate(parsed.value));
     }
     return sessions;
   }),

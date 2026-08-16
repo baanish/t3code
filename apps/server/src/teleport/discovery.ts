@@ -75,10 +75,17 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
     });
   }
 
-  return yield* adapter.load({
-    homes: input.homes,
-    cwd: input.cwd,
-    externalSessionId: input.externalSessionId,
-    nativePath: candidate.nativePath,
-  });
+  return yield* adapter
+    .load({
+      homes: input.homes,
+      cwd: input.cwd,
+      externalSessionId: input.externalSessionId,
+      nativePath: candidate.nativePath,
+    })
+    .pipe(
+      Effect.map((parsed) => ({
+        ...parsed,
+        providerInstanceId: candidate.providerInstanceId,
+      })),
+    );
 });

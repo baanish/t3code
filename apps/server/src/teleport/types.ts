@@ -19,6 +19,7 @@ export interface ParsedNativeSession {
   readonly createdAt?: string;
   readonly updatedAt?: string;
   readonly messages: ReadonlyArray<NativeTextMessage>;
+  readonly providerInstanceId?: TeleportSessionCandidate["providerInstanceId"];
 }
 
 export function nativeTextMessage(input: {

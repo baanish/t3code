@@ -8,6 +8,7 @@ import {
   TeleportSchemaVersionError,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
+  type ProviderInstanceId,
   type TeleportSessionCandidate,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForDispatch } from "@t3tools/shared/path";
@@ -17,6 +18,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "../cwd.ts";
+import { claudeSearchRoots } from "../homes.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { writeNativeSessionAtomically } from "../nativeWrite.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
@@ -238,10 +240,13 @@ export const listClaudeJsonlFiles = Effect.fn("listClaudeJsonlFiles")(function* 
   return files;
 });
 
-export function toClaudeCandidate(session: ParsedNativeSession): TeleportSessionCandidate {
+export function toClaudeCandidate(
+  session: ParsedNativeSession,
+  instanceId: ProviderInstanceId = defaultInstanceIdForDriver(CLAUDE),
+): TeleportSessionCandidate {
   return {
     provider: "claudeAgent",
-    providerInstanceId: defaultInstanceIdForDriver(CLAUDE),
+    providerInstanceId: instanceId,
     externalSessionId: session.externalSessionId,
     cwd: session.cwd,
     nativePath: session.nativePath,
@@ -289,20 +294,27 @@ const walkJsonl = Effect.fn("walkClaudeJsonl")(function* (root: string) {
 registerTeleportFormat({
   provider: "claudeAgent",
   list: Effect.fn("listClaudeSessions")(function* (input) {
-    const files = yield* listClaudeJsonlFiles(input.homes.claudeProjectsRoot, input.cwd);
     const sessions = [];
-    for (const nativePath of files) {
-      const parsed = yield* readNativeSessionFile({
-        nativePath,
-        parse: parseClaudeSessionContents,
-      });
-      if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
-        continue;
+    const seen = new Set<string>();
+    for (const home of claudeSearchRoots(input.homes)) {
+      const files = yield* listClaudeJsonlFiles(home.root, input.cwd);
+      for (const nativePath of files) {
+        if (seen.has(nativePath)) {
+          continue;
+        }
+        const parsed = yield* readNativeSessionFile({
+          nativePath,
+          parse: parseClaudeSessionContents,
+        });
+        if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
+          continue;
+        }
+        if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
+          continue;
+        }
+        seen.add(nativePath);
+        sessions.push(toClaudeCandidate(parsed.value, home.instanceId));
       }
-      if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
-        continue;
-      }
-      sessions.push(toClaudeCandidate(parsed.value));
     }
     return sessions;
   }),

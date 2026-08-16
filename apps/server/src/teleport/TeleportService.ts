@@ -20,6 +20,7 @@ import {
   resolveTeleportPresence,
   type ModelSelection,
   type OrchestrationMessage,
+  type ProviderInstanceId,
   type TeleportExportError,
   type TeleportExportSessionInput,
   type TeleportExportSessionResult,
@@ -87,10 +88,13 @@ export class TeleportService extends Context.Service<
   }
 >()("t3/teleport/TeleportService") {}
 
-function modelSelectionForProvider(provider: TeleportProvider): ModelSelection {
+function modelSelectionForProvider(
+  provider: TeleportProvider,
+  instanceId?: ProviderInstanceId,
+): ModelSelection {
   const driver = ProviderDriverKind.make(provider);
   return {
-    instanceId: defaultInstanceIdForDriver(driver),
+    instanceId: instanceId ?? defaultInstanceIdForDriver(driver),
     model: DEFAULT_MODEL_BY_PROVIDER[driver] ?? DEFAULT_MODEL,
   };
 }
@@ -450,7 +454,10 @@ export const make = Effect.gen(function* () {
                   threadId,
                   projectId: input.projectId,
                   title,
-                  modelSelection: modelSelectionForProvider(parsed.provider),
+                  modelSelection: modelSelectionForProvider(
+                    parsed.provider,
+                    parsed.providerInstanceId,
+                  ),
                   runtimeMode: DEFAULT_RUNTIME_MODE,
                   interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
                   branch: null,
@@ -486,7 +493,9 @@ export const make = Effect.gen(function* () {
             }
 
             const providerInstanceId =
-              existingProviderInstanceId ?? defaultInstanceIdForDriver(driver);
+              existingProviderInstanceId ??
+              parsed.providerInstanceId ??
+              defaultInstanceIdForDriver(driver);
             const teleportPayload: TeleportRuntimePayload = {
               schemaVersion: TELEPORT_SCHEMA_VERSION,
               externalSessionId: parsed.externalSessionId,
@@ -787,14 +796,14 @@ export const make = Effect.gen(function* () {
               createdAt: now,
             })
             .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new TeleportInvalidInputError({
-                      message: "Failed to persist teleport presence.",
-                      cause,
-                    }),
-                ),
-              );
+              Effect.mapError(
+                (cause) =>
+                  new TeleportInvalidInputError({
+                    message: "Failed to persist teleport presence.",
+                    cause,
+                  }),
+              ),
+            );
 
           return {
             schemaVersion: TELEPORT_SCHEMA_VERSION,
