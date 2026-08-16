@@ -20,6 +20,7 @@ import {
   readOpenCodeSessionById,
   requireOpenCodeSessionUnlocked,
   writeOpenCodeSession,
+  createOpenCodeId,
 } from "./opencode.ts";
 
 function writeOpenCodeSqliteFixture(input: {
@@ -85,7 +86,139 @@ function writeOpenCodeSqliteFixture(input: {
   }
 }
 
+function writeOpenCodeV115SqliteSchema(dbPath: string): void {
+  const db = new NodeSqlite.DatabaseSync(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE project (
+        id TEXT PRIMARY KEY,
+        worktree TEXT NOT NULL,
+        sandboxes TEXT NOT NULL,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL
+      );
+      CREATE TABLE session (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        directory TEXT NOT NULL,
+        title TEXT NOT NULL,
+        version TEXT NOT NULL,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL,
+        time_archived INTEGER,
+        cost REAL NOT NULL DEFAULT 0,
+        tokens_input INTEGER NOT NULL DEFAULT 0,
+        tokens_output INTEGER NOT NULL DEFAULT 0,
+        tokens_reasoning INTEGER NOT NULL DEFAULT 0,
+        tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+        tokens_cache_write INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE message (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL,
+        data TEXT NOT NULL
+      );
+      CREATE TABLE part (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL,
+        data TEXT NOT NULL
+      );
+    `);
+  } finally {
+    db.close();
+  }
+}
+
 describe("teleport OpenCode format", () => {
+  it.effect("writes OpenCode sqlite rows with required columns and prefixed ids", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-opencode-sqlite-write-" });
+      const dbPath = path.join(root, "opencode.db");
+      writeOpenCodeV115SqliteSchema(dbPath);
+      const sessionId = createOpenCodeId("ses");
+      const session = {
+        ...sampleTeleportSession("opencode", "/workspace"),
+        externalSessionId: sessionId,
+      };
+      yield* writeOpenCodeSession({
+        opencodeRoot: root,
+        session,
+      });
+      const db = new NodeSqlite.DatabaseSync(dbPath, { readOnly: true });
+      try {
+        const sessionRow = db.prepare(`SELECT * FROM session WHERE id = ?`).get(sessionId) as
+          | Record<string, unknown>
+          | undefined;
+        assert.ok(sessionRow);
+        assert.equal(typeof sessionRow.project_id, "string");
+        assert.ok(String(sessionRow.project_id).length > 0);
+        assert.equal(typeof sessionRow.slug, "string");
+        assert.ok(String(sessionRow.slug).length > 0);
+        assert.equal(sessionRow.version, "1.15.13");
+        assert.equal(sessionRow.directory, "/workspace");
+        const messageRows = db
+          .prepare(`SELECT id, session_id, time_updated FROM message WHERE session_id = ?`)
+          .all(sessionId) as ReadonlyArray<Record<string, unknown>>;
+        assert.equal(messageRows.length, 2);
+        for (const row of messageRows) {
+          assert.match(String(row.id), /^msg_/u);
+          assert.equal(row.session_id, sessionId);
+          assert.equal(typeof row.time_updated, "number");
+        }
+        const partRows = db
+          .prepare(`SELECT id, session_id, time_updated FROM part WHERE session_id = ?`)
+          .all(sessionId) as ReadonlyArray<Record<string, unknown>>;
+        assert.equal(partRows.length, 2);
+        for (const row of partRows) {
+          assert.match(String(row.id), /^prt_/u);
+          assert.equal(row.session_id, sessionId);
+          assert.equal(typeof row.time_updated, "number");
+        }
+      } finally {
+        db.close();
+      }
+      const parsed = yield* readOpenCodeSessionById({
+        opencodeRoot: root,
+        sessionId,
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.messages.length, 2);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("fails OpenCode export when sqlite exists but rejects the session row", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-opencode-sqlite-fail-" });
+      writeOpenCodeSqliteFixture({
+        dbPath: path.join(root, "opencode.db"),
+        sessions: [],
+      });
+      const result = yield* writeOpenCodeSession({
+        opencodeRoot: root,
+        session: sampleTeleportSession("opencode", "/workspace"),
+      }).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it("creates OpenCode ids that match the ses_/msg_/prt_ contract", () => {
+    assert.match(createOpenCodeId("ses"), /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/u);
+    assert.match(createOpenCodeId("msg"), /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/u);
+    assert.match(createOpenCodeId("prt"), /^prt_[0-9a-f]{12}[0-9A-Za-z]{14}$/u);
+  });
+
   it.effect("roundtrips OpenCode json storage", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

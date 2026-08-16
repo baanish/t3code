@@ -10,6 +10,7 @@ import {
   isForeignOpenCodeProjectFolder,
   isGenericTeleportCwd,
   isTeleportCwdWithin,
+  openCodeDirectoryMayMatch,
   opencodeSessionMatchesProjectCwd,
   resolveTeleportCwdPath,
   teleportCwdsEquivalent,
@@ -72,6 +73,14 @@ describe("teleport cwd matching", () => {
     assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/codex"), true);
     assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/claude"), true);
     assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/opencode"), false);
+    assert.equal(
+      openCodeDirectoryMayMatch(
+        "/home/user/projects/native",
+        "/home/user/projects/native/opencode",
+      ),
+      true,
+    );
+    assert.equal(openCodeDirectoryMayMatch("/tmp", "/tmp/oc-wire-test"), false);
   });
 
   it.effect("does not list a parent OpenCode session under a Codex project folder", () =>

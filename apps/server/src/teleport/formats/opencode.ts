@@ -17,7 +17,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { opencodeSessionMatchesProjectCwd, teleportCwdsMatch } from "../cwd.ts";
+import {
+  openCodeDirectoryMayMatch,
+  opencodeSessionMatchesProjectCwd,
+  teleportCwdsMatch,
+} from "../cwd.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import {
   firstUserTitle,
@@ -27,7 +31,6 @@ import {
   nonEmptyString,
   parseJsonObject,
 } from "../json.ts";
-import { registerTeleportFormat } from "./registry.ts";
 import {
   nativeTextMessage,
   parsedNativeSession,
@@ -35,8 +38,14 @@ import {
   type NativeTextMessage,
   type ParsedNativeSession,
 } from "../types.ts";
+import { createOpenCodeId, ensureOpenCodeId } from "./opencodeIds.ts";
+import { registerTeleportFormat } from "./registry.ts";
+
+export { createOpenCodeId, ensureOpenCodeId } from "./opencodeIds.ts";
 
 const OPENCODE = ProviderDriverKind.make("opencode");
+const OPENCODE_SESSION_VERSION = "1.15.13";
+const OPENCODE_GLOBAL_PROJECT_ID = "global";
 
 function dateFromMillis(value: unknown): string | undefined {
   return typeof value === "number" && Number.isFinite(value)
@@ -127,7 +136,6 @@ export const listOpenCodeSessions = Effect.fn("listOpenCodeSessions")(function* 
   const sqliteSessions = yield* readOpenCodeSqliteSessions({
     opencodeRoot: input.opencodeRoot,
     cwd: input.cwd,
-    pathsMatch: () => true,
   });
   const candidates =
     sqliteSessions.length > 0
@@ -156,7 +164,6 @@ export const readOpenCodeSessionById = Effect.fn("readOpenCodeSessionById")(func
   const sqlite = yield* readOpenCodeSqliteSessions({
     opencodeRoot: input.opencodeRoot,
     cwd: "",
-    pathsMatch: () => true,
     sessionId: input.sessionId,
   });
   const fromSqlite = sqlite.find((session) => session.externalSessionId === input.sessionId);
@@ -171,7 +178,6 @@ export const readOpenCodeSessionById = Effect.fn("readOpenCodeSessionById")(func
 const readOpenCodeSqliteSessions = Effect.fn("readOpenCodeSqliteSessions")(function* (input: {
   readonly opencodeRoot: string;
   readonly cwd: string;
-  readonly pathsMatch: (left: string, right: string) => boolean;
   readonly sessionId?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -226,6 +232,9 @@ const readOpenCodeSqliteSessions = Effect.fn("readOpenCodeSqliteSessions")(funct
           const id = nonEmptyString(row.id);
           const cwd = nonEmptyString(row.directory);
           if (!id || !cwd || !isSafeTeleportSessionId(id)) {
+            continue;
+          }
+          if (input.sessionId === undefined && !openCodeDirectoryMayMatch(cwd, input.cwd)) {
             continue;
           }
           const messageRows = db
@@ -463,6 +472,23 @@ export const writeOpenCodeSession = Effect.fn("writeOpenCodeSession")(function* 
         mapWriteError(`Failed to create OpenCode session directory for ${sessionPath}.`),
       ),
     );
+  const messageRecords = input.session.messages.map((message) => {
+    const messageId = ensureOpenCodeId("msg", message.id);
+    return {
+      message,
+      messageId,
+      partId: createOpenCodeId("prt"),
+    };
+  });
+
+  yield* writeOpenCodeSqliteSession({
+    opencodeRoot: input.opencodeRoot,
+    session: input.session,
+    created,
+    updated,
+    messages: messageRecords,
+  });
+
   yield* fs
     .writeFileString(
       sessionPath,
@@ -505,54 +531,100 @@ export const writeOpenCodeSession = Effect.fn("writeOpenCodeSession")(function* 
         mapWriteError(`Failed to create OpenCode message directory for ${sessionPath}.`),
       ),
     );
-  for (const [index, message] of input.session.messages.entries()) {
-    const requestedId = message.id ?? `${input.session.externalSessionId}-m${index}`;
-    const messageId = isSafeTeleportSessionId(requestedId)
-      ? requestedId
-      : `${input.session.externalSessionId}-m${index}`;
+  for (const record of messageRecords) {
     yield* fs
       .writeFileString(
-        path.join(messageRoot, `${messageId}.json`),
+        path.join(messageRoot, `${record.messageId}.json`),
         `${JSON.stringify({
-          id: messageId,
+          id: record.messageId,
           sessionID: input.session.externalSessionId,
-          role: message.role,
-          time: { created: millisFromIso(message.createdAt) },
+          role: record.message.role,
+          time: { created: millisFromIso(record.message.createdAt) },
           path: { cwd: input.session.cwd },
         })}\n`,
       )
-      .pipe(Effect.mapError(mapWriteError(`Failed to write OpenCode message ${messageId}.`)));
-    const partRoot = path.join(input.opencodeRoot, "storage", "part", messageId);
+      .pipe(
+        Effect.mapError(mapWriteError(`Failed to write OpenCode message ${record.messageId}.`)),
+      );
+    const partRoot = path.join(input.opencodeRoot, "storage", "part", record.messageId);
     yield* fs
       .makeDirectory(partRoot, { recursive: true })
       .pipe(
         Effect.mapError(
-          mapWriteError(`Failed to create OpenCode part directory for ${messageId}.`),
+          mapWriteError(`Failed to create OpenCode part directory for ${record.messageId}.`),
         ),
       );
     yield* fs
       .writeFileString(
-        path.join(partRoot, `${messageId}-text.json`),
-        `${JSON.stringify({ type: "text", text: message.text })}\n`,
+        path.join(partRoot, `${record.partId}.json`),
+        `${JSON.stringify({
+          id: record.partId,
+          sessionID: input.session.externalSessionId,
+          messageID: record.messageId,
+          type: "text",
+          text: record.message.text,
+        })}\n`,
       )
-      .pipe(Effect.mapError(mapWriteError(`Failed to write OpenCode part for ${messageId}.`)));
+      .pipe(
+        Effect.mapError(mapWriteError(`Failed to write OpenCode part for ${record.messageId}.`)),
+      );
   }
-
-  yield* writeOpenCodeSqliteSession({
-    opencodeRoot: input.opencodeRoot,
-    session: input.session,
-    created,
-    updated,
-  }).pipe(Effect.orElseSucceed(() => undefined));
 
   return sessionPath;
 });
+
+function sqliteTableExists(db: NodeSqlite.DatabaseSync, name: string): boolean {
+  const row = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+    .get(name) as { readonly name?: unknown } | undefined;
+  return nonEmptyString(row?.name) === name;
+}
+
+function ensureOpenCodeProjectId(
+  db: NodeSqlite.DatabaseSync,
+  directory: string,
+  now: number,
+): string {
+  if (!sqliteTableExists(db, "project")) {
+    throw new Error("OpenCode sqlite store is missing the project table.");
+  }
+  const byWorktree = db
+    .prepare(`SELECT id FROM project WHERE worktree = ? LIMIT 1`)
+    .get(directory) as { readonly id?: unknown } | undefined;
+  const existing = nonEmptyString(byWorktree?.id);
+  if (existing) {
+    return existing;
+  }
+  const globalRow = db
+    .prepare(`SELECT id FROM project WHERE id = ? LIMIT 1`)
+    .get(OPENCODE_GLOBAL_PROJECT_ID) as { readonly id?: unknown } | undefined;
+  if (nonEmptyString(globalRow?.id) === OPENCODE_GLOBAL_PROJECT_ID) {
+    return OPENCODE_GLOBAL_PROJECT_ID;
+  }
+  db.prepare(
+    `
+      INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+      VALUES (?, ?, ?, ?, ?)
+    `,
+  ).run(OPENCODE_GLOBAL_PROJECT_ID, "/", "[]", now, now);
+  return OPENCODE_GLOBAL_PROJECT_ID;
+}
+
+function openCodeSessionSlug(sessionId: string): string {
+  const compact = sessionId.replace(/[^a-zA-Z0-9]/gu, "");
+  return compact.length > 0 ? compact.slice(-12).toLowerCase() : "t3teleport";
+}
 
 const writeOpenCodeSqliteSession = Effect.fn("writeOpenCodeSqliteSession")(function* (input: {
   readonly opencodeRoot: string;
   readonly session: ParsedNativeSession;
   readonly created: number;
   readonly updated: number;
+  readonly messages: ReadonlyArray<{
+    readonly message: NativeTextMessage;
+    readonly messageId: string;
+    readonly partId: string;
+  }>;
 }) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
@@ -561,69 +633,94 @@ const writeOpenCodeSqliteSession = Effect.fn("writeOpenCodeSqliteSession")(funct
   if (!exists) {
     return;
   }
-  yield* Effect.sync(() => {
-    try {
+  const sessionId = input.session.externalSessionId;
+  const title =
+    input.session.title ??
+    firstUserTitle(input.session.messages) ??
+    input.session.externalSessionId;
+  yield* Effect.try({
+    try: () => {
       const db = new NodeSqlite.DatabaseSync(dbPath);
       try {
         db.exec("BEGIN");
-        db.prepare(
-          `DELETE FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id = ?)`,
-        ).run(input.session.externalSessionId);
-        db.prepare(`DELETE FROM message WHERE session_id = ?`).run(input.session.externalSessionId);
-        db.prepare(
-          `
-            INSERT OR REPLACE INTO session (id, directory, title, time_created, time_updated)
-            VALUES (?, ?, ?, ?, ?)
-          `,
-        ).run(
-          input.session.externalSessionId,
-          input.session.cwd,
-          input.session.title ??
-            firstUserTitle(input.session.messages) ??
-            input.session.externalSessionId,
-          input.created,
-          input.updated,
-        );
-        for (const [index, message] of input.session.messages.entries()) {
-          const messageId = message.id ?? `${input.session.externalSessionId}-m${index}`;
-          const created = millisFromIso(message.createdAt);
+        try {
+          const projectId = ensureOpenCodeProjectId(db, input.session.cwd, input.updated);
+          db.prepare(
+            `DELETE FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id = ?)`,
+          ).run(sessionId);
+          db.prepare(`DELETE FROM message WHERE session_id = ?`).run(sessionId);
+          db.prepare(`DELETE FROM session WHERE id = ?`).run(sessionId);
           db.prepare(
             `
-              INSERT OR REPLACE INTO message (id, session_id, time_created, data)
-              VALUES (?, ?, ?, ?)
+              INSERT INTO session (
+                id, project_id, slug, directory, title, version,
+                time_created, time_updated, cost,
+                tokens_input, tokens_output, tokens_reasoning,
+                tokens_cache_read, tokens_cache_write
+              )
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0)
             `,
           ).run(
-            messageId,
-            input.session.externalSessionId,
-            created,
-            JSON.stringify({
-              role: message.role,
-              time: { created },
-              path: { cwd: input.session.cwd },
-            }),
+            sessionId,
+            projectId,
+            openCodeSessionSlug(sessionId),
+            input.session.cwd,
+            title,
+            OPENCODE_SESSION_VERSION,
+            input.created,
+            input.updated,
           );
-          db.prepare(
-            `
-              INSERT OR REPLACE INTO part (id, message_id, time_created, data)
-              VALUES (?, ?, ?, ?)
-            `,
-          ).run(
-            `${messageId}-text`,
-            messageId,
-            created,
-            JSON.stringify({ type: "text", text: message.text }),
-          );
+          for (const record of input.messages) {
+            const created = millisFromIso(record.message.createdAt);
+            db.prepare(
+              `
+                INSERT INTO message (id, session_id, time_created, time_updated, data)
+                VALUES (?, ?, ?, ?, ?)
+              `,
+            ).run(
+              record.messageId,
+              sessionId,
+              created,
+              created,
+              JSON.stringify({
+                role: record.message.role,
+                time: { created },
+                path: { cwd: input.session.cwd },
+              }),
+            );
+            db.prepare(
+              `
+                INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                VALUES (?, ?, ?, ?, ?, ?)
+              `,
+            ).run(
+              record.partId,
+              record.messageId,
+              sessionId,
+              created,
+              created,
+              JSON.stringify({ type: "text", text: record.message.text }),
+            );
+          }
+          db.exec("COMMIT");
+        } catch (error) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // The original INSERT failure is the one to report.
+          }
+          throw error;
         }
-        db.exec("COMMIT");
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
       } finally {
         db.close();
       }
-    } catch {
-      // JSON files are the export source of truth; SQLite is best-effort.
-    }
+    },
+    catch: (cause) =>
+      new TeleportNativeWriteError({
+        nativePath: dbPath,
+        message: `Failed to write OpenCode sqlite session '${sessionId}'.`,
+        cause,
+      }),
   });
 });
 

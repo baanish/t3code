@@ -145,6 +145,16 @@ export function isForeignOpenCodeProjectFolder(projectCwd: string): boolean {
  * session directory unless that directory is a generic root or a sibling
  * harness folder such as `codex` / `claude` / `grok`.
  */
+export function openCodeDirectoryMayMatch(sessionCwd: string, projectCwd: string): boolean {
+  if (teleportCwdsMatch(sessionCwd, projectCwd)) {
+    return true;
+  }
+  if (isGenericTeleportCwd(sessionCwd) || isForeignOpenCodeProjectFolder(projectCwd)) {
+    return false;
+  }
+  return isTeleportCwdWithin(projectCwd, sessionCwd);
+}
+
 export const opencodeSessionMatchesProjectCwd = Effect.fn("opencodeSessionMatchesProjectCwd")(
   function* (sessionCwd: string, projectCwd: string) {
     if (yield* teleportCwdsEquivalent(sessionCwd, projectCwd)) {
