@@ -272,7 +272,7 @@ export const make = Effect.gen(function* () {
           }
           const seenRefs = new Set<string>();
           for (const ref of input.sessions) {
-            const key = `${ref.provider}:${ref.externalSessionId}`;
+            const key = `${ref.provider}:${ref.providerInstanceId ?? ""}:${ref.externalSessionId}`;
             if (seenRefs.has(key)) {
               return yield* new TeleportInvalidInputError({
                 message: `Duplicate session '${ref.externalSessionId}' in the import batch.`,
@@ -308,6 +308,9 @@ export const make = Effect.gen(function* () {
               provider: ref.provider,
               externalSessionId: ref.externalSessionId,
               cwd,
+              ...(ref.providerInstanceId === undefined
+                ? {}
+                : { providerInstanceId: ref.providerInstanceId }),
             });
             yield* requireParsedSessionUnlocked(parsed, homes);
             parsedSessions.push({
@@ -533,6 +536,7 @@ export const make = Effect.gen(function* () {
                 threadId,
                 teleport: teleportThreadStateFromPayload({
                   provider: parsed.provider,
+                  providerInstanceId,
                   payload: teleportPayload,
                 }),
                 createdAt: now,
@@ -797,6 +801,7 @@ export const make = Effect.gen(function* () {
               threadId: input.threadId,
               teleport: teleportThreadStateFromPayload({
                 provider,
+                providerInstanceId,
                 payload: teleportPayload,
               }),
               createdAt: now,

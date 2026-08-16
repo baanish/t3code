@@ -2,6 +2,7 @@ import {
   TELEPORT_SCHEMA_VERSION,
   TeleportDiscoveryError,
   TeleportSchemaVersionError,
+  type ProviderInstanceId,
   type TeleportListSessionsResult,
   type TeleportProvider,
 } from "@t3tools/contracts";
@@ -49,6 +50,7 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
   readonly provider: TeleportProvider;
   readonly externalSessionId: string;
   readonly cwd: string;
+  readonly providerInstanceId?: ProviderInstanceId;
 }): Effect.fn.Return<
   ParsedNativeSession,
   TeleportSchemaVersionError | TeleportDiscoveryError,
@@ -68,7 +70,10 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
   });
   const candidate = listed.sessions.find(
     (session) =>
-      session.provider === input.provider && session.externalSessionId === input.externalSessionId,
+      session.provider === input.provider &&
+      session.externalSessionId === input.externalSessionId &&
+      (input.providerInstanceId === undefined ||
+        session.providerInstanceId === input.providerInstanceId),
   );
   if (!candidate) {
     return yield* new TeleportDiscoveryError({

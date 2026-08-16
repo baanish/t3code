@@ -19,6 +19,7 @@ export type TeleportPresence = typeof TeleportPresence.Type;
 export const TeleportThreadState = Schema.Struct({
   presence: TeleportPresence,
   provider: TeleportProvider,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   externalSessionId: TrimmedNonEmptyString,
   nativePath: TrimmedNonEmptyString,
   lastSyncedAt: IsoDateTime,
@@ -27,6 +28,7 @@ export type TeleportThreadState = typeof TeleportThreadState.Type;
 
 export const TeleportSessionRef = Schema.Struct({
   provider: TeleportProvider,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   externalSessionId: TrimmedNonEmptyString,
 });
 export type TeleportSessionRef = typeof TeleportSessionRef.Type;

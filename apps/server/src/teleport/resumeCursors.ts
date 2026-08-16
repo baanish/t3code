@@ -52,11 +52,15 @@ export function readTeleportRuntimePayload(
 
 export function teleportThreadStateFromPayload(input: {
   readonly provider: TeleportProvider;
+  readonly providerInstanceId?: TeleportThreadState["providerInstanceId"];
   readonly payload: TeleportRuntimePayload;
 }): TeleportThreadState {
   return {
     presence: resolveTeleportPresence(input.payload),
     provider: input.provider,
+    ...(input.providerInstanceId === undefined
+      ? {}
+      : { providerInstanceId: input.providerInstanceId }),
     externalSessionId: input.payload.externalSessionId,
     nativePath: input.payload.nativePath,
     lastSyncedAt: input.payload.lastSyncedAt,

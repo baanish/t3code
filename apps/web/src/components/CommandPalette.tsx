@@ -25,6 +25,7 @@ import {
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
+  type ProviderInstanceId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
@@ -147,6 +148,7 @@ function importSessionsStatusItem(input: {
   readonly title: string;
   readonly description?: string;
   readonly icon: ReactNode;
+  readonly run?: () => Promise<void>;
 }): CommandPaletteActionItem {
   return {
     kind: "action",
@@ -155,8 +157,9 @@ function importSessionsStatusItem(input: {
     title: input.title,
     ...(input.description === undefined ? {} : { description: input.description }),
     icon: input.icon,
-    disabled: true,
-    run: async () => undefined,
+    disabled: input.run === undefined,
+    keepOpen: input.run !== undefined,
+    run: input.run ?? (async () => undefined),
   };
 }
 
@@ -670,7 +673,7 @@ function OpenCommandPaletteDialog(props: {
   readonly clearOpenIntent: () => void;
 }) {
   const navigate = useNavigate();
-  const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
+  const { clearOpenIntent, openIntent, openOverlayMode, setOpen: setPaletteOpen } = props;
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
@@ -750,6 +753,15 @@ function OpenCommandPaletteDialog(props: {
   const browseNavigation = browseNavigationRef.current;
   const teleportImportPendingRef = useRef(false);
   const importListGenerationRef = useRef(0);
+  const setOpen = useCallback(
+    (open: boolean) => {
+      if (!open) {
+        importListGenerationRef.current += 1;
+      }
+      setPaletteOpen(open);
+    },
+    [setPaletteOpen],
+  );
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
@@ -1261,6 +1273,7 @@ function OpenCommandPaletteDialog(props: {
   }
 
   function popView(): void {
+    importListGenerationRef.current += 1;
     browseNavigation.invalidate();
     setAddProjectCloneFlow(null);
     if (viewStack.length <= 1) {
@@ -1285,6 +1298,7 @@ function OpenCommandPaletteDialog(props: {
       project: Project,
       session: {
         readonly provider: "codex" | "claudeAgent" | "opencode" | "grok";
+        readonly providerInstanceId?: ProviderInstanceId;
         readonly externalSessionId: string;
       },
     ): Promise<void> => {
@@ -1301,6 +1315,9 @@ function OpenCommandPaletteDialog(props: {
             sessions: [
               {
                 provider: session.provider,
+                ...(session.providerInstanceId === undefined
+                  ? {}
+                  : { providerInstanceId: session.providerInstanceId }),
                 externalSessionId: session.externalSessionId,
               },
             ],
@@ -1354,6 +1371,20 @@ function OpenCommandPaletteDialog(props: {
       }
       if (result._tag !== "Success") {
         if (isAtomCommandInterrupted(result)) {
+          replaceTopPaletteView(
+            nativeSessionsPaletteView(project.title, [
+              importSessionsStatusItem({
+                value: "import-sessions-interrupted",
+                title: "Could not list native sessions",
+                description: "The request was interrupted. Try again.",
+                icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+                run: async () => {
+                  replaceTopPaletteView(importSessionsLoadingView(project.title));
+                  await loadNativeSessionsIntoView(project);
+                },
+              }),
+            ]),
+          );
           return;
         }
         replaceTopPaletteView(
@@ -1363,6 +1394,10 @@ function OpenCommandPaletteDialog(props: {
               title: "Could not list native sessions",
               description: teleportFailureMessage(squashAtomCommandFailure(result)),
               icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+              run: async () => {
+                replaceTopPaletteView(importSessionsLoadingView(project.title));
+                await loadNativeSessionsIntoView(project);
+              },
             }),
           ]),
         );
@@ -1386,7 +1421,7 @@ function OpenCommandPaletteDialog(props: {
           project.title,
           result.value.sessions.map((session) => ({
             kind: "action" as const,
-            value: `import-session:${session.provider}:${session.externalSessionId}`,
+            value: `import-session:${session.provider}:${session.providerInstanceId}:${session.externalSessionId}`,
             searchTerms: [
               session.title ?? "",
               session.externalSessionId,
@@ -1898,6 +1933,9 @@ function OpenCommandPaletteDialog(props: {
           run: async () => {
             await importNativeSession(boundImportProject, {
               provider: boundTeleport.provider,
+              ...(boundTeleport.providerInstanceId === undefined
+                ? {}
+                : { providerInstanceId: boundTeleport.providerInstanceId }),
               externalSessionId: boundTeleport.externalSessionId,
             });
           },

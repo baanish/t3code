@@ -3,7 +3,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { isTeleportProvider, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { LogOutIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -12,6 +12,7 @@ import {
   environmentSupportsTeleport,
   isTeleportedOut,
   teleportFailureMessage,
+  threadSupportsTeleportExport,
 } from "../../lib/teleport";
 import { useServerConfigs, useThread, useThreadShell } from "../../state/entities";
 import { teleportEnvironment } from "../../state/teleport";
@@ -56,11 +57,12 @@ export function TeleportOutButton({
 
   const teleport = thread.teleport ?? null;
   const teleportedOut = isTeleportedOut(teleport);
-  const providerName = thread.session?.providerName;
-  const supported =
-    teleportedOut ||
-    (typeof providerName === "string" && isTeleportProvider(providerName)) ||
-    isTeleportProvider(thread.modelSelection.instanceId);
+  const supported = threadSupportsTeleportExport({
+    teleportedOut,
+    providerName: thread.session?.providerName ?? undefined,
+    instanceId: thread.modelSelection.instanceId,
+    providers: serverConfigs.get(environmentId)?.providers ?? [],
+  });
   if (!supported) {
     return null;
   }
@@ -104,6 +106,9 @@ export function TeleportOutButton({
                         sessions: [
                           {
                             provider: teleport.provider,
+                            ...(teleport.providerInstanceId === undefined
+                              ? {}
+                              : { providerInstanceId: teleport.providerInstanceId }),
                             externalSessionId: teleport.externalSessionId,
                           },
                         ],

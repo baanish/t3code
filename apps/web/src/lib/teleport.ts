@@ -1,6 +1,8 @@
 import {
+  isTeleportProvider,
   isTeleportedOut,
   type ExecutionEnvironmentCapabilities,
+  type ProviderInstanceId,
   type TeleportProvider,
 } from "@t3tools/contracts";
 
@@ -13,6 +15,26 @@ export function environmentSupportsTeleport(
   capabilities: ExecutionEnvironmentCapabilities | null | undefined,
 ): boolean {
   return capabilities?.teleport === true;
+}
+
+export function threadSupportsTeleportExport(input: {
+  readonly teleportedOut: boolean;
+  readonly providerName: string | undefined;
+  readonly instanceId: string;
+  readonly providers: ReadonlyArray<{
+    readonly instanceId: ProviderInstanceId | string;
+    readonly driver: string;
+  }>;
+}): boolean {
+  if (input.teleportedOut) {
+    return true;
+  }
+  if (typeof input.providerName === "string" && isTeleportProvider(input.providerName)) {
+    return true;
+  }
+  const instance = input.providers.find((provider) => provider.instanceId === input.instanceId);
+  const driver = instance?.driver ?? input.instanceId;
+  return isTeleportProvider(driver);
 }
 
 export function teleportProviderLabel(provider: TeleportProvider): string {
