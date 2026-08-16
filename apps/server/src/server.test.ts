@@ -121,7 +121,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
-import { TeleportService } from "./teleport/Services/TeleportService.ts";
+import { TeleportService } from "./teleport/TeleportService.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";

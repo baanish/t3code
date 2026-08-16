@@ -20,13 +20,20 @@ import {
   resolveTeleportPresence,
   type ModelSelection,
   type OrchestrationMessage,
+  type TeleportExportError,
   type TeleportExportSessionInput,
+  type TeleportExportSessionResult,
   type TeleportImportedSession,
+  type TeleportImportError,
   type TeleportImportSessionsInput,
+  type TeleportImportSessionsResult,
+  type TeleportListSessionsError,
   type TeleportListSessionsInput,
+  type TeleportListSessionsResult,
   type TeleportProvider,
   type TeleportRuntimePayload,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -36,33 +43,49 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
-import * as OrchestrationEngine from "../../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstanceRegistry.ts";
-import { ProviderService } from "../../provider/Services/ProviderService.ts";
-import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
-import * as ServerSettings from "../../serverSettings.ts";
-import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "../cwd.ts";
-import { discoverTeleportSessions, loadTeleportSession } from "../discovery.ts";
-import { getTeleportFormat } from "../formats/registry.ts";
-import "../formats/register.ts";
-import { resolveTeleportHomes, type TeleportHomes } from "../homes.ts";
+import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
+import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "./cwd.ts";
+import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
+import { getTeleportFormat } from "./formats/registry.ts";
+import "./formats/register.ts";
+import { resolveTeleportHomes, type TeleportHomes } from "./homes.ts";
 import {
   buildTeleportResumeCursor,
   readTeleportExternalSessionId,
   readTeleportRuntimePayload,
   teleportThreadStateFromPayload,
   toTeleportProvider,
-} from "../resumeCursors.ts";
-import { firstUserTitle, truncateTitle } from "../json.ts";
+} from "./resumeCursors.ts";
+import { firstUserTitle, truncateTitle } from "./json.ts";
 import {
   MAX_TELEPORT_MESSAGE_CHARS,
   MAX_TELEPORT_MESSAGES,
   nativeTextMessage,
   type NativeTextMessage,
   type ParsedNativeSession,
-} from "../types.ts";
-import { TeleportService } from "../Services/TeleportService.ts";
+} from "./types.ts";
+
+export class TeleportService extends Context.Service<
+  TeleportService,
+  {
+    readonly listSessions: (
+      input: TeleportListSessionsInput,
+    ) => Effect.Effect<TeleportListSessionsResult, TeleportListSessionsError>;
+
+    readonly importSessions: (
+      input: TeleportImportSessionsInput,
+    ) => Effect.Effect<TeleportImportSessionsResult, TeleportImportError>;
+
+    readonly exportSession: (
+      input: TeleportExportSessionInput,
+    ) => Effect.Effect<TeleportExportSessionResult, TeleportExportError>;
+  }
+>()("t3/teleport/TeleportService") {}
 
 function modelSelectionForProvider(provider: TeleportProvider): ModelSelection {
   const driver = ProviderDriverKind.make(provider);
@@ -177,12 +200,6 @@ export const make = Effect.gen(function* () {
       inFlight.add(extra);
       keys.push(extra);
       return Effect.void;
-    });
-
-  const mapDispatchError = (message: string) => (cause: unknown) =>
-    new TeleportInvalidInputError({
-      message,
-      cause,
     });
 
   const requireParsedSessionUnlocked = (parsed: ParsedNativeSession, homes: TeleportHomes) => {
@@ -399,7 +416,15 @@ export const make = Effect.gen(function* () {
                   messages,
                   createdAt: now,
                 })
-                .pipe(Effect.mapError(mapDispatchError("Failed to replace thread history.")));
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new TeleportInvalidInputError({
+                        message: "Failed to replace thread history.",
+                        cause,
+                      }),
+                  ),
+                );
               yield* engine
                 .dispatch({
                   type: "thread.meta.update",
@@ -407,7 +432,15 @@ export const make = Effect.gen(function* () {
                   threadId,
                   title,
                 })
-                .pipe(Effect.mapError(mapDispatchError("Failed to update imported thread title.")));
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new TeleportInvalidInputError({
+                        message: "Failed to update imported thread title.",
+                        cause,
+                      }),
+                  ),
+                );
             } else {
               threadId = ThreadId.make(yield* nextId());
               yield* engine
@@ -424,7 +457,15 @@ export const make = Effect.gen(function* () {
                   worktreePath: null,
                   createdAt: now,
                 })
-                .pipe(Effect.mapError(mapDispatchError("Failed to create an imported thread.")));
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new TeleportInvalidInputError({
+                        message: "Failed to create an imported thread.",
+                        cause,
+                      }),
+                  ),
+                );
               yield* engine
                 .dispatch({
                   type: "thread.history.replace",
@@ -434,7 +475,13 @@ export const make = Effect.gen(function* () {
                   createdAt: now,
                 })
                 .pipe(
-                  Effect.mapError(mapDispatchError("Failed to write imported thread history.")),
+                  Effect.mapError(
+                    (cause) =>
+                      new TeleportInvalidInputError({
+                        message: "Failed to write imported thread history.",
+                        cause,
+                      }),
+                  ),
                 );
             }
 
@@ -481,7 +528,15 @@ export const make = Effect.gen(function* () {
                 }),
                 createdAt: now,
               })
-              .pipe(Effect.mapError(mapDispatchError("Failed to persist teleport presence.")));
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new TeleportInvalidInputError({
+                      message: "Failed to persist teleport presence.",
+                      cause,
+                    }),
+                ),
+              );
 
             imported.push({
               threadId,
@@ -731,7 +786,15 @@ export const make = Effect.gen(function* () {
               }),
               createdAt: now,
             })
-            .pipe(Effect.mapError(mapDispatchError("Failed to persist teleport presence.")));
+            .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new TeleportInvalidInputError({
+                      message: "Failed to persist teleport presence.",
+                      cause,
+                    }),
+                ),
+              );
 
           return {
             schemaVersion: TELEPORT_SCHEMA_VERSION,
@@ -764,4 +827,3 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(TeleportService, make);
-export const TeleportServiceLive = layer;
