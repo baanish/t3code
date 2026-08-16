@@ -4,6 +4,7 @@ import { FolderPlusIcon, ImportIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
 import { openCommandPalette } from "~/commandPaletteBus";
+import { environmentSupportsTeleport } from "~/lib/teleport";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
@@ -107,6 +108,11 @@ export function DraftHeroHeadline({
   const hasResolvedProject = activeProjectTitle !== null;
   const canChooseProject = projectPickerEntries.length > 0;
   const shouldShowProjectMenu = canChooseProject;
+  const teleportEnvironmentId = activeProjectRef?.environmentId ?? primaryEnvironmentId;
+  const supportsTeleport = environmentSupportsTeleport(
+    environments.find((environment) => environment.environmentId === teleportEnvironmentId)
+      ?.serverConfig?.environment.capabilities,
+  );
 
   const projectSelector = shouldShowProjectMenu ? (
     <Menu>
@@ -172,7 +178,7 @@ export function DraftHeroHeadline({
           <>Add a project to start</>
         )}
       </h1>
-      {hasResolvedProject ? (
+      {hasResolvedProject && supportsTeleport ? (
         <button
           type="button"
           onClick={openImportSessions}

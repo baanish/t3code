@@ -8,8 +8,12 @@ import { LogOutIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { buildLoadingThreadFromShell } from "../ChatView.logic";
-import { isTeleportedOut, teleportFailureMessage } from "../../lib/teleport";
-import { useThread, useThreadShell } from "../../state/entities";
+import {
+  environmentSupportsTeleport,
+  isTeleportedOut,
+  teleportFailureMessage,
+} from "../../lib/teleport";
+import { useServerConfigs, useThread, useThreadShell } from "../../state/entities";
 import { teleportEnvironment } from "../../state/teleport";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
@@ -32,6 +36,7 @@ export function TeleportOutButton({
   const threadRef = scopeThreadRef(environmentId, threadId);
   const detail = useThread(threadRef);
   const shell = useThreadShell(threadRef);
+  const serverConfigs = useServerConfigs();
   const exportSession = useAtomCommand(teleportEnvironment.exportSession, {
     reportFailure: false,
   });
@@ -41,7 +46,11 @@ export function TeleportOutButton({
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
   const thread = detail ?? (shell === null ? null : buildLoadingThreadFromShell(shell));
-  if (!isServerThread || thread === null) {
+  if (
+    !isServerThread ||
+    thread === null ||
+    !environmentSupportsTeleport(serverConfigs.get(environmentId)?.environment.capabilities)
+  ) {
     return null;
   }
 
