@@ -259,6 +259,38 @@ describe("teleport OpenCode format", () => {
     ),
   );
 
+  it.effect("does not write OpenCode messages with traversing ids outside the session", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-opencode-msg-id-" });
+      const session = {
+        ...sampleTeleportSession("opencode", "/workspace"),
+        messages: [
+          {
+            role: "user" as const,
+            text: "stay inside the session",
+            id: "../../outside",
+          },
+        ],
+      };
+      yield* writeOpenCodeSession({
+        opencodeRoot: root,
+        session,
+      });
+      const messageRoot = path.join(root, "storage", "message", TELEPORT_TEST_SESSION_ID);
+      const files = yield* fs.readDirectory(messageRoot);
+      assert.equal(
+        files.some((name) => name.includes("..") || name.includes("outside")),
+        false,
+      );
+      const escaped = yield* fs
+        .exists(path.join(root, "outside.json"))
+        .pipe(Effect.orElseSucceed(() => false));
+      assert.equal(escaped, false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("replaces OpenCode json messages instead of leaving stale turns", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

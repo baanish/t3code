@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import { teleportCwdsEquivalent } from "./cwd.ts";
 import { getTeleportFormat, listRegisteredTeleportProviders } from "./formats/registry.ts";
 import type { TeleportHomes } from "./homes.ts";
 import type { ParsedNativeSession } from "./types.ts";
@@ -75,17 +76,24 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
     });
   }
 
-  return yield* adapter
-    .load({
-      homes: input.homes,
-      cwd: input.cwd,
-      externalSessionId: input.externalSessionId,
-      nativePath: candidate.nativePath,
-    })
-    .pipe(
-      Effect.map((parsed) => ({
-        ...parsed,
-        providerInstanceId: candidate.providerInstanceId,
-      })),
-    );
+  const parsed = yield* adapter.load({
+    homes: input.homes,
+    cwd: input.cwd,
+    externalSessionId: input.externalSessionId,
+    nativePath: candidate.nativePath,
+  });
+  if (parsed.externalSessionId !== input.externalSessionId) {
+    return yield* new TeleportDiscoveryError({
+      message: `Native ${input.provider} session at '${candidate.nativePath}' no longer matches '${input.externalSessionId}'.`,
+    });
+  }
+  if (!(yield* teleportCwdsEquivalent(parsed.cwd, input.cwd))) {
+    return yield* new TeleportDiscoveryError({
+      message: `Native ${input.provider} session '${input.externalSessionId}' no longer belongs to this project.`,
+    });
+  }
+  return {
+    ...parsed,
+    providerInstanceId: candidate.providerInstanceId,
+  };
 });

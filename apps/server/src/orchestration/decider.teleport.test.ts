@@ -168,4 +168,34 @@ it.layer(NodeServices.layer)("teleport thread decider", (it) => {
       }
     }),
   );
+
+  it.effect("rejects history replace while the T3 session is running", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.history.replace",
+          commandId: CommandId.make("cmd-history-busy"),
+          threadId: ThreadId.make("thread-1"),
+          messages: [],
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: NOW,
+          },
+        }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      if (error._tag === "OrchestrationCommandInvariantError") {
+        expect(error.detail).toContain("starting or running");
+      }
+    }),
+  );
 });

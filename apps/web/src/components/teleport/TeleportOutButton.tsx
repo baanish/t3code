@@ -75,7 +75,7 @@ export function TeleportOutButton({
         render={
           <Button
             type="button"
-            className="shrink-0"
+            className={busy ? "shrink-0 opacity-64" : "shrink-0"}
             variant="outline"
             size="icon-xs"
             aria-label={
@@ -83,7 +83,7 @@ export function TeleportOutButton({
                 ? "Import this thread from the native CLI"
                 : "Teleport this thread to the native CLI"
             }
-            disabled={busy}
+            aria-disabled={busy}
             onClick={() => {
               if (pendingRef.current || busy) {
                 return;

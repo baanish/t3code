@@ -1409,11 +1409,24 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.history.replace": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const status = thread.session?.status;
+      if (status === "starting" || status === "running") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Cannot replace thread history while its T3 session is starting or running.",
+        });
+      }
+      if (threadHasQueuedTurnStart(thread, command.createdAt)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Cannot replace thread history while a turn start is queued.",
+        });
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",

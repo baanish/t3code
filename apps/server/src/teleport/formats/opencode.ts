@@ -374,7 +374,7 @@ const readOpenCodeJsonMessages = Effect.fn("readOpenCodeJsonMessages")(function*
     }
     const role = parsed.role === "user" || parsed.role === "assistant" ? parsed.role : undefined;
     const id = nonEmptyString(parsed.id);
-    if (!role || !id) {
+    if (!role || !id || !isSafeTeleportSessionId(id)) {
       continue;
     }
     const text = yield* readOpenCodePartText(opencodeRoot, id);
@@ -400,6 +400,9 @@ const readOpenCodePartText = Effect.fn("readOpenCodePartText")(function* (
   opencodeRoot: string,
   messageId: string,
 ) {
+  if (!isSafeTeleportSessionId(messageId)) {
+    return undefined;
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const partRoot = path.join(opencodeRoot, "storage", "part", messageId);
@@ -497,7 +500,10 @@ export const writeOpenCodeSession = Effect.fn("writeOpenCodeSession")(function* 
       ),
     );
   for (const [index, message] of input.session.messages.entries()) {
-    const messageId = message.id ?? `${input.session.externalSessionId}-m${index}`;
+    const requestedId = message.id ?? `${input.session.externalSessionId}-m${index}`;
+    const messageId = isSafeTeleportSessionId(requestedId)
+      ? requestedId
+      : `${input.session.externalSessionId}-m${index}`;
     yield* fs
       .writeFileString(
         path.join(messageRoot, `${messageId}.json`),

@@ -563,14 +563,13 @@ export const make = Effect.gen(function* () {
           };
         }),
       ).pipe(
-        Effect.catchTag(
-          "PlatformError",
-          (cause: PlatformError.PlatformError) =>
+        Effect.catchTags({
+          PlatformError: (cause: PlatformError.PlatformError) =>
             new TeleportDiscoveryError({
               message: "Native filesystem error during teleport import.",
               cause,
             }),
-        ),
+        }),
       ),
     );
   };
@@ -727,6 +726,11 @@ export const make = Effect.gen(function* () {
               message: `Thread '${input.threadId}' was not found.`,
             });
           }
+          if (isBusySessionStatus(latest.value.session?.status)) {
+            return yield* new TeleportInvalidInputError({
+              message: "Cannot export while this T3 session is running.",
+            });
+          }
           const messages = capMessages(orchestrationToNative(latest.value.messages));
           const nativeSession: ParsedNativeSession = {
             provider,
@@ -815,15 +819,14 @@ export const make = Effect.gen(function* () {
           };
         }),
       ).pipe(
-        Effect.catchTag(
-          "PlatformError",
-          (cause: PlatformError.PlatformError) =>
+        Effect.catchTags({
+          PlatformError: (cause: PlatformError.PlatformError) =>
             new TeleportNativeWriteError({
               nativePath: "native session",
               message: "Native filesystem error during teleport export.",
               cause,
             }),
-        ),
+        }),
       ),
     );
   };
