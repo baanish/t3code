@@ -340,6 +340,11 @@ export const make = Effect.gen(function* () {
               if (externalSessionId !== parsed.externalSessionId) {
                 continue;
               }
+              const expectedInstanceId =
+                parsed.providerInstanceId ?? defaultInstanceIdForDriver(driver);
+              if (binding.providerInstanceId !== expectedInstanceId) {
+                continue;
+              }
               const shell = yield* snapshotQuery.getThreadShellById(binding.threadId).pipe(
                 Effect.mapError(
                   (cause) =>
