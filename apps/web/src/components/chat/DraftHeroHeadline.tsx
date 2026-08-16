@@ -176,7 +176,7 @@ export function DraftHeroHeadline({
         <button
           type="button"
           onClick={openImportSessions}
-          className="pointer-events-auto mt-3 inline-flex items-center gap-1.5 text-muted-foreground text-sm transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+          className="pointer-events-auto mt-3 inline-flex cursor-pointer items-center gap-1.5 text-muted-foreground text-sm transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ImportIcon className="size-3.5" />
           Import a native CLI session

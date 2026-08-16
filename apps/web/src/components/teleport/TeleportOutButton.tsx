@@ -68,7 +68,7 @@ export function TeleportOutButton({
             type="button"
             className="shrink-0"
             variant="outline"
-            size="xs"
+            size="icon-xs"
             aria-label={
               teleportedOut
                 ? "Import this thread from the native CLI"
@@ -150,7 +150,7 @@ export function TeleportOutButton({
               })();
             }}
           >
-            <LogOutIcon className={teleportedOut ? "size-3 -scale-x-100" : "size-3"} />
+            <LogOutIcon className={teleportedOut ? "-scale-x-100" : ""} />
           </Button>
         }
       />
