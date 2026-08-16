@@ -17,7 +17,14 @@ import * as Path from "effect/Path";
 
 import { opencodeSessionMatchesProjectCwd, teleportCwdsMatch } from "../cwd.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
-import { firstUserTitle, isRecord, nonEmptyString, parseJsonObject } from "../json.ts";
+import {
+  firstUserTitle,
+  isRecord,
+  isSafeTeleportSessionId,
+  nativeSessionText,
+  nonEmptyString,
+  parseJsonObject,
+} from "../json.ts";
 import { registerTeleportFormat } from "./registry.ts";
 import {
   nativeTextMessage,
@@ -141,10 +148,14 @@ export const readOpenCodeSessionById = Effect.fn("readOpenCodeSessionById")(func
   TeleportSchemaVersionError,
   FileSystem.FileSystem | Path.Path
 > {
+  if (!isSafeTeleportSessionId(input.sessionId)) {
+    return Option.none();
+  }
   const sqlite = yield* readOpenCodeSqliteSessions({
     opencodeRoot: input.opencodeRoot,
     cwd: "",
     pathsMatch: () => true,
+    sessionId: input.sessionId,
   });
   const fromSqlite = sqlite.find((session) => session.externalSessionId === input.sessionId);
   if (fromSqlite) {
@@ -159,6 +170,7 @@ const readOpenCodeSqliteSessions = Effect.fn("readOpenCodeSqliteSessions")(funct
   readonly opencodeRoot: string;
   readonly cwd: string;
   readonly pathsMatch: (left: string, right: string) => boolean;
+  readonly sessionId?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -172,28 +184,46 @@ const readOpenCodeSqliteSessions = Effect.fn("readOpenCodeSqliteSessions")(funct
     try {
       const db = new NodeSqlite.DatabaseSync(dbPath, { readOnly: true });
       try {
-        const rows = db
-          .prepare(
-            `
-              SELECT
-                s.id,
-                s.directory,
-                s.title,
-                s.time_created,
-                s.time_updated
-              FROM session s
-              WHERE s.time_archived IS NULL
-              ORDER BY s.time_updated DESC
-              LIMIT 1000
-            `,
-          )
-          .all() as ReadonlyArray<Record<string, unknown>>;
+        const rows = (
+          input.sessionId === undefined
+            ? db
+                .prepare(
+                  `
+                  SELECT
+                    s.id,
+                    s.directory,
+                    s.title,
+                    s.time_created,
+                    s.time_updated
+                  FROM session s
+                  WHERE s.time_archived IS NULL
+                  ORDER BY s.time_updated DESC
+                `,
+                )
+                .all()
+            : db
+                .prepare(
+                  `
+                    SELECT
+                      s.id,
+                      s.directory,
+                      s.title,
+                      s.time_created,
+                      s.time_updated
+                    FROM session s
+                    WHERE s.time_archived IS NULL
+                      AND s.id = ?
+                    ORDER BY s.time_updated DESC
+                  `,
+                )
+                .all(input.sessionId)
+        ) as ReadonlyArray<Record<string, unknown>>;
 
         const sessions: ParsedNativeSession[] = [];
         for (const row of rows) {
           const id = nonEmptyString(row.id);
           const cwd = nonEmptyString(row.directory);
-          if (!id || !cwd) {
+          if (!id || !cwd || !isSafeTeleportSessionId(id)) {
             continue;
           }
           const messageRows = db
@@ -296,7 +326,7 @@ const readOpenCodeJsonSessions = Effect.fn("readOpenCodeJsonSessions")(function*
     }
     const id = nonEmptyString(parsed.id);
     const cwd = nonEmptyString(parsed.directory) ?? nonEmptyString(parsed.cwd);
-    if (!id || !cwd) {
+    if (!id || !cwd || !isSafeTeleportSessionId(id)) {
       continue;
     }
     const messages = yield* readOpenCodeJsonMessages(opencodeRoot, id);
@@ -328,6 +358,9 @@ const readOpenCodeJsonMessages = Effect.fn("readOpenCodeJsonMessages")(function*
   opencodeRoot: string,
   sessionId: string,
 ) {
+  if (!isSafeTeleportSessionId(sessionId)) {
+    return [] as NativeTextMessage[];
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const messageRoot = path.join(opencodeRoot, "storage", "message", sessionId);
@@ -371,22 +404,33 @@ const readOpenCodePartText = Effect.fn("readOpenCodePartText")(function* (
   const path = yield* Path.Path;
   const partRoot = path.join(opencodeRoot, "storage", "part", messageId);
   const files = yield* walkJson(partRoot);
-  const texts: string[] = [];
+  const parts: Array<{ readonly created: number; readonly name: string; readonly text: string }> =
+    [];
   for (const filePath of files) {
     const contents = yield* fs.readFileString(filePath).pipe(Effect.orElseSucceed(() => ""));
     const parsed = parseJsonObject(contents);
     const text = textFromPartData(parsed ?? contents);
-    if (text) {
-      texts.push(text);
+    if (!text) {
+      continue;
     }
+    const createdRaw = isRecord(parsed?.time) ? parsed.time.created : parsed?.time_created;
+    const created = typeof createdRaw === "number" && Number.isFinite(createdRaw) ? createdRaw : 0;
+    parts.push({ created, name: filePath, text });
   }
-  return nonEmptyString(texts.join("\n"));
+  parts.sort((left, right) => left.created - right.created || left.name.localeCompare(right.name));
+  return nativeSessionText(parts.map((part) => part.text).join("\n"));
 });
 
 export const writeOpenCodeSession = Effect.fn("writeOpenCodeSession")(function* (input: {
   readonly opencodeRoot: string;
   readonly session: ParsedNativeSession;
 }): Effect.fn.Return<string, TeleportNativeWriteError, FileSystem.FileSystem | Path.Path> {
+  if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
+    return yield* new TeleportNativeWriteError({
+      nativePath: input.opencodeRoot,
+      message: `Refusing to write an OpenCode session with an unsafe id '${input.session.externalSessionId}'.`,
+    });
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const sessionDir = path.join(input.opencodeRoot, "storage", "session", "t3");
@@ -433,6 +477,18 @@ export const writeOpenCodeSession = Effect.fn("writeOpenCodeSession")(function* 
     "message",
     input.session.externalSessionId,
   );
+  const existingMessageFiles = yield* walkJson(messageRoot);
+  for (const filePath of existingMessageFiles) {
+    const contents = yield* fs.readFileString(filePath).pipe(Effect.orElseSucceed(() => ""));
+    const parsed = parseJsonObject(contents);
+    const messageId = parsed ? nonEmptyString(parsed.id) : undefined;
+    if (messageId && isSafeTeleportSessionId(messageId)) {
+      yield* fs
+        .remove(path.join(input.opencodeRoot, "storage", "part", messageId), { recursive: true })
+        .pipe(Effect.orElseSucceed(() => undefined));
+    }
+  }
+  yield* fs.remove(messageRoot, { recursive: true }).pipe(Effect.orElseSucceed(() => undefined));
   yield* fs
     .makeDirectory(messageRoot, { recursive: true })
     .pipe(
@@ -498,6 +554,10 @@ const writeOpenCodeSqliteSession = Effect.fn("writeOpenCodeSqliteSession")(funct
       const db = new NodeSqlite.DatabaseSync(dbPath);
       try {
         db.exec("BEGIN");
+        db.prepare(
+          `DELETE FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id = ?)`,
+        ).run(input.session.externalSessionId);
+        db.prepare(`DELETE FROM message WHERE session_id = ?`).run(input.session.externalSessionId);
         db.prepare(
           `
             INSERT OR REPLACE INTO session (id, directory, title, time_created, time_updated)

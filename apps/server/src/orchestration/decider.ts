@@ -1431,11 +1431,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.teleport.set": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (command.teleport.presence === "native") {
+        const status = thread.session?.status;
+        if (status === "starting" || status === "running") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "Cannot teleport a thread to the native CLI while its T3 session is starting or running.",
+          });
+        }
+        if (threadHasQueuedTurnStart(thread, command.createdAt)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Cannot teleport a thread to the native CLI while a turn start is queued.",
+          });
+        }
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",

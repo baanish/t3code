@@ -24,10 +24,7 @@ describe("teleport cwd matching", () => {
 
   it("treats a project folder as inside its OpenCode launch cwd", () => {
     assert.equal(
-      isTeleportCwdWithin(
-        "/home/user/projects/native/opencode",
-        "/home/user/projects/native",
-      ),
+      isTeleportCwdWithin("/home/user/projects/native/opencode", "/home/user/projects/native"),
       true,
     );
     assert.equal(isTeleportCwdWithin("/tmp/oc-wire-test", "/tmp"), true);
@@ -37,7 +34,12 @@ describe("teleport cwd matching", () => {
   it("rejects home and temp roots as OpenCode launch directories", () => {
     assert.equal(isGenericTeleportCwd("/"), true);
     assert.equal(isGenericTeleportCwd("/tmp"), true);
+    assert.equal(isGenericTeleportCwd("/private/var"), true);
+    assert.equal(isGenericTeleportCwd("/private/var/tmp"), true);
+    assert.equal(isGenericTeleportCwd("//server/share"), true);
     assert.equal(isGenericTeleportCwd("/home/user"), true);
+    assert.equal(isGenericTeleportCwd("/root"), true);
+    assert.equal(isGenericTeleportCwd("/root/workspace"), false);
     assert.equal(isGenericTeleportCwd("/home/user/projects/native"), false);
     assert.equal(isGenericTeleportCwd("C:\\Users\\Foo"), true);
     assert.equal(isGenericTeleportCwd("C:\\Users\\Foo\\proj"), false);
@@ -68,14 +70,8 @@ describe("teleport cwd matching", () => {
 
   it("does not treat sibling harness folders as OpenCode parent matches", () => {
     assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/codex"), true);
-    assert.equal(
-      isForeignOpenCodeProjectFolder("/home/user/projects/native/claude"),
-      true,
-    );
-    assert.equal(
-      isForeignOpenCodeProjectFolder("/home/user/projects/native/opencode"),
-      false,
-    );
+    assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/claude"), true);
+    assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/opencode"), false);
   });
 
   it.effect("does not list a parent OpenCode session under a Codex project folder", () =>

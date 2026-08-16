@@ -20,7 +20,13 @@ import { teleportCwdsEquivalent } from "../cwd.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { registerTeleportFormat } from "./registry.ts";
 import { replaceNativeFile } from "../nativeWrite.ts";
-import { firstUserTitle, isRecord, nonEmptyString, parseJsonObject } from "../json.ts";
+import {
+  firstUserTitle,
+  isRecord,
+  isSafeTeleportSessionId,
+  nonEmptyString,
+  parseJsonObject,
+} from "../json.ts";
 import {
   MAX_TELEPORT_SESSION_BYTES,
   nativeTextMessage,
@@ -43,6 +49,7 @@ export const requireGrokSessionUnlocked = Effect.fn("requireGrokSessionUnlocked"
   yield* requireNativePathUnlocked(nativePath);
   yield* requireNativePathUnlocked(path.join(nativePath, SUMMARY_FILE));
   yield* requireNativePathUnlocked(path.join(nativePath, UPDATES_FILE));
+  yield* requireNativePathUnlocked(path.join(nativePath, CHAT_HISTORY_FILE));
 });
 
 export function encodeGrokCwdGroup(cwd: string): string {
@@ -133,6 +140,12 @@ export const writeGrokSession = Effect.fn("writeGrokSession")(function* (input: 
   readonly session: ParsedNativeSession;
   readonly existingNativePath?: string;
 }): Effect.fn.Return<string, TeleportNativeWriteError, FileSystem.FileSystem | Path.Path> {
+  if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
+    return yield* new TeleportNativeWriteError({
+      nativePath: input.sessionsRoot,
+      message: `Refusing to write a Grok session with an unsafe id '${input.session.externalSessionId}'.`,
+    });
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const nativePath = yield* resolveGrokWritePath({
@@ -549,7 +562,7 @@ registerTeleportFormat({
     const sessions = [];
     for (const nativePath of dirs) {
       const parsed = yield* readGrokSessionFromDir(nativePath);
-      if (Option.isNone(parsed)) {
+      if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
         continue;
       }
       if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {

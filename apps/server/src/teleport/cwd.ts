@@ -62,6 +62,8 @@ export function isGenericTeleportCwd(cwd: string): boolean {
     lowered === "/private/tmp" ||
     lowered === "/var" ||
     lowered === "/var/tmp" ||
+    lowered === "/private/var" ||
+    lowered === "/private/var/tmp" ||
     lowered === "/home" ||
     lowered === "/users" ||
     lowered === "/root"
@@ -69,12 +71,18 @@ export function isGenericTeleportCwd(cwd: string): boolean {
     return true;
   }
   const parts = lowered.split("/").filter((part) => part.length > 0);
+  if (posix.startsWith("//") && parts.length <= 2) {
+    return true;
+  }
   const first = parts[0];
   if (first === undefined) {
     return true;
   }
-  if (first === "home" || first === "users" || first === "root") {
+  if (first === "home" || first === "users") {
     return parts.length <= 2;
+  }
+  if (first === "root") {
+    return parts.length <= 1;
   }
   if (/^[a-z]:$/u.test(first)) {
     if (parts.length <= 1) {

@@ -17,21 +17,51 @@ function nodeErrorCode(error: unknown): string | undefined {
   return undefined;
 }
 
+function execExitStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+  if ("status" in error && typeof (error as { status?: unknown }).status === "number") {
+    return (error as { status: number }).status;
+  }
+  if ("code" in error && typeof (error as { code?: unknown }).code === "number") {
+    return (error as { code: number }).code;
+  }
+  return undefined;
+}
+
+function execStdout(error: unknown): string {
+  if (typeof error === "object" && error !== null && "stdout" in error) {
+    const stdout = (error as { stdout?: unknown }).stdout;
+    return typeof stdout === "string" ? stdout : "";
+  }
+  return "";
+}
+
 const isWindowsPathInUse = Effect.fn("isWindowsPathInUse")(function* (nativePath: string) {
-  // Succeed with a boolean. `Effect.tryPromise` `catch` is the error channel
-  // and would leak `false` into export/import failures.
-  return yield* Effect.promise(async () => {
-    try {
-      const handle = await NodeFSP.open(nativePath, "r+");
-      await handle.close();
-      return false;
-    } catch (error) {
-      const code = nodeErrorCode(error);
-      if (code === "ENOENT" || code === "EISDIR") {
+  return yield* Effect.tryPromise({
+    try: async () => {
+      try {
+        const handle = await NodeFSP.open(nativePath, "r+");
+        await handle.close();
         return false;
+      } catch (error) {
+        const code = nodeErrorCode(error);
+        if (code === "ENOENT" || code === "EISDIR") {
+          return false;
+        }
+        if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
+          return true;
+        }
+        throw error;
       }
-      return code === "EBUSY" || code === "EPERM" || code === "EACCES";
-    }
+    },
+    catch: (cause) =>
+      new TeleportFileLockedError({
+        nativePath,
+        message: `Failed to check whether ${nativePath} is locked.`,
+        cause,
+      }),
   });
 });
 
@@ -43,16 +73,25 @@ export const isNativePathLocked = Effect.fn("isNativePathLocked")(function* (nat
     return yield* isWindowsPathInUse(nativePath);
   }
   return yield* Effect.tryPromise({
-    try: () => execFile("lsof", ["-t", nativePath], { timeout: 2_000 }),
-    catch: () =>
+    try: async () => {
+      try {
+        const result = await execFile("lsof", ["-t", nativePath], { timeout: 2_000 });
+        return result.stdout.trim().length > 0;
+      } catch (error) {
+        // lsof exits 1 when no process has the file open.
+        if (execExitStatus(error) === 1) {
+          return execStdout(error).trim().length > 0;
+        }
+        throw error;
+      }
+    },
+    catch: (cause) =>
       new TeleportFileLockedError({
         nativePath,
         message: `Failed to check whether ${nativePath} is locked.`,
+        cause,
       }),
-  }).pipe(
-    Effect.map((result) => result.stdout.trim().length > 0),
-    Effect.orElseSucceed(() => false),
-  );
+  });
 });
 
 export const requireNativePathUnlocked = Effect.fn("requireNativePathUnlocked")(function* (

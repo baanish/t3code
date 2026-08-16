@@ -20,6 +20,28 @@ export function nonEmptyString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * Message text from a native session. Empty-after-trim is skipped, but
+ * leading/trailing whitespace on real content is preserved so export can
+ * round-trip the original transcript.
+ */
+export function nativeSessionText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return value.trim().length > 0 ? value : undefined;
+}
+
+export function isSafeTeleportSessionId(value: string): boolean {
+  if (value.length === 0 || value.length > 200) {
+    return false;
+  }
+  if (value.includes("\0") || value.includes("/") || value.includes("\\")) {
+    return false;
+  }
+  return value !== "." && value !== "..";
+}
+
 export function parseJsonObject(raw: string): Record<string, unknown> | undefined {
   let parsed: unknown;
   try {

@@ -26,6 +26,8 @@ const NATIVE_TELEPORT: TeleportThreadState = {
 
 function makeReadModel(input: {
   readonly teleport?: OrchestrationThread["teleport"];
+  readonly session?: OrchestrationThread["session"];
+  readonly messages?: OrchestrationThread["messages"];
 }): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
@@ -47,11 +49,11 @@ function makeReadModel(input: {
         settledOverride: null,
         settledAt: null,
         deletedAt: null,
-        messages: [],
+        messages: input.messages ?? [],
         proposedPlans: [],
         activities: [],
         checkpoints: [],
-        session: null,
+        session: input.session ?? null,
         ...(input.teleport !== undefined ? { teleport: input.teleport } : {}),
       },
     ],
@@ -134,6 +136,36 @@ it.layer(NodeServices.layer)("teleport thread decider", (it) => {
       });
       const events = Array.isArray(event) ? event : [event];
       expect(events.map((entry) => entry.type)).toContain("thread.turn-start-requested");
+    }),
+  );
+
+  it.effect("rejects native teleport while the T3 session is running", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.teleport.set",
+          commandId: CommandId.make("cmd-teleport-busy"),
+          threadId: ThreadId.make("thread-1"),
+          teleport: NATIVE_TELEPORT,
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: NOW,
+          },
+        }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      if (error._tag === "OrchestrationCommandInvariantError") {
+        expect(error.detail).toContain("starting or running");
+      }
     }),
   );
 });

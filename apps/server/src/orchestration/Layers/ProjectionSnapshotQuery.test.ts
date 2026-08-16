@@ -2515,6 +2515,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       if (shell._tag === "Some") {
         assert.deepEqual(shell.value.teleport, expectedTeleport);
       }
+
+      yield* sql`
+        UPDATE projection_threads
+        SET archived_at = '2026-08-14T00:00:02.000Z'
+        WHERE thread_id = 'thread-teleport'
+      `;
+      const archived = yield* snapshotQuery.getArchivedShellSnapshot();
+      assert.equal(archived.threads[0]?.id, ThreadId.make("thread-teleport"));
+      assert.deepEqual(archived.threads[0]?.teleport, expectedTeleport);
     }),
   );
 });

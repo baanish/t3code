@@ -106,6 +106,32 @@ describe("teleport Codex format", () => {
     }),
   );
 
+  it.effect("preserves leading and trailing whitespace in Codex message text", () =>
+    Effect.gen(function* () {
+      const contents = `${JSON.stringify({
+        timestamp: TELEPORT_TEST_CREATED_AT,
+        type: "session_meta",
+        payload: { id: TELEPORT_TEST_SESSION_ID, cwd: "/workspace" },
+      })}\n${JSON.stringify({
+        timestamp: TELEPORT_TEST_CREATED_AT,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "  keep indent  \n" }],
+        },
+      })}\n`;
+      const parsed = yield* parseCodexSessionContents({
+        contents,
+        nativePath: "/tmp/codex-whitespace.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.messages[0]?.text, "  keep indent  \n");
+      }
+    }),
+  );
+
   it.effect("skips forked Codex sessions", () =>
     Effect.gen(function* () {
       const contents = `${JSON.stringify({

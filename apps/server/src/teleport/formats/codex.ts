@@ -21,7 +21,9 @@ import { requireNativePathUnlocked } from "../fileLock.ts";
 import {
   firstUserTitle,
   isRecord,
+  isSafeTeleportSessionId,
   isSyntheticNativeUserText,
+  nativeSessionText,
   nonEmptyString,
   parseJsonObject,
   uuidFromPath,
@@ -86,7 +88,7 @@ function extractMessage(event: Record<string, unknown>): NativeTextMessage | und
 
 function collectCodexText(content: unknown): string | undefined {
   if (typeof content === "string") {
-    return nonEmptyString(content);
+    return nativeSessionText(content);
   }
   if (!Array.isArray(content)) {
     return undefined;
@@ -96,12 +98,12 @@ function collectCodexText(content: unknown): string | undefined {
     if (!isRecord(part)) {
       continue;
     }
-    const text = nonEmptyString(part.text);
+    const text = nativeSessionText(part.text);
     if (text) {
       parts.push(text);
     }
   }
-  return nonEmptyString(parts.join("\n"));
+  return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
 export function parseCodexSessionContents(input: {
@@ -344,7 +346,7 @@ registerTeleportFormat({
         nativePath,
         parse: parseCodexSessionContents,
       });
-      if (Option.isNone(parsed)) {
+      if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
         continue;
       }
       if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
@@ -368,6 +370,12 @@ registerTeleportFormat({
   }),
   write: Effect.fn("writeCodexSession")(function* (input) {
     const path = yield* Path.Path;
+    if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
+      return yield* new TeleportNativeWriteError({
+        nativePath: input.homes.codexSessionsRoot,
+        message: `Refusing to write a Codex session with an unsafe id '${input.session.externalSessionId}'.`,
+      });
+    }
     const now = yield* DateTime.now;
     const nativePath =
       input.existingNativePath ??

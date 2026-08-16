@@ -869,7 +869,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.message-sent":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
-        case "thread.history-replaced":
         case "thread.approval-response-requested":
         case "thread.user-input-response-requested": {
           const existingRow = yield* projectionThreadRepository.getById({
@@ -880,6 +879,22 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
+            updatedAt: event.occurredAt,
+          });
+          yield* refreshThreadShellSummary(event.payload.threadId);
+          return;
+        }
+
+        case "thread.history-replaced": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            latestTurnId: null,
             updatedAt: event.occurredAt,
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
@@ -1658,6 +1673,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : event.payload.createdAt,
             resolvedAt: event.payload.createdAt,
           });
+          return;
+        }
+
+        case "thread.history-replaced": {
+          const pendingRows = yield* projectionPendingApprovalRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(
+            pendingRows,
+            (row) =>
+              projectionPendingApprovalRepository.deleteByRequestId({
+                requestId: row.requestId,
+              }),
+            { concurrency: 1 },
+          ).pipe(Effect.asVoid);
           return;
         }
 

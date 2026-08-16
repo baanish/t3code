@@ -247,6 +247,47 @@ describe("teleport OpenCode format", () => {
     ),
   );
 
+  it.effect("refuses to load a session id that would traverse out of the OpenCode root", () =>
+    readOpenCodeSessionById({
+      opencodeRoot: "/tmp/opencode-root",
+      sessionId: "../../.codex/sessions",
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((parsed) => {
+        assert.equal(Option.isNone(parsed), true);
+      }),
+    ),
+  );
+
+  it.effect("replaces OpenCode json messages instead of leaving stale turns", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-opencode-replace-" });
+      const first = sampleTeleportSession("opencode", "/workspace");
+      yield* writeOpenCodeSession({
+        opencodeRoot: root,
+        session: first,
+      });
+      const shortened = {
+        ...first,
+        messages: first.messages.slice(0, 1),
+      };
+      yield* writeOpenCodeSession({
+        opencodeRoot: root,
+        session: shortened,
+      });
+      const parsed = yield* readOpenCodeSessionById({
+        opencodeRoot: root,
+        sessionId: TELEPORT_TEST_SESSION_ID,
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.messages.length, 1);
+        assert.equal(parsed.value.messages[0]?.text, first.messages[0]?.text);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it("roundtrips OpenCode resume cursors", () => {
     assert.equal(
       readTeleportExternalSessionId({

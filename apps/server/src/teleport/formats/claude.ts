@@ -25,6 +25,7 @@ import {
   collectTextParts,
   firstUserTitle,
   isRecord,
+  isSafeTeleportSessionId,
   nonEmptyString,
   parseJsonObject,
 } from "../json.ts";
@@ -158,10 +159,25 @@ export function parseClaudeSessionContents(input: {
 
 export function serializeClaudeSession(session: ParsedNativeSession): string {
   const lines: string[] = [];
+  const timestamp = session.createdAt ?? new Date().toISOString();
+  if (session.messages.length === 0) {
+    lines.push(
+      JSON.stringify({
+        type: "session",
+        nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+        uuid: session.externalSessionId,
+        parentUuid: null,
+        sessionId: session.externalSessionId,
+        cwd: session.cwd,
+        timestamp,
+      }),
+    );
+    return `${lines.join("\n")}\n`;
+  }
   let parentUuid: string | null = null;
   for (const [index, message] of session.messages.entries()) {
     const uuid = message.id ?? `${session.externalSessionId}-${index}`;
-    const timestamp = message.createdAt ?? session.createdAt ?? new Date().toISOString();
+    const at = message.createdAt ?? timestamp;
     lines.push(
       JSON.stringify({
         type: message.role,
@@ -170,7 +186,7 @@ export function serializeClaudeSession(session: ParsedNativeSession): string {
         parentUuid,
         sessionId: session.externalSessionId,
         cwd: session.cwd,
-        timestamp,
+        timestamp: at,
         message: {
           role: message.role,
           content: [{ type: "text", text: message.text }],
@@ -280,7 +296,7 @@ registerTeleportFormat({
         nativePath,
         parse: parseClaudeSessionContents,
       });
-      if (Option.isNone(parsed)) {
+      if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
         continue;
       }
       if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
@@ -304,6 +320,12 @@ registerTeleportFormat({
   }),
   write: Effect.fn("writeClaudeSession")(function* (input) {
     const path = yield* Path.Path;
+    if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
+      return yield* new TeleportNativeWriteError({
+        nativePath: input.homes.claudeProjectsRoot,
+        message: `Refusing to write a Claude session with an unsafe id '${input.session.externalSessionId}'.`,
+      });
+    }
     const nativePath =
       input.existingNativePath ??
       allocateClaudeSessionPath({

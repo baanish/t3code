@@ -80,6 +80,23 @@ describe("teleport Claude format", () => {
     }),
   );
 
+  it.effect("serializes an empty Claude session with metadata the parser can resume", () =>
+    Effect.gen(function* () {
+      const session = sampleTeleportSession("claudeAgent");
+      const empty = { ...session, messages: [] };
+      const parsed = yield* parseClaudeSessionContents({
+        contents: serializeClaudeSession(empty),
+        nativePath: session.nativePath,
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.externalSessionId, TELEPORT_TEST_SESSION_ID);
+        assert.equal(parsed.value.cwd, "/workspace");
+        assert.equal(parsed.value.messages.length, 0);
+      }
+    }),
+  );
+
   it.effect("fails closed on a newer Claude format version", () =>
     Effect.gen(function* () {
       const contents = `${JSON.stringify({
