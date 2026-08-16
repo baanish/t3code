@@ -110,6 +110,7 @@ export function TeleportOutButton({
                               ? {}
                               : { providerInstanceId: teleport.providerInstanceId }),
                             externalSessionId: teleport.externalSessionId,
+                            nativePath: teleport.nativePath,
                           },
                         ],
                       },

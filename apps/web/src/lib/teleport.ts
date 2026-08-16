@@ -1,15 +1,13 @@
 import {
   isTeleportProvider,
   isTeleportedOut,
+  TELEPORTED_OUT_SEND_DISABLED_REASON,
   type ExecutionEnvironmentCapabilities,
   type ProviderInstanceId,
   type TeleportProvider,
 } from "@t3tools/contracts";
 
-export { isTeleportedOut };
-
-export const TELEPORTED_OUT_SEND_DISABLED_REASON =
-  "This thread is in the native CLI. Import it to keep chatting here.";
+export { isTeleportedOut, TELEPORTED_OUT_SEND_DISABLED_REASON };
 
 export function environmentSupportsTeleport(
   capabilities: ExecutionEnvironmentCapabilities | null | undefined,

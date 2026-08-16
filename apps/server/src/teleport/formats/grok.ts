@@ -30,7 +30,7 @@ import {
   parseJsonObject,
 } from "../json.ts";
 import {
-  MAX_TELEPORT_SESSION_BYTES,
+  isOversizeTeleportSession,
   nativeTextMessage,
   parsedNativeSession,
   teleportCandidateFields,
@@ -114,14 +114,10 @@ export const readGrokSessionFromDir = Effect.fn("readGrokSessionFromDir")(functi
   if (summaryStat?.type !== "File") {
     return Option.none<ParsedNativeSession>();
   }
-  if (typeof summaryStat.size === "number" && summaryStat.size > MAX_TELEPORT_SESSION_BYTES) {
+  if (isOversizeTeleportSession(summaryStat.size)) {
     return Option.none<ParsedNativeSession>();
   }
-  if (
-    updatesStat !== null &&
-    typeof updatesStat.size === "number" &&
-    updatesStat.size > MAX_TELEPORT_SESSION_BYTES
-  ) {
+  if (updatesStat !== null && isOversizeTeleportSession(updatesStat.size)) {
     return Option.none<ParsedNativeSession>();
   }
   const summaryContents = yield* fs

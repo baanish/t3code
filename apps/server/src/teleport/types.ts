@@ -73,3 +73,8 @@ export function teleportCandidateFields(
 export const MAX_TELEPORT_MESSAGES = 2_000;
 export const MAX_TELEPORT_MESSAGE_CHARS = 100_000;
 export const MAX_TELEPORT_SESSION_BYTES = 20 * 1024 * 1024;
+
+export function isOversizeTeleportSession(size: number | bigint): boolean {
+  const bytes = typeof size === "bigint" ? size : BigInt(size);
+  return bytes > BigInt(MAX_TELEPORT_SESSION_BYTES);
+}

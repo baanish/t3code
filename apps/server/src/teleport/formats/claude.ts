@@ -28,6 +28,7 @@ import {
   firstUserTitle,
   isRecord,
   isSafeTeleportSessionId,
+  isSyntheticNativeUserText,
   nonEmptyString,
   parseJsonObject,
 } from "../json.ts";
@@ -60,7 +61,7 @@ export function encodeClaudeProjectPath(cwd: string): string {
 }
 
 function extractClaudeMessage(record: Record<string, unknown>): NativeTextMessage | undefined {
-  if (record.isSidechain === true) {
+  if (record.isSidechain === true || record.isMeta === true) {
     return undefined;
   }
   const type = record.type;
@@ -82,6 +83,9 @@ function extractClaudeMessage(record: Record<string, unknown>): NativeTextMessag
     return undefined;
   }
   if (role === "user" && isToolResultOnlyContent(message?.content ?? record.content)) {
+    return undefined;
+  }
+  if (role === "user" && isSyntheticNativeUserText(text)) {
     return undefined;
   }
   return nativeTextMessage({
@@ -282,6 +286,9 @@ const walkJsonl = Effect.fn("walkClaudeJsonl")(function* (root: string) {
         continue;
       }
       if (stat.type === "Directory") {
+        if (name === "subagents") {
+          continue;
+        }
         stack.push(entryPath);
       } else if (stat.type === "File" && entryPath.endsWith(".jsonl")) {
         files.push(entryPath);

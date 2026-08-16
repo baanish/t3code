@@ -8,6 +8,7 @@ import {
   type ClaudeSettings,
   type CodexSettings,
   type ServerSettings,
+  type TeleportProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -77,6 +78,33 @@ export function resolveClaudeProjectsRootForInstance(
     homes.extraClaudeProjectsRoots.find((root) => root.instanceId === instanceId)?.root ??
     homes.claudeProjectsRoot
   );
+}
+
+export function teleportNativeRootFor(
+  homes: TeleportHomes,
+  provider: TeleportProvider,
+  instanceId: ProviderInstanceId,
+): string {
+  switch (provider) {
+    case "codex":
+      return resolveCodexSessionsRoot(homes, instanceId);
+    case "claudeAgent":
+      return resolveClaudeProjectsRootForInstance(homes, instanceId);
+    case "opencode":
+      return homes.opencodeRoot;
+    case "grok":
+      return homes.grokSessionsRoot;
+    default: {
+      const _exhaustive: never = provider;
+      return _exhaustive;
+    }
+  }
+}
+
+export function nativePathIsUnderRoot(nativePath: string, root: string): boolean {
+  const normalizedPath = nativePath.replaceAll("\\", "/");
+  const normalizedRoot = root.replaceAll("\\", "/").replace(/\/+$/u, "");
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
 }
 
 export function claudeSearchRoots(homes: TeleportHomes): ReadonlyArray<TeleportInstanceRoot> {

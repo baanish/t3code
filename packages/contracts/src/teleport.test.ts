@@ -2,7 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  isTeleportedOut,
   resolveTeleportPresence,
+  TELEPORTED_OUT_SEND_DISABLED_REASON,
   TeleportExportError,
   TeleportLockProbeError,
   TeleportRuntimePayload,
@@ -58,6 +60,19 @@ describe("teleport presence", () => {
         lastSyncDirection: "import",
       }),
     ).toBe("t3");
+  });
+
+  it("reports native presence as teleported out", () => {
+    expect(
+      isTeleportedOut({
+        presence: "native",
+        provider: "codex",
+        externalSessionId: "session-1",
+        nativePath: "/tmp/session.jsonl",
+        lastSyncedAt: "2026-08-14T22:00:00.000Z",
+      }),
+    ).toBe(true);
+    expect(TELEPORTED_OUT_SEND_DISABLED_REASON.length).toBeGreaterThan(0);
   });
 });
 

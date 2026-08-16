@@ -85,7 +85,11 @@ export function isSyntheticNativeUserText(text: string): boolean {
   return (
     trimmed.startsWith("<environment_context>") ||
     trimmed.startsWith("<skills_instructions>") ||
-    trimmed.startsWith("<permissions instructions>")
+    trimmed.startsWith("<permissions instructions>") ||
+    trimmed.startsWith("<local-command-caveat>") ||
+    trimmed.startsWith("<command-name>") ||
+    trimmed.startsWith("<system-reminder>") ||
+    trimmed.startsWith("<local-command-stdout>")
   );
 }
 

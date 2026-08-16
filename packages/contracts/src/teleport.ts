@@ -30,6 +30,7 @@ export const TeleportSessionRef = Schema.Struct({
   provider: TeleportProvider,
   providerInstanceId: Schema.optional(ProviderInstanceId),
   externalSessionId: TrimmedNonEmptyString,
+  nativePath: Schema.optional(TrimmedNonEmptyString),
 });
 export type TeleportSessionRef = typeof TeleportSessionRef.Type;
 
@@ -129,6 +130,9 @@ export function resolveTeleportPresence(
 export function isTeleportedOut(teleport: TeleportThreadState | null | undefined): boolean {
   return teleport?.presence === "native";
 }
+
+export const TELEPORTED_OUT_SEND_DISABLED_REASON =
+  "This thread is in the native CLI. Import it to keep chatting here.";
 
 export class TeleportInvalidInputError extends Schema.TaggedErrorClass<TeleportInvalidInputError>()(
   "TeleportInvalidInputError",

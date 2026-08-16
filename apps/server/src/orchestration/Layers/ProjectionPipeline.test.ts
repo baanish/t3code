@@ -994,6 +994,146 @@ it.layer(
   );
 });
 
+it.layer(
+  Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-attachments-history-")),
+)("OrchestrationProjectionPipeline", (it) => {
+  it.effect("prunes attachment files when thread history is replaced", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const { attachmentsDir } = yield* ServerConfig;
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("Thread History.Files");
+      const removeAttachmentId = "thread-history-files-00000000-0000-4000-8000-000000000001";
+      const otherThreadAttachmentId =
+        "thread-history-files-extra-00000000-0000-4000-8000-000000000002";
+
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-history-files-1"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-history-files"),
+        occurredAt: now,
+        commandId: CommandId.make("cmd-history-files-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-history-files-1"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-history-files"),
+          title: "Project History Files",
+          workspaceRoot: "/tmp/project-history-files",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-history-files-2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-history-files-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-history-files-2"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-history-files"),
+          title: "Thread History Files",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-history-files-3"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-history-files-3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-history-files-3"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.make("message-history-old"),
+          role: "user",
+          text: "with image",
+          attachments: [
+            {
+              type: "image",
+              id: removeAttachmentId,
+              name: "old.png",
+              mimeType: "image/png",
+              sizeBytes: 5,
+            },
+          ],
+          turnId: null,
+          streaming: false,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const removePath = path.join(attachmentsDir, `${removeAttachmentId}.png`);
+      const otherThreadPath = path.join(attachmentsDir, `${otherThreadAttachmentId}.png`);
+      yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(removePath, "remove");
+      yield* fileSystem.writeFileString(otherThreadPath, "other");
+      assert.isTrue(yield* exists(removePath));
+      assert.isTrue(yield* exists(otherThreadPath));
+
+      yield* appendAndProject({
+        type: "thread.history-replaced",
+        eventId: EventId.make("evt-history-files-4"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-history-files-4"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-history-files-4"),
+        metadata: {},
+        payload: {
+          threadId,
+          messages: [
+            {
+              id: MessageId.make("message-history-new"),
+              role: "user",
+              text: "imported text",
+              turnId: null,
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          replacedAt: now,
+        },
+      });
+
+      assert.isFalse(yield* exists(removePath));
+      assert.isTrue(yield* exists(otherThreadPath));
+    }),
+  );
+});
+
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-attachments-revert-")))(
   "OrchestrationProjectionPipeline",
   (it) => {

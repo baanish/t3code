@@ -44,17 +44,21 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
+import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { canReplaceThreadTitle } from "../orchestration/threadTitles.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "./cwd.ts";
 import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
+import { ensureOpenCodeId } from "./formats/opencodeIds.ts";
 import { getTeleportFormat } from "./formats/registry.ts";
 import "./formats/register.ts";
 import { resolveTeleportHomes, type TeleportHomes } from "./homes.ts";
+import { firstUserTitle, truncateTitle } from "./json.ts";
 import {
   buildTeleportResumeCursor,
   readTeleportExternalSessionId,
@@ -62,7 +66,6 @@ import {
   teleportThreadStateFromPayload,
   toTeleportProvider,
 } from "./resumeCursors.ts";
-import { firstUserTitle, truncateTitle } from "./json.ts";
 import {
   MAX_TELEPORT_MESSAGE_CHARS,
   MAX_TELEPORT_MESSAGES,
@@ -116,7 +119,7 @@ function nativeMessagesToOrchestration(
   now: string,
 ): OrchestrationMessage[] {
   return messages.map((message, index) => ({
-    id: MessageId.make(message.id ?? ids[index] ?? `${index}`),
+    id: MessageId.make(ids[index] ?? `${index}`),
     role: message.role,
     text: message.text,
     turnId: null,
@@ -144,6 +147,18 @@ function orchestrationToNative(messages: ReadonlyArray<OrchestrationMessage>): N
       }),
     ];
   });
+}
+
+function allocateExportSessionId(
+  provider: TeleportProvider,
+  existingPayload: TeleportRuntimePayload | undefined,
+  nextUuid: string,
+): string {
+  const existing = existingPayload?.externalSessionId;
+  if (provider === "opencode") {
+    return existing ? ensureOpenCodeId("ses", existing) : ensureOpenCodeId("ses", undefined);
+  }
+  return existing ?? nextUuid;
 }
 
 function isBusySessionStatus(status: string | undefined): boolean {
@@ -219,6 +234,34 @@ export const make = Effect.gen(function* () {
       nativePath: parsed.nativePath,
     });
   };
+
+  const stopThreadProviderSession = (threadId: ThreadId) =>
+    providerService.stopSession({ threadId }).pipe(
+      Effect.catchTags({
+        ProviderValidationError: (error) =>
+          Effect.logDebug("teleport.stop-session-skipped", {
+            threadId,
+            reason: error._tag,
+          }),
+        ProviderSessionNotFoundError: (error) =>
+          Effect.logDebug("teleport.stop-session-skipped", {
+            threadId,
+            reason: error._tag,
+          }),
+        ProviderAdapterSessionNotFoundError: (error) =>
+          Effect.logDebug("teleport.stop-session-skipped", {
+            threadId,
+            reason: error._tag,
+          }),
+      }),
+      Effect.mapError(
+        (cause) =>
+          new TeleportInvalidInputError({
+            message: "Failed to stop the T3 provider session.",
+            cause,
+          }),
+      ),
+    );
 
   const listSessions = (input: TeleportListSessionsInput) =>
     provideNative(
@@ -311,6 +354,7 @@ export const make = Effect.gen(function* () {
               ...(ref.providerInstanceId === undefined
                 ? {}
                 : { providerInstanceId: ref.providerInstanceId }),
+              ...(ref.nativePath === undefined ? {} : { nativePath: ref.nativePath }),
             });
             yield* requireParsedSessionUnlocked(parsed, homes);
             parsedSessions.push({
@@ -354,7 +398,7 @@ export const make = Effect.gen(function* () {
                     }),
                 ),
               );
-              if (Option.isNone(shell) || shell.value.archivedAt !== null) {
+              if (Option.isNone(shell)) {
                 continue;
               }
               if (shell.value.projectId !== input.projectId) {
@@ -365,6 +409,23 @@ export const make = Effect.gen(function* () {
                   existingProjectId: shell.value.projectId,
                   message: `Session '${parsed.externalSessionId}' is already bound to another T3 project.`,
                 });
+              }
+              if (shell.value.archivedAt !== null) {
+                yield* engine
+                  .dispatch({
+                    type: "thread.unarchive",
+                    commandId: CommandId.make(yield* nextId()),
+                    threadId: binding.threadId,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TeleportInvalidInputError({
+                          message: "Failed to unarchive the existing teleport thread.",
+                          cause,
+                        }),
+                    ),
+                  );
               }
               existingThreadId = binding.threadId;
               existingProjectId = shell.value.projectId;
@@ -410,6 +471,7 @@ export const make = Effect.gen(function* () {
                   message: `Cannot import while T3 session '${parsed.externalSessionId}' is running.`,
                 });
               }
+              yield* stopThreadProviderSession(threadId);
               if (
                 parsed.messages.length === 0 &&
                 orchestrationToNative(latest.value.messages).length > 0
@@ -437,22 +499,24 @@ export const make = Effect.gen(function* () {
                       }),
                   ),
                 );
-              yield* engine
-                .dispatch({
-                  type: "thread.meta.update",
-                  commandId: CommandId.make(yield* nextId()),
-                  threadId,
-                  title,
-                })
-                .pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new TeleportInvalidInputError({
-                        message: "Failed to update imported thread title.",
-                        cause,
-                      }),
-                  ),
-                );
+              if (canReplaceThreadTitle(latest.value.title)) {
+                yield* engine
+                  .dispatch({
+                    type: "thread.meta.update",
+                    commandId: CommandId.make(yield* nextId()),
+                    threadId,
+                    title,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TeleportInvalidInputError({
+                          message: "Failed to update imported thread title.",
+                          cause,
+                        }),
+                    ),
+                  );
+              }
             } else {
               threadId = ThreadId.make(yield* nextId());
               yield* engine
@@ -658,32 +722,7 @@ export const make = Effect.gen(function* () {
             });
           }
 
-          yield* providerService.stopSession({ threadId: input.threadId }).pipe(
-            Effect.catchTags({
-              ProviderValidationError: (error) =>
-                Effect.logDebug("teleport.export.stop-session-skipped", {
-                  threadId: input.threadId,
-                  reason: error._tag,
-                }),
-              ProviderSessionNotFoundError: (error) =>
-                Effect.logDebug("teleport.export.stop-session-skipped", {
-                  threadId: input.threadId,
-                  reason: error._tag,
-                }),
-              ProviderAdapterSessionNotFoundError: (error) =>
-                Effect.logDebug("teleport.export.stop-session-skipped", {
-                  threadId: input.threadId,
-                  reason: error._tag,
-                }),
-            }),
-            Effect.mapError(
-              (cause) =>
-                new TeleportInvalidInputError({
-                  message: "Failed to stop the T3 provider session before export.",
-                  cause,
-                }),
-            ),
-          );
+          yield* stopThreadProviderSession(input.threadId);
           const now = yield* nowIso;
           yield* engine
             .dispatch({
@@ -700,26 +739,23 @@ export const make = Effect.gen(function* () {
               ),
             );
 
-          const cwd = yield* resolveTeleportCwdPath(project.value.workspaceRoot);
           const settings = yield* settingsService.getSettings.pipe(
             Effect.mapError(
               (cause) =>
                 new TeleportNativeWriteError({
-                  nativePath: cwd,
+                  nativePath: project.value.workspaceRoot,
                   message: "Server settings could not be read for teleport export.",
                   cause,
                 }),
             ),
           );
           const homes = yield* resolveTeleportHomes(settings);
-          const existingExternalId = Option.isSome(binding)
-            ? readTeleportExternalSessionId({
-                provider: driverKind,
-                resumeCursor: binding.value.resumeCursor,
-                runtimePayload: binding.value.runtimePayload,
-              })
-            : undefined;
-          const externalSessionId = existingExternalId ?? (yield* nextId());
+          const existingNativePath = existingPayload?.nativePath;
+          const externalSessionId = allocateExportSessionId(
+            provider,
+            existingPayload,
+            yield* nextId(),
+          );
           yield* claimExtraInFlight(inFlightKeys, `session:${provider}:${externalSessionId}`);
           const providerInstanceId =
             Option.getOrUndefined(binding)?.providerInstanceId ??
@@ -743,7 +779,68 @@ export const make = Effect.gen(function* () {
               message: "Cannot export while this T3 session is running.",
             });
           }
+          const cwdSource =
+            resolveThreadWorkspaceCwd({
+              thread: latest.value,
+              projects: [project.value],
+            }) ?? project.value.workspaceRoot;
+          const cwd = yield* resolveTeleportCwdPath(cwdSource);
           const messages = capMessages(orchestrationToNative(latest.value.messages));
+          const pendingNativePath =
+            existingNativePath ?? `teleport-pending:${provider}:${externalSessionId}`;
+          const pendingPayload: TeleportRuntimePayload = {
+            schemaVersion: TELEPORT_SCHEMA_VERSION,
+            externalSessionId,
+            nativePath: pendingNativePath,
+            lastSyncDirection: "export",
+            lastSyncedAt: now,
+            nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+            presence: "native",
+          };
+          yield* engine
+            .dispatch({
+              type: "thread.teleport.set",
+              commandId: CommandId.make(yield* nextId()),
+              threadId: input.threadId,
+              teleport: teleportThreadStateFromPayload({
+                provider,
+                providerInstanceId,
+                payload: pendingPayload,
+              }),
+              createdAt: now,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TeleportInvalidInputError({
+                    message: "Failed to persist teleport presence.",
+                    cause,
+                  }),
+              ),
+            );
+
+          const revertExportPresence = engine
+            .dispatch({
+              type: "thread.teleport.set",
+              commandId: CommandId.make(yield* nextId()),
+              threadId: input.threadId,
+              teleport: teleportThreadStateFromPayload({
+                provider,
+                providerInstanceId,
+                payload: existingPayload
+                  ? { ...existingPayload, presence: "t3" }
+                  : { ...pendingPayload, presence: "t3" },
+              }),
+              createdAt: now,
+            })
+            .pipe(
+              Effect.catch(() =>
+                Effect.logDebug("teleport.export.presence-revert-skipped", {
+                  threadId: input.threadId,
+                }),
+              ),
+            );
+
           const nativeSession: ParsedNativeSession = {
             provider,
             externalSessionId,
@@ -757,19 +854,21 @@ export const make = Effect.gen(function* () {
             providerInstanceId,
           };
 
-          const existingNativePath = existingPayload?.nativePath;
           const adapter = getTeleportFormat(provider);
           if (!adapter) {
+            yield* revertExportPresence;
             return yield* new TeleportUnsupportedProviderError({
               provider: driverKind,
               message: `Teleport does not support provider '${provider}'.`,
             });
           }
-          const nativePath = yield* adapter.write({
-            homes,
-            session: nativeSession,
-            ...(existingNativePath !== undefined ? { existingNativePath } : {}),
-          });
+          const nativePath = yield* adapter
+            .write({
+              homes,
+              session: nativeSession,
+              ...(existingNativePath !== undefined ? { existingNativePath } : {}),
+            })
+            .pipe(Effect.tapError(() => revertExportPresence));
 
           const teleportPayload: TeleportRuntimePayload = {
             schemaVersion: TELEPORT_SCHEMA_VERSION,

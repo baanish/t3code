@@ -339,6 +339,41 @@ describe("teleport Codex format", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("loads a shared-home custom instance from the default listing label", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-codex-shared-home-" });
+      const sharedRoot = path.join(root, "codex", "sessions");
+      const homes: TeleportHomes = {
+        codexSessionsRoot: sharedRoot,
+        extraCodexSessionsRoots: [],
+        claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
+        opencodeRoot: path.join(root, "opencode"),
+        grokSessionsRoot: path.join(root, "grok", "sessions"),
+      };
+      const nativePath = path.join(
+        sharedRoot,
+        "2026",
+        "08",
+        "14",
+        `rollout-2026-08-14T06-00-00-${TELEPORT_TEST_SESSION_ID}.jsonl`,
+      );
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(nativePath, serializeCodexSession(sampleTeleportSession("codex")));
+      const parsed = yield* loadTeleportSession({
+        homes,
+        provider: "codex",
+        externalSessionId: TELEPORT_TEST_SESSION_ID,
+        cwd: "/workspace",
+        providerInstanceId: ProviderInstanceId.make("codex_work"),
+      });
+      assert.equal(parsed.nativePath, nativePath);
+      assert.equal(parsed.providerInstanceId, "codex_work");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("writes a new Codex session under the selected instance home", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
