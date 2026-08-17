@@ -947,7 +947,14 @@ export const make = Effect.gen(function* () {
                     }),
                   ),
                 );
-            });
+            }).pipe(
+              Effect.catchCause(() =>
+                Effect.logWarning("teleport.export.persist-native-failed", {
+                  threadId: input.threadId,
+                  nativePath,
+                }),
+              ),
+            );
           };
 
           const nativeSession: ParsedNativeSession = {
