@@ -47,6 +47,25 @@ describe("threadSupportsTeleportExport", () => {
     ).toBe(false);
   });
 
+  it("does not treat Grok or OpenCode as teleport providers", () => {
+    expect(
+      threadSupportsTeleportExport({
+        teleportedOut: false,
+        providerName: undefined,
+        instanceId: "grok",
+        providers: [{ instanceId: "grok", driver: "grok" }],
+      }),
+    ).toBe(false);
+    expect(
+      threadSupportsTeleportExport({
+        teleportedOut: false,
+        providerName: "opencode",
+        instanceId: "opencode",
+        providers: [{ instanceId: "opencode", driver: "opencode" }],
+      }),
+    ).toBe(false);
+  });
+
   it("keeps teleported-out threads exportable so they can be imported back", () => {
     expect(
       threadSupportsTeleportExport({

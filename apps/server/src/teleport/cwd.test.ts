@@ -7,11 +7,7 @@ import * as Path from "effect/Path";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import {
-  isForeignOpenCodeProjectFolder,
-  isGenericTeleportCwd,
   isTeleportCwdWithin,
-  openCodeDirectoryMayMatch,
-  opencodeSessionMatchesProjectCwd,
   resolveTeleportCwdPath,
   teleportCwdsEquivalent,
   teleportCwdsMatch,
@@ -23,83 +19,14 @@ describe("teleport cwd matching", () => {
     assert.equal(teleportCwdsMatch("/workspace", "/other"), false);
   });
 
-  it("treats a project folder as inside its OpenCode launch cwd", () => {
+  it("treats a nested project folder as inside its parent cwd", () => {
     assert.equal(
-      isTeleportCwdWithin("/home/user/projects/native/opencode", "/home/user/projects/native"),
+      isTeleportCwdWithin("/home/user/projects/native/codex", "/home/user/projects/native"),
       true,
     );
-    assert.equal(isTeleportCwdWithin("/tmp/oc-wire-test", "/tmp"), true);
+    assert.equal(isTeleportCwdWithin("/tmp/wire-test", "/tmp"), true);
     assert.equal(isTeleportCwdWithin("/foobar", "/foo"), false);
   });
-
-  it("rejects home and temp roots as OpenCode launch directories", () => {
-    assert.equal(isGenericTeleportCwd("/"), true);
-    assert.equal(isGenericTeleportCwd("/tmp"), true);
-    assert.equal(isGenericTeleportCwd("/private/var"), true);
-    assert.equal(isGenericTeleportCwd("/private/var/tmp"), true);
-    assert.equal(isGenericTeleportCwd("//server/share"), true);
-    assert.equal(isGenericTeleportCwd("/home/user"), true);
-    assert.equal(isGenericTeleportCwd("/root"), true);
-    assert.equal(isGenericTeleportCwd("/root/workspace"), false);
-    assert.equal(isGenericTeleportCwd("/home/user/projects/native"), false);
-    assert.equal(isGenericTeleportCwd("C:\\Users\\Foo"), true);
-    assert.equal(isGenericTeleportCwd("C:\\Users\\Foo\\proj"), false);
-  });
-
-  it.effect("matches an OpenCode session whose cwd is a parent of the project", () =>
-    opencodeSessionMatchesProjectCwd(
-      "/home/user/projects/native",
-      "/home/user/projects/native/opencode",
-    ).pipe(
-      Effect.provideService(HostProcessPlatform, "linux"),
-      Effect.provide(NodeServices.layer),
-      Effect.map((matched) => {
-        assert.equal(matched, true);
-      }),
-    ),
-  );
-
-  it.effect("does not match an OpenCode session launched from /tmp", () =>
-    opencodeSessionMatchesProjectCwd("/tmp", "/tmp/oc-wire-test").pipe(
-      Effect.provideService(HostProcessPlatform, "linux"),
-      Effect.provide(NodeServices.layer),
-      Effect.map((matched) => {
-        assert.equal(matched, false);
-      }),
-    ),
-  );
-
-  it("does not treat sibling harness folders as OpenCode parent matches", () => {
-    assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/codex"), true);
-    assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/claude"), true);
-    assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/opencode"), false);
-    assert.equal(
-      openCodeDirectoryMayMatch(
-        "/home/user/projects/native",
-        "/home/user/projects/native/opencode",
-      ),
-      true,
-    );
-    assert.equal(openCodeDirectoryMayMatch("/tmp", "/tmp/oc-wire-test"), false);
-    assert.equal(openCodeDirectoryMayMatch("/workspace", "/real/workspace/project"), true);
-    assert.equal(
-      openCodeDirectoryMayMatch("/home/user/projects/native", "/home/user/projects/native/codex"),
-      true,
-    );
-  });
-
-  it.effect("does not list a parent OpenCode session under a Codex project folder", () =>
-    opencodeSessionMatchesProjectCwd(
-      "/home/user/projects/native",
-      "/home/user/projects/native/codex",
-    ).pipe(
-      Effect.provideService(HostProcessPlatform, "linux"),
-      Effect.provide(NodeServices.layer),
-      Effect.map((matched) => {
-        assert.equal(matched, false);
-      }),
-    ),
-  );
 
   it.effect("treats a symlink cwd as the same project", () =>
     Effect.gen(function* () {

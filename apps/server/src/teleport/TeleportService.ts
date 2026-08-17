@@ -54,7 +54,6 @@ import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDi
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "./cwd.ts";
 import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
-import { ensureOpenCodeId } from "./formats/opencodeIds.ts";
 import { getTeleportFormat } from "./formats/registry.ts";
 import "./formats/register.ts";
 import { resolveTeleportHomes, type TeleportHomes } from "./homes.ts";
@@ -150,15 +149,10 @@ function orchestrationToNative(messages: ReadonlyArray<OrchestrationMessage>): N
 }
 
 function allocateExportSessionId(
-  provider: TeleportProvider,
   existingPayload: TeleportRuntimePayload | undefined,
   nextUuid: string,
 ): string {
-  const existing = existingPayload?.externalSessionId;
-  if (provider === "opencode") {
-    return existing ? ensureOpenCodeId("ses", existing) : ensureOpenCodeId("ses", undefined);
-  }
-  return existing ?? nextUuid;
+  return existingPayload?.externalSessionId ?? nextUuid;
 }
 
 function isBusySessionStatus(status: string | undefined): boolean {
@@ -752,11 +746,7 @@ export const make = Effect.gen(function* () {
           );
           const homes = yield* resolveTeleportHomes(settings);
           const existingNativePath = existingPayload?.nativePath;
-          const externalSessionId = allocateExportSessionId(
-            provider,
-            existingPayload,
-            yield* nextId(),
-          );
+          const externalSessionId = allocateExportSessionId(existingPayload, yield* nextId());
           yield* claimExtraInFlight(inFlightKeys, `session:${provider}:${externalSessionId}`);
           const providerInstanceId =
             Option.getOrUndefined(binding)?.providerInstanceId ??

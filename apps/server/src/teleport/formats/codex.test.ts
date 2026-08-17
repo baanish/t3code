@@ -201,8 +201,6 @@ describe("teleport Codex format", () => {
         extraCodexSessionsRoots: [],
         claudeProjectsRoot: path.join(root, "claude", "projects"),
         extraClaudeProjectsRoots: [],
-        opencodeRoot: path.join(root, "opencode"),
-        grokSessionsRoot: path.join(root, "grok", "sessions"),
       };
       const codexPath = path.join(
         homes.codexSessionsRoot,
@@ -241,8 +239,6 @@ describe("teleport Codex format", () => {
         ],
         claudeProjectsRoot: path.join(root, "claude", "projects"),
         extraClaudeProjectsRoots: [],
-        opencodeRoot: path.join(root, "opencode"),
-        grokSessionsRoot: path.join(root, "grok", "sessions"),
       };
       const extraPath = path.join(
         extraRoot,
@@ -287,8 +283,6 @@ describe("teleport Codex format", () => {
         ],
         claudeProjectsRoot: path.join(root, "claude", "projects"),
         extraClaudeProjectsRoots: [],
-        opencodeRoot: path.join(root, "opencode"),
-        grokSessionsRoot: path.join(root, "grok", "sessions"),
       };
       const defaultPath = path.join(
         defaultRoot,
@@ -355,8 +349,6 @@ describe("teleport Codex format", () => {
         ],
         claudeProjectsRoot: path.join(root, "claude", "projects"),
         extraClaudeProjectsRoots: [],
-        opencodeRoot: path.join(root, "opencode"),
-        grokSessionsRoot: path.join(root, "grok", "sessions"),
       };
       const nativePath = path.join(
         sharedRoot,
@@ -396,8 +388,6 @@ describe("teleport Codex format", () => {
         ],
         claudeProjectsRoot: path.join(root, "claude", "projects"),
         extraClaudeProjectsRoots: [],
-        opencodeRoot: path.join(root, "opencode"),
-        grokSessionsRoot: path.join(root, "grok", "sessions"),
       };
       const adapter = getTeleportFormat("codex");
       assert.ok(adapter);

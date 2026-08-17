@@ -11,11 +11,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import {
-  isTeleportCwdWithin,
-  opencodeSessionMatchesProjectCwd,
-  teleportCwdsEquivalent,
-} from "./cwd.ts";
+import { isTeleportCwdWithin, teleportCwdsEquivalent } from "./cwd.ts";
 import { getTeleportFormat, listRegisteredTeleportProviders } from "./formats/registry.ts";
 import {
   canonicalizeTeleportNativePath,
@@ -103,20 +99,6 @@ const resolveNativePathInstance = Effect.fn("resolveNativePathInstance")(functio
         instanceId: input.requestedInstanceId,
       };
     }
-    const configuredIds = configuredInstanceRootsForProvider(input.homes, input.provider).map(
-      (instance) => instance.instanceId,
-    );
-    const requestedIsConfigured = configuredIds.includes(input.requestedInstanceId);
-    if (
-      !requestedIsConfigured &&
-      matchingInstanceIds.length > 0 &&
-      (input.provider === "opencode" || input.provider === "grok")
-    ) {
-      return {
-        nativePath: canonicalPath,
-        instanceId: input.requestedInstanceId,
-      };
-    }
     return yield* new TeleportDiscoveryError({
       reason: `Native ${input.provider} session path is outside instance '${input.requestedInstanceId}'.`,
     });
@@ -195,11 +177,9 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
     });
   }
   const cwdMatches =
-    input.provider === "opencode"
-      ? yield* opencodeSessionMatchesProjectCwd(parsed.cwd, input.cwd)
-      : (yield* teleportCwdsEquivalent(parsed.cwd, input.cwd)) ||
-        isTeleportCwdWithin(parsed.cwd, input.cwd) ||
-        isTeleportCwdWithin(input.cwd, parsed.cwd);
+    (yield* teleportCwdsEquivalent(parsed.cwd, input.cwd)) ||
+    isTeleportCwdWithin(parsed.cwd, input.cwd) ||
+    isTeleportCwdWithin(input.cwd, parsed.cwd);
   if (!cwdMatches) {
     return yield* new TeleportDiscoveryError({
       reason: `Native ${input.provider} session '${input.externalSessionId}' no longer belongs to this project.`,

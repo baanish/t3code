@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import {
   isTeleportedOut,
+  isTeleportProvider,
   resolveTeleportPresence,
   TELEPORTED_OUT_SEND_DISABLED_REASON,
   TeleportDiscoveryError,
@@ -17,17 +18,26 @@ const decodeTeleportThreadState = Schema.decodeUnknownSync(TeleportThreadState);
 const decodeTeleportRuntimePayload = Schema.decodeUnknownSync(TeleportRuntimePayload);
 const decodeTeleportExportError = Schema.decodeUnknownSync(TeleportExportError);
 
+describe("teleport providers", () => {
+  it("supports Codex and Claude native CLIs only", () => {
+    expect(isTeleportProvider("codex")).toBe(true);
+    expect(isTeleportProvider("claudeAgent")).toBe(true);
+    expect(isTeleportProvider("grok")).toBe(false);
+    expect(isTeleportProvider("opencode")).toBe(false);
+  });
+});
+
 describe("teleport presence", () => {
   it("decodes a complete thread teleport state", () => {
     const parsed = decodeTeleportThreadState({
       presence: "native",
-      provider: "grok",
+      provider: "codex",
       externalSessionId: "session-1",
-      nativePath: "/home/user/.grok/sessions/session-1",
+      nativePath: "/home/user/.codex/sessions/session-1",
       lastSyncedAt: "2026-08-14T22:00:00.000Z",
     });
     expect(parsed.presence).toBe("native");
-    expect(parsed.provider).toBe("grok");
+    expect(parsed.provider).toBe("codex");
   });
 
   it("uses an explicit presence on the runtime payload", () => {
