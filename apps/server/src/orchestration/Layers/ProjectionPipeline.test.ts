@@ -1134,6 +1134,157 @@ it.layer(
   );
 });
 
+it.layer(
+  Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-attachments-collide-")),
+)("OrchestrationProjectionPipeline", (it) => {
+  it.effect("does not prune another thread's attachments that share a sanitized id segment", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const { attachmentsDir } = yield* ServerConfig;
+      const now = "2026-01-01T00:00:00.000Z";
+      const leftThreadId = ThreadId.make("foo!");
+      const rightThreadId = ThreadId.make("foo?");
+      const leftAttachmentId = "foo-00000000-0000-4000-8000-000000000001";
+      const rightAttachmentId = "foo-00000000-0000-4000-8000-000000000002";
+
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "project.created",
+        eventId: EventId.make("evt-collide-1"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-collide"),
+        occurredAt: now,
+        commandId: CommandId.make("cmd-collide-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-collide-1"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-collide"),
+          title: "Project Collide",
+          workspaceRoot: "/tmp/project-collide",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const createThread = (threadId: ThreadId, eventSuffix: string, title: string) =>
+        appendAndProject({
+          type: "thread.created",
+          eventId: EventId.make(`evt-collide-${eventSuffix}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make(`cmd-collide-${eventSuffix}`),
+          causationEventId: null,
+          correlationId: CorrelationId.make(`cmd-collide-${eventSuffix}`),
+          metadata: {},
+          payload: {
+            threadId,
+            projectId: ProjectId.make("project-collide"),
+            title,
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+      yield* createThread(leftThreadId, "2", "Left");
+      yield* createThread(rightThreadId, "3", "Right");
+
+      const sendImage = (
+        threadId: ThreadId,
+        messageId: string,
+        attachmentId: string,
+        eventSuffix: string,
+      ) =>
+        appendAndProject({
+          type: "thread.message-sent",
+          eventId: EventId.make(`evt-collide-${eventSuffix}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make(`cmd-collide-${eventSuffix}`),
+          causationEventId: null,
+          correlationId: CorrelationId.make(`cmd-collide-${eventSuffix}`),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make(messageId),
+            role: "user",
+            text: "with image",
+            attachments: [
+              {
+                type: "image",
+                id: attachmentId,
+                name: "shot.png",
+                mimeType: "image/png",
+                sizeBytes: 5,
+              },
+            ],
+            turnId: null,
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+      yield* sendImage(leftThreadId, "message-left", leftAttachmentId, "4");
+      yield* sendImage(rightThreadId, "message-right", rightAttachmentId, "5");
+
+      const leftPath = path.join(attachmentsDir, `${leftAttachmentId}.png`);
+      const rightPath = path.join(attachmentsDir, `${rightAttachmentId}.png`);
+      yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(leftPath, "left");
+      yield* fileSystem.writeFileString(rightPath, "right");
+
+      yield* appendAndProject({
+        type: "thread.history-replaced",
+        eventId: EventId.make("evt-collide-6"),
+        aggregateKind: "thread",
+        aggregateId: leftThreadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-collide-6"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-collide-6"),
+        metadata: {},
+        payload: {
+          threadId: leftThreadId,
+          messages: [
+            {
+              id: MessageId.make("message-left-new"),
+              role: "user",
+              text: "imported text",
+              turnId: null,
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          replacedAt: now,
+        },
+      });
+
+      assert.isFalse(yield* exists(leftPath));
+      assert.isTrue(yield* exists(rightPath));
+    }),
+  );
+});
+
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-attachments-revert-")))(
   "OrchestrationProjectionPipeline",
   (it) => {
