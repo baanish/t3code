@@ -142,7 +142,6 @@ export function parseCodexSessionContents(input: {
           nativePath: input.nativePath,
           foundVersion: nativeFormatVersion,
           supportedVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-          message: `Unsupported Codex session format version ${nativeFormatVersion} in ${input.nativePath}.`,
         }),
       );
     }

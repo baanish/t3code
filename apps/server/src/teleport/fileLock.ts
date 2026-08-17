@@ -46,14 +46,6 @@ function isLockedOpenError(cause: unknown): boolean {
   return code === "EBUSY" || code === "EPERM" || code === "EACCES";
 }
 
-function lockProbeError(nativePath: string, cause: unknown): TeleportLockProbeError {
-  return new TeleportLockProbeError({
-    nativePath,
-    message: `Failed to check whether ${nativePath} is locked.`,
-    cause,
-  });
-}
-
 const isWindowsPathInUse = Effect.fn("isWindowsPathInUse")(function* (nativePath: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* Effect.scoped(fs.open(nativePath, { flag: "r+" })).pipe(
@@ -65,7 +57,7 @@ const isWindowsPathInUse = Effect.fn("isWindowsPathInUse")(function* (nativePath
       if (isLockedOpenError(cause)) {
         return Effect.succeed(true);
       }
-      return Effect.fail(lockProbeError(nativePath, cause));
+      return Effect.fail(new TeleportLockProbeError({ nativePath, cause }));
     }),
   );
 });
@@ -82,17 +74,17 @@ const isUnixPathInUse = Effect.fn("isUnixPathInUse")(function* (nativePath: stri
     })
     .pipe(
       Effect.catchTags({
-        ProcessSpawnError: (cause) => lockProbeError(nativePath, cause),
-        ProcessStdinError: (cause) => lockProbeError(nativePath, cause),
-        ProcessOutputLimitError: (cause) => lockProbeError(nativePath, cause),
-        ProcessReadError: (cause) => lockProbeError(nativePath, cause),
-        ProcessTimeoutError: (cause) => lockProbeError(nativePath, cause),
+        ProcessSpawnError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
+        ProcessStdinError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
+        ProcessOutputLimitError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
+        ProcessReadError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
+        ProcessTimeoutError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
       }),
     );
   if (result.code === 0 || result.code === 1) {
     return result.stdout.trim().length > 0;
   }
-  return yield* lockProbeError(nativePath, result);
+  return yield* new TeleportLockProbeError({ nativePath, cause: result });
 });
 
 export const isNativePathLocked = Effect.fn("isNativePathLocked")(function* (nativePath: string) {
@@ -112,7 +104,6 @@ export const requireNativePathUnlocked = Effect.fn("requireNativePathUnlocked")(
   if (locked) {
     return yield* new TeleportFileLockedError({
       nativePath,
-      message: `Native session file is locked: ${nativePath}`,
     });
   }
 });

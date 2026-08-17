@@ -74,7 +74,6 @@ export const replaceNativeFile = Effect.fn("replaceNativeFile")(function* (input
   const locked = (cause: unknown) =>
     new TeleportFileLockedError({
       nativePath: input.to,
-      message: `Native session file is locked: ${input.to}`,
       cause,
     });
   const failed = (cause: unknown) =>

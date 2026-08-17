@@ -162,28 +162,54 @@ export class TeleportSchemaVersionError extends Schema.TaggedErrorClass<Teleport
     nativePath: Schema.optional(TrimmedNonEmptyString),
     foundVersion: Schema.optional(Schema.Int),
     supportedVersion: Schema.Int,
-    message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    let kind = "native";
+    if (this.provider !== undefined) {
+      switch (this.provider) {
+        case "codex":
+          kind = "Codex";
+          break;
+        case "claudeAgent":
+          kind = "Claude";
+          break;
+        default: {
+          const _exhaustive: never = this.provider;
+          return _exhaustive;
+        }
+      }
+    }
+    const version = this.foundVersion === undefined ? "" : ` ${this.foundVersion}`;
+    const location = this.nativePath === undefined ? "" : ` in ${this.nativePath}`;
+    return `Unsupported ${kind} session format version${version}${location}.`;
+  }
+}
 
 export class TeleportFileLockedError extends Schema.TaggedErrorClass<TeleportFileLockedError>()(
   "TeleportFileLockedError",
   {
     nativePath: TrimmedNonEmptyString,
-    message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    return `Native session file is locked: ${this.nativePath}`;
+  }
+}
 
 export class TeleportLockProbeError extends Schema.TaggedErrorClass<TeleportLockProbeError>()(
   "TeleportLockProbeError",
   {
     nativePath: TrimmedNonEmptyString,
-    message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    return `Failed to check whether ${this.nativePath} is locked.`;
+  }
+}
 
 export class TeleportIdentityConflictError extends Schema.TaggedErrorClass<TeleportIdentityConflictError>()(
   "TeleportIdentityConflictError",
@@ -192,9 +218,12 @@ export class TeleportIdentityConflictError extends Schema.TaggedErrorClass<Telep
     externalSessionId: TrimmedNonEmptyString,
     existingThreadId: ThreadId,
     existingProjectId: ProjectId,
-    message: TrimmedNonEmptyString,
   },
-) {}
+) {
+  override get message(): string {
+    return `Session '${this.externalSessionId}' is already bound to another T3 project.`;
+  }
+}
 
 export class TeleportProjectResolutionError extends Schema.TaggedErrorClass<TeleportProjectResolutionError>()(
   "TeleportProjectResolutionError",

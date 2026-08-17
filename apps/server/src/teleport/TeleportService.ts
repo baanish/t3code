@@ -483,7 +483,6 @@ export const make = Effect.gen(function* () {
                   externalSessionId: parsed.externalSessionId,
                   existingThreadId: binding.threadId,
                   existingProjectId: shell.value.projectId,
-                  message: `Session '${parsed.externalSessionId}' is already bound to another T3 project.`,
                 });
               }
               if (shell.value.archivedAt !== null) {
@@ -510,6 +509,65 @@ export const make = Effect.gen(function* () {
               ) || "Imported session";
             let threadId = existingThreadId;
             let updatedInPlace = false;
+            const providerInstanceId =
+              existingProviderInstanceId ??
+              parsed.providerInstanceId ??
+              defaultInstanceIdForDriver(driver);
+            const teleportPayload: TeleportRuntimePayload = {
+              schemaVersion: TELEPORT_SCHEMA_VERSION,
+              externalSessionId: parsed.externalSessionId,
+              nativePath: parsed.nativePath,
+              lastSyncDirection: "import",
+              lastSyncedAt: now,
+              nativeFormatVersion: parsed.nativeFormatVersion,
+              presence: "t3",
+            };
+            const persistImportedBinding = (boundThreadId: ThreadId) =>
+              Effect.gen(function* () {
+                yield* directory
+                  .upsert({
+                    threadId: boundThreadId,
+                    provider: driver,
+                    providerInstanceId,
+                    status: "stopped",
+                    resumeCursor: buildTeleportResumeCursor({
+                      provider: parsed.provider,
+                      externalSessionId: parsed.externalSessionId,
+                      adapter: formats.get(parsed.provider),
+                    }),
+                    runtimePayload: { teleport: teleportPayload },
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TeleportDiscoveryError({
+                          reason: "Failed to bind the imported native session.",
+                          cause,
+                        }),
+                    ),
+                  );
+                yield* engine
+                  .dispatch({
+                    type: "thread.teleport.set",
+                    commandId: CommandId.make(yield* nextId()),
+                    threadId: boundThreadId,
+                    teleport: teleportThreadStateFromPayload({
+                      provider: parsed.provider,
+                      providerInstanceId,
+                      payload: teleportPayload,
+                    }),
+                    createdAt: now,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TeleportInvalidInputError({
+                          reason: "Failed to persist teleport presence.",
+                          cause,
+                        }),
+                    ),
+                  );
+              });
 
             if (threadId) {
               yield* claimExtraInFlight(inFlightKeys, `thread:${threadId}`);
@@ -559,11 +617,10 @@ export const make = Effect.gen(function* () {
                   );
               }
               updatedInPlace = true;
-              const replaceCommandId = CommandId.make(yield* nextId());
               yield* engine
                 .dispatch({
                   type: "thread.history.replace",
-                  commandId: replaceCommandId,
+                  commandId: CommandId.make(yield* nextId()),
                   threadId,
                   messages,
                   createdAt: now,
@@ -595,109 +652,79 @@ export const make = Effect.gen(function* () {
                     ),
                   );
               }
+              yield* persistImportedBinding(threadId);
             } else {
               threadId = ThreadId.make(yield* nextId());
-              yield* engine
-                .dispatch({
-                  type: "thread.create",
-                  commandId: CommandId.make(yield* nextId()),
-                  threadId,
-                  projectId: input.projectId,
-                  title,
-                  modelSelection: modelSelectionForProvider(
-                    parsed.provider,
-                    parsed.providerInstanceId,
+              const createdThreadId = threadId;
+              const cleanupCommandId = CommandId.make(yield* nextId());
+              yield* Effect.acquireUseRelease(
+                engine
+                  .dispatch({
+                    type: "thread.create",
+                    commandId: CommandId.make(yield* nextId()),
+                    threadId: createdThreadId,
+                    projectId: input.projectId,
+                    title,
+                    modelSelection: modelSelectionForProvider(
+                      parsed.provider,
+                      parsed.providerInstanceId,
+                    ),
+                    runtimeMode: DEFAULT_RUNTIME_MODE,
+                    interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+                    branch: null,
+                    worktreePath: null,
+                    createdAt: now,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TeleportInvalidInputError({
+                          reason: "Failed to create an imported thread.",
+                          cause,
+                        }),
+                    ),
                   ),
-                  runtimeMode: DEFAULT_RUNTIME_MODE,
-                  interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-                  branch: null,
-                  worktreePath: null,
-                  createdAt: now,
-                })
-                .pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new TeleportInvalidInputError({
-                        reason: "Failed to create an imported thread.",
-                        cause,
-                      }),
-                  ),
-                );
-              yield* engine
-                .dispatch({
-                  type: "thread.history.replace",
-                  commandId: CommandId.make(yield* nextId()),
-                  threadId,
-                  messages,
-                  createdAt: now,
-                })
-                .pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new TeleportInvalidInputError({
-                        reason: "Failed to write imported thread history.",
-                        cause,
-                      }),
-                  ),
-                );
+                () =>
+                  Effect.gen(function* () {
+                    yield* engine
+                      .dispatch({
+                        type: "thread.history.replace",
+                        commandId: CommandId.make(yield* nextId()),
+                        threadId: createdThreadId,
+                        messages,
+                        createdAt: now,
+                      })
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new TeleportInvalidInputError({
+                              reason: "Failed to write imported thread history.",
+                              cause,
+                            }),
+                        ),
+                      );
+                    yield* persistImportedBinding(createdThreadId);
+                  }),
+                (_acquired, exit) => {
+                  if (Exit.isSuccess(exit)) {
+                    return Effect.void;
+                  }
+                  return engine
+                    .dispatch({
+                      type: "thread.delete",
+                      commandId: cleanupCommandId,
+                      threadId: createdThreadId,
+                    })
+                    .pipe(
+                      Effect.catch(() =>
+                        Effect.logWarning("teleport.import.created-thread-cleanup-skipped", {
+                          threadId: createdThreadId,
+                        }),
+                      ),
+                    );
+                },
+              );
             }
-
-            const providerInstanceId =
-              existingProviderInstanceId ??
-              parsed.providerInstanceId ??
-              defaultInstanceIdForDriver(driver);
-            const teleportPayload: TeleportRuntimePayload = {
-              schemaVersion: TELEPORT_SCHEMA_VERSION,
-              externalSessionId: parsed.externalSessionId,
-              nativePath: parsed.nativePath,
-              lastSyncDirection: "import",
-              lastSyncedAt: now,
-              nativeFormatVersion: parsed.nativeFormatVersion,
-              presence: "t3",
-            };
-            yield* directory
-              .upsert({
-                threadId,
-                provider: driver,
-                providerInstanceId,
-                status: "stopped",
-                resumeCursor: buildTeleportResumeCursor({
-                  provider: parsed.provider,
-                  externalSessionId: parsed.externalSessionId,
-                  adapter: formats.get(parsed.provider),
-                }),
-                runtimePayload: { teleport: teleportPayload },
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new TeleportDiscoveryError({
-                      reason: "Failed to bind the imported native session.",
-                      cause,
-                    }),
-                ),
-              );
-            yield* engine
-              .dispatch({
-                type: "thread.teleport.set",
-                commandId: CommandId.make(yield* nextId()),
-                threadId,
-                teleport: teleportThreadStateFromPayload({
-                  provider: parsed.provider,
-                  providerInstanceId,
-                  payload: teleportPayload,
-                }),
-                createdAt: now,
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new TeleportInvalidInputError({
-                      reason: "Failed to persist teleport presence.",
-                      cause,
-                    }),
-                ),
-              );
 
             imported.push({
               threadId,

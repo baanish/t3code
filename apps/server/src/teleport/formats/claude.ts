@@ -132,7 +132,6 @@ export function parseClaudeSessionContents(input: {
           nativePath: input.nativePath,
           foundVersion: nativeFormatVersion,
           supportedVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-          message: `Unsupported Claude session format version ${nativeFormatVersion} in ${input.nativePath}.`,
         }),
       );
     }

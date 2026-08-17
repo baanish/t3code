@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
+import { ProjectId, ThreadId } from "./baseSchemas.ts";
 import {
   isTeleportedOut,
   isTeleportProvider,
@@ -8,9 +9,12 @@ import {
   TELEPORTED_OUT_SEND_DISABLED_REASON,
   TeleportDiscoveryError,
   TeleportExportError,
+  TeleportFileLockedError,
+  TeleportIdentityConflictError,
   TeleportInvalidInputError,
   TeleportLockProbeError,
   TeleportRuntimePayload,
+  TeleportSchemaVersionError,
   TeleportThreadState,
 } from "./teleport.ts";
 
@@ -93,10 +97,10 @@ describe("teleport lock probe errors", () => {
     const parsed = decodeTeleportExportError({
       _tag: "TeleportLockProbeError",
       nativePath: "/tmp/session.jsonl",
-      message: "Failed to check whether /tmp/session.jsonl is locked.",
     });
     expect(parsed._tag).toBe("TeleportLockProbeError");
     expect(parsed).toBeInstanceOf(TeleportLockProbeError);
+    expect(parsed.message).toBe("Failed to check whether /tmp/session.jsonl is locked.");
   });
 });
 
@@ -119,5 +123,32 @@ describe("teleport tagged errors", () => {
       reason: "Native session was not found for this project.",
     });
     expect(error.message).toBe("Native session was not found for this project.");
+  });
+
+  it("derives TeleportFileLockedError.message from nativePath", () => {
+    const error = new TeleportFileLockedError({
+      nativePath: "/tmp/session.jsonl",
+    });
+    expect(error.message).toBe("Native session file is locked: /tmp/session.jsonl");
+  });
+
+  it("derives TeleportSchemaVersionError.message from provider and version", () => {
+    const error = new TeleportSchemaVersionError({
+      provider: "codex",
+      nativePath: "/tmp/session.jsonl",
+      foundVersion: 2,
+      supportedVersion: 1,
+    });
+    expect(error.message).toBe("Unsupported Codex session format version 2 in /tmp/session.jsonl.");
+  });
+
+  it("derives TeleportIdentityConflictError.message from the session id", () => {
+    const error = new TeleportIdentityConflictError({
+      provider: "codex",
+      externalSessionId: "session-1",
+      existingThreadId: ThreadId.make("thread-1"),
+      existingProjectId: ProjectId.make("project-1"),
+    });
+    expect(error.message).toBe("Session 'session-1' is already bound to another T3 project.");
   });
 });
