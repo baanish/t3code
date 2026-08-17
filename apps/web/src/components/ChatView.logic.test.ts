@@ -172,7 +172,7 @@ describe("buildLoadingThreadFromShell", () => {
   it("preserves shell teleport presence while detail is still loading", () => {
     const teleport = {
       presence: "native" as const,
-      provider: "codex" as const,
+      provider: "grok" as const,
       externalSessionId: "session-1",
       nativePath: "/tmp/native",
       lastSyncedAt: now,
