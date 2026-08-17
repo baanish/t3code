@@ -1607,15 +1607,12 @@ export function makeOpenCodeAdapter(
                   context.client.session.abort({ sessionID: context.openCodeSessionId }),
                 ).pipe(Effect.timeout("2 seconds"), Effect.ignore({ log: true }));
               }),
-              Deferred.succeed(abortInFlight, undefined).pipe(
-                Effect.zipRight(
-                  Effect.sync(() => {
-                    if (context.abortInFlight === abortInFlight) {
-                      context.abortInFlight = undefined;
-                    }
-                  }),
-                ),
-              ),
+              Effect.gen(function* () {
+                yield* Deferred.succeed(abortInFlight, undefined);
+                if (context.abortInFlight === abortInFlight) {
+                  context.abortInFlight = undefined;
+                }
+              }),
             );
             return;
           }

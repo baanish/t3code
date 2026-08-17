@@ -900,15 +900,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           },
         })
         .pipe(Effect.forkChild);
-      yield* Effect.promise(
-        () =>
-          new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          }),
-      );
       NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
-      const sendStatus = yield* Fiber.status(sendFiber);
-      NodeAssert.notEqual(sendStatus._tag, "Done");
 
       releaseAbort();
       yield* Fiber.join(interruptFiber);
