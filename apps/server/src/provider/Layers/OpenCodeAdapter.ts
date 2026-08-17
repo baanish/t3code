@@ -15,6 +15,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -237,6 +238,13 @@ interface OpenCodeSessionContext {
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
+  /**
+   * While `session.abort` is in flight, `sendTurn` waits on this gate so a
+   * new prompt cannot land in the session the pending abort will cancel.
+   * Projected status is still flipped to `ready` immediately so Stop does
+   * not leave the UI stuck on "Working".
+   */
+  abortInFlight: Deferred.Deferred<void, never> | undefined;
   /**
    * One-shot guard flipped by `stopOpenCodeContext` / `emitUnexpectedExit`.
    * The session lifecycle is owned by `sessionScope`; this Ref exists only
@@ -1402,6 +1410,7 @@ export function makeOpenCodeAdapter(
           activeTurnId: undefined,
           activeAgent: undefined,
           activeVariant: undefined,
+          abortInFlight: undefined,
           stopped: yield* Ref.make(false),
           sessionScope: started.sessionScope,
         };
@@ -1429,6 +1438,9 @@ export function makeOpenCodeAdapter(
 
     const sendTurn: OpenCodeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
       const context = yield* ensureSessionContext(sessions, input.threadId);
+      if (context.abortInFlight !== undefined) {
+        yield* Deferred.await(context.abortInFlight);
+      }
       // A sendTurn while a turn is active is a steer: OpenCode queues the
       // prompt into the busy session and the work continues as one turn, so
       // the active turn id is reused instead of opening a new turn.
@@ -1563,13 +1575,50 @@ export function makeOpenCodeAdapter(
         const context = sessions.get(threadId);
         const abortedTurnId = turnId ?? context?.activeTurnId;
         if (context && !(yield* Ref.get(context.stopped))) {
-          // Settle local state first. `session.abort` can hang on a stuck
-          // OpenCode turn; waiting on it left T3 "Working" after Stop.
-          context.activeTurnId = undefined;
-          yield* updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
-          yield* runOpenCodeSdk("session.abort", () =>
-            context.client.session.abort({ sessionID: context.openCodeSessionId }),
-          ).pipe(Effect.timeout("2 seconds"), Effect.ignore({ log: true }));
+          const pendingAbort = context.abortInFlight;
+          if (pendingAbort !== undefined) {
+            yield* Deferred.await(pendingAbort);
+          } else {
+            const abortInFlight = yield* Deferred.make<void>();
+            context.abortInFlight = abortInFlight;
+            // Settle projected state first so Stop does not leave "Working",
+            // but keep sendTurn blocked until abort finishes or times out.
+            yield* Effect.ensuring(
+              Effect.gen(function* () {
+                context.activeTurnId = undefined;
+                yield* updateProviderSession(
+                  context,
+                  { status: "ready" },
+                  { clearActiveTurnId: true },
+                );
+                if (abortedTurnId) {
+                  yield* emit({
+                    ...(yield* buildEventBase({
+                      threadId,
+                      turnId: abortedTurnId,
+                    })),
+                    type: "turn.aborted",
+                    payload: {
+                      reason: "Interrupted by user.",
+                    },
+                  });
+                }
+                yield* runOpenCodeSdk("session.abort", () =>
+                  context.client.session.abort({ sessionID: context.openCodeSessionId }),
+                ).pipe(Effect.timeout("2 seconds"), Effect.ignore({ log: true }));
+              }),
+              Deferred.succeed(abortInFlight, undefined).pipe(
+                Effect.zipRight(
+                  Effect.sync(() => {
+                    if (context.abortInFlight === abortInFlight) {
+                      context.abortInFlight = undefined;
+                    }
+                  }),
+                ),
+              ),
+            );
+            return;
+          }
         }
         if (abortedTurnId) {
           yield* emit({
