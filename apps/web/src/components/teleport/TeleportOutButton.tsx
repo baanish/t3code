@@ -77,7 +77,7 @@ export function TeleportOutButton({
         render={
           <Button
             type="button"
-            className={busy ? "shrink-0 opacity-64" : "shrink-0"}
+            className={busy ? "shrink-0 cursor-not-allowed opacity-64" : "shrink-0"}
             variant="outline"
             size="icon-xs"
             aria-label={
