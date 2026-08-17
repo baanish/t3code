@@ -9,6 +9,7 @@ import {
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
+  selectTeleportImportProjects,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
 
@@ -426,5 +427,34 @@ describe("filterPinnedBrowseEntries", () => {
       visibleEntries: windowsEntries,
       exactEntry: windowsEntries[0],
     });
+  });
+});
+
+describe("selectTeleportImportProjects", () => {
+  const local = EnvironmentId.make("local");
+  const remote = EnvironmentId.make("remote");
+
+  it("keeps every physical project whose environment supports teleport", () => {
+    expect(
+      selectTeleportImportProjects(
+        [
+          { environmentId: local, id: "alpha" },
+          { environmentId: remote, id: "alpha-remote" },
+        ],
+        (environmentId) => environmentId === local || environmentId === remote,
+      ).map((project) => project.id),
+    ).toEqual(["alpha", "alpha-remote"]);
+  });
+
+  it("omits physical projects on environments without teleport", () => {
+    expect(
+      selectTeleportImportProjects(
+        [
+          { environmentId: local, id: "alpha" },
+          { environmentId: remote, id: "alpha-remote" },
+        ],
+        (environmentId) => environmentId === local,
+      ).map((project) => project.id),
+    ).toEqual(["alpha"]);
   });
 });

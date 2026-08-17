@@ -125,6 +125,7 @@ import {
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
+  selectTeleportImportProjects,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 
@@ -1455,28 +1456,32 @@ function OpenCommandPaletteDialog(props: {
     [loadNativeSessionsIntoView, pushPaletteView],
   );
 
+  const importProjects = useMemo(
+    () =>
+      selectTeleportImportProjects(projects, (environmentId) =>
+        environmentSupportsTeleport(
+          environments.find((environment) => environment.environmentId === environmentId)
+            ?.serverConfig?.environment.capabilities,
+        ),
+      ),
+    [environments, projects],
+  );
+
   const importProjectItems = useMemo(
     () =>
-      pickerProjects
-        .filter((project) =>
-          environmentSupportsTeleport(
-            environments.find((environment) => environment.environmentId === project.environmentId)
-              ?.serverConfig?.environment.capabilities,
-          ),
-        )
-        .map((project) => ({
-          kind: "action" as const,
-          value: `import-sessions:${project.environmentId}:${project.id}`,
-          searchTerms: [project.title, project.workspaceRoot, "import", "teleport"],
-          title: project.title,
-          description: project.workspaceRoot,
-          icon: projectFavicon(project),
-          keepOpen: true,
-          run: async () => {
-            openImportSessionsForProject(project);
-          },
-        })),
-    [environments, openImportSessionsForProject, pickerProjects],
+      importProjects.map((project) => ({
+        kind: "action" as const,
+        value: `import-sessions:${project.environmentId}:${project.id}`,
+        searchTerms: [project.title, project.workspaceRoot, "import", "teleport"],
+        title: project.title,
+        description: project.workspaceRoot,
+        icon: projectFavicon(project),
+        keepOpen: true,
+        run: async () => {
+          openImportSessionsForProject(project);
+        },
+      })),
+    [importProjects, openImportSessionsForProject],
   );
 
   const openImportSessionsFlow = useCallback(() => {
@@ -1484,9 +1489,9 @@ function OpenCommandPaletteDialog(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: pickerProjects.length > 0 ? "Teleport is not available" : "No projects available",
+          title: projects.length > 0 ? "Teleport is not available" : "No projects available",
           description:
-            pickerProjects.length > 0
+            projects.length > 0
               ? "This server does not support importing native CLI sessions."
               : "Add a project before importing native sessions.",
         }),
@@ -1508,7 +1513,7 @@ function OpenCommandPaletteDialog(props: {
     currentProjectEnvironmentId,
     currentProjectId,
     importProjectItems,
-    pickerProjects.length,
+    projects.length,
     pushPaletteView,
   ]);
 
@@ -1811,7 +1816,7 @@ function OpenCommandPaletteDialog(props: {
     setAddProjectCloneFlow(null);
     setQuery("");
     if (environmentId !== undefined && projectId !== undefined) {
-      const project = pickerProjects.find(
+      const project = projects.find(
         (candidate) => candidate.environmentId === environmentId && candidate.id === projectId,
       );
       if (project) {
@@ -1824,9 +1829,9 @@ function OpenCommandPaletteDialog(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: pickerProjects.length > 0 ? "Teleport is not available" : "No projects available",
+          title: projects.length > 0 ? "Teleport is not available" : "No projects available",
           description:
-            pickerProjects.length > 0
+            projects.length > 0
               ? "This server does not support importing native CLI sessions."
               : "Add a project before importing native sessions.",
         }),
@@ -1856,7 +1861,7 @@ function OpenCommandPaletteDialog(props: {
     importProjectItems,
     loadNativeSessionsIntoView,
     openIntent,
-    pickerProjects,
+    projects,
     replacePaletteView,
     setOpen,
   ]);
@@ -1906,7 +1911,7 @@ function OpenCommandPaletteDialog(props: {
       : null;
     const boundImportProject =
       boundTeleport && activeThread
-        ? (pickerProjects.find(
+        ? (projects.find(
             (project) =>
               project.id === activeThread.projectId &&
               project.environmentId === activeThread.environmentId,

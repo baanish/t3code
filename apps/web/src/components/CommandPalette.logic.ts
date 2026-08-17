@@ -483,3 +483,10 @@ export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): str
       return "Enter path (e.g. ~/projects/my-app)";
   }
 }
+
+export function selectTeleportImportProjects<T extends { readonly environmentId: EnvironmentId }>(
+  projects: ReadonlyArray<T>,
+  environmentSupportsTeleport: (environmentId: EnvironmentId) => boolean,
+): ReadonlyArray<T> {
+  return projects.filter((project) => environmentSupportsTeleport(project.environmentId));
+}
