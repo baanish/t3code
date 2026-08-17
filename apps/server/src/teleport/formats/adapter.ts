@@ -11,6 +11,7 @@ import type * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
+import type * as ProcessRunner from "../../processRunner.ts";
 import type { TeleportHomes } from "../homes.ts";
 import type { ParsedNativeSession } from "../types.ts";
 
@@ -44,7 +45,7 @@ export interface TeleportFormatAdapter {
     | TeleportFileLockedError
     | TeleportLockProbeError
     | TeleportSchemaVersionError,
-    FileSystem.FileSystem | Path.Path
+    FileSystem.FileSystem | Path.Path | ProcessRunner.ProcessRunner
   >;
   readonly requireUnlocked: (input: {
     readonly homes: TeleportHomes;
@@ -52,7 +53,7 @@ export interface TeleportFormatAdapter {
   }) => Effect.Effect<
     void,
     TeleportFileLockedError | TeleportLockProbeError,
-    FileSystem.FileSystem | Path.Path
+    FileSystem.FileSystem | Path.Path | ProcessRunner.ProcessRunner
   >;
   readonly resumeCursor: (externalSessionId: string) => unknown;
   readonly readExternalSessionId: (resumeCursor: unknown) => string | undefined;

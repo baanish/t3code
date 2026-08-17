@@ -15,6 +15,7 @@ import * as Path from "effect/Path";
 
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
+import * as ProcessRunner from "../../processRunner.ts";
 import { discoverTeleportSessions, loadTeleportSession } from "../discovery.ts";
 import type { TeleportHomes } from "../homes.ts";
 import { buildTeleportResumeCursor, readTeleportExternalSessionId } from "../resumeCursors.ts";
@@ -418,7 +419,15 @@ describe("teleport Codex format", () => {
       assert.equal(yield* fs.exists(nativePath), true);
     }).pipe(
       Effect.scoped,
-      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        Layer.merge(
+          NodeServices.layer,
+          Layer.merge(
+            TeleportFormatRegistry.layer,
+            ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+          ),
+        ),
+      ),
       Effect.provideService(HostProcessPlatform, "linux"),
     ),
   );

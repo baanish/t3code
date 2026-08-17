@@ -5,30 +5,40 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
+import * as ProcessRunner from "../processRunner.ts";
 import { isNativePathLocked, requireNativePathUnlocked } from "./fileLock.ts";
+
+const lockProbeLayer = Layer.merge(
+  NodeServices.layer,
+  ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+);
 
 describe("teleport file locks", () => {
   it.effect("treats a missing lock probe as TeleportLockProbeError, not a lock", () =>
     Effect.gen(function* () {
-      const previousPath = process.env.PATH;
-      process.env.PATH = "/tmp/teleport-missing-lock-probe-bin";
-      try {
-        const error = yield* isNativePathLocked("/tmp/teleport-lock-probe-missing").pipe(
-          Effect.flip,
-        );
-        assert.equal(error._tag, "TeleportLockProbeError");
-      } finally {
-        if (previousPath === undefined) {
-          delete process.env.PATH;
-        } else {
-          process.env.PATH = previousPath;
-        }
-      }
-    }).pipe(Effect.provideService(HostProcessPlatform, "linux")),
+      const error = yield* isNativePathLocked("/tmp/teleport-lock-probe-missing").pipe(Effect.flip);
+      assert.equal(error._tag, "TeleportLockProbeError");
+    }).pipe(
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(
+        Layer.merge(
+          NodeServices.layer,
+          Layer.succeed(ProcessRunner.ProcessRunner, {
+            run: () =>
+              new ProcessRunner.ProcessSpawnError({
+                command: "lsof",
+                argumentCount: 2,
+                cause: new Error("ENOENT"),
+              }),
+          }),
+        ),
+      ),
+    ),
   );
 
   it.effect("treats an unused file as unlocked when the lock probe succeeds", () =>
@@ -42,7 +52,7 @@ describe("teleport file locks", () => {
       yield* requireNativePathUnlocked(filePath);
     }).pipe(
       Effect.scoped,
-      Effect.provide(NodeServices.layer),
+      Effect.provide(lockProbeLayer),
       Effect.provideService(HostProcessPlatform, "linux"),
     ),
   );
@@ -64,7 +74,7 @@ describe("teleport file locks", () => {
       }
     }).pipe(
       Effect.scoped,
-      Effect.provide(NodeServices.layer),
+      Effect.provide(lockProbeLayer),
       Effect.provideService(HostProcessPlatform, "linux"),
     ),
   );

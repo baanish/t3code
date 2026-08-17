@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
 
+import type * as ProcessRunner from "../processRunner.ts";
 import { requireNativePathUnlocked } from "./fileLock.ts";
 
 function platformErrorTag(cause: unknown): string | undefined {
@@ -116,7 +117,7 @@ export const writeNativeSessionAtomically = Effect.fn("writeNativeSessionAtomica
   }): Effect.fn.Return<
     void,
     TeleportNativeWriteError | TeleportFileLockedError | TeleportLockProbeError,
-    FileSystem.FileSystem | Path.Path
+    FileSystem.FileSystem | Path.Path | ProcessRunner.ProcessRunner
   > {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;

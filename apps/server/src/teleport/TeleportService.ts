@@ -48,6 +48,7 @@ import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { canReplaceThreadTitle } from "../orchestration/threadTitles.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
@@ -168,13 +169,19 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const formats = yield* TeleportFormatRegistry.TeleportFormatRegistry;
   const nativeContext = yield* Effect.context<
-    FileSystem.FileSystem | Path.Path | TeleportFormatRegistry.TeleportFormatRegistry
+    | FileSystem.FileSystem
+    | Path.Path
+    | TeleportFormatRegistry.TeleportFormatRegistry
+    | ProcessRunner.ProcessRunner
   >();
   const provideNative = <A, E>(
     effect: Effect.Effect<
       A,
       E,
-      FileSystem.FileSystem | Path.Path | TeleportFormatRegistry.TeleportFormatRegistry
+      | FileSystem.FileSystem
+      | Path.Path
+      | TeleportFormatRegistry.TeleportFormatRegistry
+      | ProcessRunner.ProcessRunner
     >,
   ): Effect.Effect<A, E> => effect.pipe(Effect.provideContext(nativeContext));
 
@@ -956,4 +963,5 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(TeleportService, make).pipe(
   Layer.provide(TeleportFormatRegistry.layer),
+  Layer.provide(ProcessRunner.layer),
 );

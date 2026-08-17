@@ -1,68 +1,98 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeChildProcess from "node:child_process";
-import * as NodeFSP from "node:fs/promises";
-import * as NodeUtil from "node:util";
-
 import { TeleportFileLockedError, TeleportLockProbeError } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as PlatformError from "effect/PlatformError";
 
-const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
+import * as ProcessRunner from "../processRunner.ts";
 
-function nodeErrorCode(error: unknown): string | undefined {
-  if (typeof error === "object" && error !== null && "code" in error) {
-    const code = (error as { code?: unknown }).code;
-    return typeof code === "string" ? code : undefined;
-  }
-  return undefined;
-}
-
-function execExitStatus(error: unknown): number | undefined {
-  if (typeof error !== "object" || error === null) {
+function nodeErrorCode(cause: unknown): string | undefined {
+  if (typeof cause !== "object" || cause === null) {
     return undefined;
   }
-  if ("status" in error && typeof (error as { status?: unknown }).status === "number") {
-    return (error as { status: number }).status;
+  if ("code" in cause && typeof (cause as { code?: unknown }).code === "string") {
+    return (cause as { code: string }).code;
   }
-  if ("code" in error && typeof (error as { code?: unknown }).code === "number") {
-    return (error as { code: number }).code;
+  if ("reason" in cause) {
+    const nested = (cause as { reason?: { cause?: unknown } }).reason?.cause;
+    return nodeErrorCode(nested);
   }
   return undefined;
 }
 
-function execStdout(error: unknown): string {
-  if (typeof error === "object" && error !== null && "stdout" in error) {
-    const stdout = (error as { stdout?: unknown }).stdout;
-    return typeof stdout === "string" ? stdout : "";
+function platformErrorTag(cause: unknown): string | undefined {
+  if (cause instanceof PlatformError.PlatformError) {
+    return cause.reason._tag;
   }
-  return "";
+  return undefined;
+}
+
+function isUnlockedOpenError(cause: unknown): boolean {
+  const tag = platformErrorTag(cause);
+  if (tag === "NotFound") {
+    return true;
+  }
+  const code = nodeErrorCode(cause);
+  return code === "ENOENT" || code === "EISDIR";
+}
+
+function isLockedOpenError(cause: unknown): boolean {
+  const tag = platformErrorTag(cause);
+  if (tag === "Busy" || tag === "PermissionDenied") {
+    return true;
+  }
+  const code = nodeErrorCode(cause);
+  return code === "EBUSY" || code === "EPERM" || code === "EACCES";
+}
+
+function lockProbeError(nativePath: string, cause: unknown): TeleportLockProbeError {
+  return new TeleportLockProbeError({
+    nativePath,
+    message: `Failed to check whether ${nativePath} is locked.`,
+    cause,
+  });
 }
 
 const isWindowsPathInUse = Effect.fn("isWindowsPathInUse")(function* (nativePath: string) {
-  return yield* Effect.tryPromise({
-    try: async () => {
-      try {
-        const handle = await NodeFSP.open(nativePath, "r+");
-        await handle.close();
-        return false;
-      } catch (error) {
-        const code = nodeErrorCode(error);
-        if (code === "ENOENT" || code === "EISDIR") {
-          return false;
-        }
-        if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
-          return true;
-        }
-        throw error;
+  const fs = yield* FileSystem.FileSystem;
+  return yield* Effect.scoped(fs.open(nativePath, { flag: "r+" })).pipe(
+    Effect.as(false),
+    Effect.catch((cause: PlatformError.PlatformError) => {
+      if (isUnlockedOpenError(cause)) {
+        return Effect.succeed(false);
       }
-    },
-    catch: (cause) =>
-      new TeleportLockProbeError({
-        nativePath,
-        message: `Failed to check whether ${nativePath} is locked.`,
-        cause,
+      if (isLockedOpenError(cause)) {
+        return Effect.succeed(true);
+      }
+      return Effect.fail(lockProbeError(nativePath, cause));
+    }),
+  );
+});
+
+const isUnixPathInUse = Effect.fn("isUnixPathInUse")(function* (nativePath: string) {
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const result = yield* processRunner
+    .run({
+      command: "lsof",
+      args: ["-t", nativePath],
+      timeout: Duration.seconds(2),
+      maxOutputBytes: 64 * 1024,
+      outputMode: "truncate",
+    })
+    .pipe(
+      Effect.catchTags({
+        ProcessSpawnError: (cause) => lockProbeError(nativePath, cause),
+        ProcessStdinError: (cause) => lockProbeError(nativePath, cause),
+        ProcessOutputLimitError: (cause) => lockProbeError(nativePath, cause),
+        ProcessReadError: (cause) => lockProbeError(nativePath, cause),
+        ProcessTimeoutError: (cause) => lockProbeError(nativePath, cause),
       }),
-  });
+    );
+  if (result.code === 0 || result.code === 1) {
+    return result.stdout.trim().length > 0;
+  }
+  return yield* lockProbeError(nativePath, result);
 });
 
 export const isNativePathLocked = Effect.fn("isNativePathLocked")(function* (nativePath: string) {
@@ -72,26 +102,7 @@ export const isNativePathLocked = Effect.fn("isNativePathLocked")(function* (nat
     // as EBUSY/EPERM/EACCES on a write-open instead.
     return yield* isWindowsPathInUse(nativePath);
   }
-  return yield* Effect.tryPromise({
-    try: async () => {
-      try {
-        const result = await execFile("lsof", ["-t", nativePath], { timeout: 2_000 });
-        return result.stdout.trim().length > 0;
-      } catch (error) {
-        // lsof exits 1 when no process has the file open.
-        if (execExitStatus(error) === 1) {
-          return execStdout(error).trim().length > 0;
-        }
-        throw error;
-      }
-    },
-    catch: (cause) =>
-      new TeleportLockProbeError({
-        nativePath,
-        message: `Failed to check whether ${nativePath} is locked.`,
-        cause,
-      }),
-  });
+  return yield* isUnixPathInUse(nativePath);
 });
 
 export const requireNativePathUnlocked = Effect.fn("requireNativePathUnlocked")(function* (
