@@ -598,6 +598,8 @@ export const make = Effect.gen(function* () {
                   reason: "Native session has no messages; refusing to wipe this thread.",
                 });
               }
+              updatedInPlace = true;
+              yield* persistImportedBinding(threadId);
               if (existingArchived) {
                 yield* engine
                   .dispatch({
@@ -615,7 +617,6 @@ export const make = Effect.gen(function* () {
                     ),
                   );
               }
-              updatedInPlace = true;
               yield* engine
                 .dispatch({
                   type: "thread.history.replace",
@@ -651,7 +652,6 @@ export const make = Effect.gen(function* () {
                     ),
                   );
               }
-              yield* persistImportedBinding(threadId);
             } else {
               threadId = ThreadId.make(yield* nextId());
               const createdThreadId = threadId;
