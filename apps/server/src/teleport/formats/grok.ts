@@ -574,7 +574,7 @@ registerTeleportFormat({
     const parsed = yield* readGrokSessionFromDir(input.nativePath);
     if (Option.isNone(parsed)) {
       return yield* new TeleportDiscoveryError({
-        message: `Native Grok session '${input.externalSessionId}' could not be read.`,
+        reason: `Native Grok session '${input.externalSessionId}' could not be read.`,
       });
     }
     return parsed.value;

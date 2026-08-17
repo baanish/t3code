@@ -13,7 +13,13 @@ import * as Path from "effect/Path";
 
 import { isTeleportCwdWithin, teleportCwdsEquivalent } from "./cwd.ts";
 import { getTeleportFormat, listRegisteredTeleportProviders } from "./formats/registry.ts";
-import { nativePathIsUnderRoot, teleportNativeRootFor, type TeleportHomes } from "./homes.ts";
+import {
+  canonicalizeTeleportNativePath,
+  configuredInstanceRootsForProvider,
+  configuredTeleportNativeRootFor,
+  nativePathIsUnderRoot,
+  type TeleportHomes,
+} from "./homes.ts";
 import { definedField } from "./json.ts";
 import type { ParsedNativeSession } from "./types.ts";
 
@@ -55,10 +61,74 @@ function candidateMatchesRequestedInstance(
   if (requested === undefined || session.providerInstanceId === requested) {
     return true;
   }
-  const requestedRoot = teleportNativeRootFor(homes, session.provider, requested);
-  const listedRoot = teleportNativeRootFor(homes, session.provider, session.providerInstanceId);
+  const requestedRoot = configuredTeleportNativeRootFor(homes, session.provider, requested);
+  const listedRoot = configuredTeleportNativeRootFor(
+    homes,
+    session.provider,
+    session.providerInstanceId,
+  );
+  if (requestedRoot === undefined || listedRoot === undefined) {
+    return false;
+  }
   return requestedRoot === listedRoot && nativePathIsUnderRoot(session.nativePath, requestedRoot);
 }
+
+const resolveNativePathInstance = Effect.fn("resolveNativePathInstance")(function* (input: {
+  readonly homes: TeleportHomes;
+  readonly provider: TeleportProvider;
+  readonly nativePath: string;
+  readonly requestedInstanceId?: ProviderInstanceId;
+}): Effect.fn.Return<
+  { readonly nativePath: string; readonly instanceId: ProviderInstanceId },
+  TeleportDiscoveryError,
+  FileSystem.FileSystem | Path.Path
+> {
+  const canonicalPath = yield* canonicalizeTeleportNativePath(input.nativePath);
+  const matchingInstanceIds: ProviderInstanceId[] = [];
+  for (const instance of configuredInstanceRootsForProvider(input.homes, input.provider)) {
+    const canonicalRoot = yield* canonicalizeTeleportNativePath(instance.root);
+    if (nativePathIsUnderRoot(canonicalPath, canonicalRoot)) {
+      matchingInstanceIds.push(instance.instanceId);
+    }
+  }
+
+  if (input.requestedInstanceId !== undefined) {
+    if (matchingInstanceIds.includes(input.requestedInstanceId)) {
+      return {
+        nativePath: canonicalPath,
+        instanceId: input.requestedInstanceId,
+      };
+    }
+    const configuredIds = configuredInstanceRootsForProvider(input.homes, input.provider).map(
+      (instance) => instance.instanceId,
+    );
+    const requestedIsConfigured = configuredIds.includes(input.requestedInstanceId);
+    if (
+      !requestedIsConfigured &&
+      matchingInstanceIds.length > 0 &&
+      (input.provider === "opencode" || input.provider === "grok")
+    ) {
+      return {
+        nativePath: canonicalPath,
+        instanceId: input.requestedInstanceId,
+      };
+    }
+    return yield* new TeleportDiscoveryError({
+      reason: `Native ${input.provider} session path is outside instance '${input.requestedInstanceId}'.`,
+    });
+  }
+
+  const instanceId = matchingInstanceIds[0];
+  if (instanceId === undefined) {
+    return yield* new TeleportDiscoveryError({
+      reason: `Native ${input.provider} session path is outside the configured CLI home.`,
+    });
+  }
+  return {
+    nativePath: canonicalPath,
+    instanceId,
+  };
+});
 
 export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (input: {
   readonly homes: TeleportHomes;
@@ -75,12 +145,11 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
   const adapter = getTeleportFormat(input.provider);
   if (!adapter) {
     return yield* new TeleportDiscoveryError({
-      message: `Native ${input.provider} session support is not registered.`,
+      reason: `Native ${input.provider} session support is not registered.`,
     });
   }
 
   let nativePath = input.nativePath;
-  let listedInstanceId = input.providerInstanceId;
   if (nativePath === undefined) {
     const listed = yield* discoverTeleportSessions({
       homes: input.homes,
@@ -95,22 +164,30 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
     );
     if (!candidate) {
       return yield* new TeleportDiscoveryError({
-        message: `Native ${input.provider} session '${input.externalSessionId}' was not found for this project.`,
+        reason: `Native ${input.provider} session '${input.externalSessionId}' was not found for this project.`,
       });
     }
     nativePath = candidate.nativePath;
-    listedInstanceId = input.providerInstanceId ?? candidate.providerInstanceId;
   }
+
+  const resolved = yield* resolveNativePathInstance({
+    homes: input.homes,
+    provider: input.provider,
+    nativePath,
+    ...(input.providerInstanceId === undefined
+      ? {}
+      : { requestedInstanceId: input.providerInstanceId }),
+  });
 
   const parsed = yield* adapter.load({
     homes: input.homes,
     cwd: input.cwd,
     externalSessionId: input.externalSessionId,
-    nativePath,
+    nativePath: resolved.nativePath,
   });
   if (parsed.externalSessionId !== input.externalSessionId) {
     return yield* new TeleportDiscoveryError({
-      message: `Native ${input.provider} session at '${nativePath}' no longer matches '${input.externalSessionId}'.`,
+      reason: `Native ${input.provider} session at '${resolved.nativePath}' no longer matches '${input.externalSessionId}'.`,
     });
   }
   const cwdMatches =
@@ -119,11 +196,11 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
     isTeleportCwdWithin(input.cwd, parsed.cwd);
   if (!cwdMatches) {
     return yield* new TeleportDiscoveryError({
-      message: `Native ${input.provider} session '${input.externalSessionId}' no longer belongs to this project.`,
+      reason: `Native ${input.provider} session '${input.externalSessionId}' no longer belongs to this project.`,
     });
   }
   return {
     ...parsed,
-    ...definedField("providerInstanceId", listedInstanceId ?? parsed.providerInstanceId),
+    ...definedField("providerInstanceId", resolved.instanceId),
   };
 });

@@ -347,7 +347,12 @@ describe("teleport Codex format", () => {
       const sharedRoot = path.join(root, "codex", "sessions");
       const homes: TeleportHomes = {
         codexSessionsRoot: sharedRoot,
-        extraCodexSessionsRoots: [],
+        extraCodexSessionsRoots: [
+          {
+            root: sharedRoot,
+            instanceId: ProviderInstanceId.make("codex_work"),
+          },
+        ],
         claudeProjectsRoot: path.join(root, "claude", "projects"),
         extraClaudeProjectsRoots: [],
         opencodeRoot: path.join(root, "opencode"),

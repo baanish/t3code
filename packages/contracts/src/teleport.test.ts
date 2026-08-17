@@ -5,7 +5,9 @@ import {
   isTeleportedOut,
   resolveTeleportPresence,
   TELEPORTED_OUT_SEND_DISABLED_REASON,
+  TeleportDiscoveryError,
   TeleportExportError,
+  TeleportInvalidInputError,
   TeleportLockProbeError,
   TeleportRuntimePayload,
   TeleportThreadState,
@@ -85,5 +87,27 @@ describe("teleport lock probe errors", () => {
     });
     expect(parsed._tag).toBe("TeleportLockProbeError");
     expect(parsed).toBeInstanceOf(TeleportLockProbeError);
+  });
+});
+
+describe("teleport tagged errors", () => {
+  it("derives TeleportInvalidInputError.message from reason", () => {
+    const error = new TeleportInvalidInputError({
+      reason: "Cannot export while this T3 session is running.",
+    });
+    expect(error.message).toBe("Cannot export while this T3 session is running.");
+    const parsed = decodeTeleportExportError({
+      _tag: "TeleportInvalidInputError",
+      reason: "Cannot export while this T3 session is running.",
+    });
+    expect(parsed).toBeInstanceOf(TeleportInvalidInputError);
+    expect(parsed.message).toBe("Cannot export while this T3 session is running.");
+  });
+
+  it("derives TeleportDiscoveryError.message from reason", () => {
+    const error = new TeleportDiscoveryError({
+      reason: "Native session was not found for this project.",
+    });
+    expect(error.message).toBe("Native session was not found for this project.");
   });
 });

@@ -332,7 +332,7 @@ registerTeleportFormat({
     });
     if (Option.isNone(parsed)) {
       return yield* new TeleportDiscoveryError({
-        message: `Native Claude session '${input.externalSessionId}' could not be parsed.`,
+        reason: `Native Claude session '${input.externalSessionId}' could not be parsed.`,
       });
     }
     return parsed.value;

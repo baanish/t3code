@@ -81,6 +81,11 @@ describe("teleport cwd matching", () => {
       true,
     );
     assert.equal(openCodeDirectoryMayMatch("/tmp", "/tmp/oc-wire-test"), false);
+    assert.equal(openCodeDirectoryMayMatch("/workspace", "/real/workspace/project"), true);
+    assert.equal(
+      openCodeDirectoryMayMatch("/home/user/projects/native", "/home/user/projects/native/codex"),
+      true,
+    );
   });
 
   it.effect("does not list a parent OpenCode session under a Codex project folder", () =>

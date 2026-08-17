@@ -183,7 +183,7 @@ export const make = Effect.gen(function* () {
   const inFlight = new Set<string>();
   const alreadyInFlightError = () =>
     new TeleportInvalidInputError({
-      message: "Teleport already in progress for this session.",
+      reason: "Teleport already in progress for this session.",
     });
   const withInFlight = <A, E, R = never>(
     keys: string[],
@@ -257,7 +257,7 @@ export const make = Effect.gen(function* () {
       Effect.mapError(
         (cause) =>
           new TeleportInvalidInputError({
-            message: "Failed to stop the T3 provider session.",
+            reason: "Failed to stop the T3 provider session.",
             cause,
           }),
       ),
@@ -271,7 +271,7 @@ export const make = Effect.gen(function* () {
           Effect.mapError(
             (cause) =>
               new TeleportDiscoveryError({
-                message: "Server settings could not be read for teleport discovery.",
+                reason: "Server settings could not be read for teleport discovery.",
                 cause,
               }),
           ),
@@ -297,20 +297,20 @@ export const make = Effect.gen(function* () {
             Effect.mapError(
               (cause) =>
                 new TeleportProjectResolutionError({
-                  message: "Failed to load the target project.",
+                  reason: "Failed to load the target project.",
                   cause,
                 }),
             ),
           );
           if (Option.isNone(project)) {
             return yield* new TeleportProjectResolutionError({
-              message: `Project '${input.projectId}' was not found.`,
+              reason: `Project '${input.projectId}' was not found.`,
             });
           }
           const cwd = yield* resolveTeleportCwdPath(input.cwd);
           if (!(yield* teleportCwdsEquivalent(project.value.workspaceRoot, cwd))) {
             return yield* new TeleportInvalidInputError({
-              message: "Import cwd must match the selected project's workspace root.",
+              reason: "Import cwd must match the selected project's workspace root.",
             });
           }
           const seenRefs = new Set<string>();
@@ -318,7 +318,7 @@ export const make = Effect.gen(function* () {
             const key = `${ref.provider}:${ref.providerInstanceId ?? ""}:${ref.externalSessionId}`;
             if (seenRefs.has(key)) {
               return yield* new TeleportInvalidInputError({
-                message: `Duplicate session '${ref.externalSessionId}' in the import batch.`,
+                reason: `Duplicate session '${ref.externalSessionId}' in the import batch.`,
               });
             }
             seenRefs.add(key);
@@ -328,7 +328,7 @@ export const make = Effect.gen(function* () {
             Effect.mapError(
               (cause) =>
                 new TeleportDiscoveryError({
-                  message: "Server settings could not be read for teleport import.",
+                  reason: "Server settings could not be read for teleport import.",
                   cause,
                 }),
             ),
@@ -338,7 +338,7 @@ export const make = Effect.gen(function* () {
             Effect.mapError(
               (cause) =>
                 new TeleportDiscoveryError({
-                  message: "Failed to read provider session bindings.",
+                  reason: "Failed to read provider session bindings.",
                   cause,
                 }),
             ),
@@ -370,7 +370,7 @@ export const make = Effect.gen(function* () {
             const driver = ProviderDriverKind.make(parsed.provider);
             let existingThreadId: ThreadId | undefined;
             let existingProjectId = input.projectId;
-            let existingStatus: (typeof bindings)[number]["status"];
+            let existingArchived = false;
             let existingProviderInstanceId: (typeof bindings)[number]["providerInstanceId"];
             for (const binding of bindings) {
               if (binding.provider !== driver) {
@@ -393,7 +393,7 @@ export const make = Effect.gen(function* () {
                 Effect.mapError(
                   (cause) =>
                     new TeleportDiscoveryError({
-                      message: "Failed to load an existing teleport thread.",
+                      reason: "Failed to load an existing teleport thread.",
                       cause,
                     }),
                 ),
@@ -411,29 +411,14 @@ export const make = Effect.gen(function* () {
                 });
               }
               if (shell.value.archivedAt !== null) {
-                yield* engine
-                  .dispatch({
-                    type: "thread.unarchive",
-                    commandId: CommandId.make(yield* nextId()),
-                    threadId: binding.threadId,
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new TeleportInvalidInputError({
-                          message: "Failed to unarchive the existing teleport thread.",
-                          cause,
-                        }),
-                    ),
-                  );
+                existingArchived = true;
               }
               existingThreadId = binding.threadId;
               existingProjectId = shell.value.projectId;
-              existingStatus = binding.status;
               existingProviderInstanceId = binding.providerInstanceId;
               if (isBusySessionStatus(shell.value.session?.status)) {
                 return yield* new TeleportInvalidInputError({
-                  message: `Cannot import while T3 session '${parsed.externalSessionId}' is running.`,
+                  reason: `Cannot import while T3 session '${parsed.externalSessionId}' is running.`,
                 });
               }
               break;
@@ -456,19 +441,19 @@ export const make = Effect.gen(function* () {
                 Effect.mapError(
                   (cause) =>
                     new TeleportDiscoveryError({
-                      message: "Failed to load the existing thread for in-place import.",
+                      reason: "Failed to load the existing thread for in-place import.",
                       cause,
                     }),
                 ),
               );
               if (Option.isNone(latest)) {
                 return yield* new TeleportDiscoveryError({
-                  message: `Thread '${threadId}' was not found for in-place import.`,
+                  reason: `Thread '${threadId}' was not found for in-place import.`,
                 });
               }
               if (isBusySessionStatus(latest.value.session?.status)) {
                 return yield* new TeleportInvalidInputError({
-                  message: `Cannot import while T3 session '${parsed.externalSessionId}' is running.`,
+                  reason: `Cannot import while T3 session '${parsed.externalSessionId}' is running.`,
                 });
               }
               yield* stopThreadProviderSession(threadId);
@@ -477,8 +462,25 @@ export const make = Effect.gen(function* () {
                 orchestrationToNative(latest.value.messages).length > 0
               ) {
                 return yield* new TeleportInvalidInputError({
-                  message: "Native session has no messages; refusing to wipe this thread.",
+                  reason: "Native session has no messages; refusing to wipe this thread.",
                 });
+              }
+              if (existingArchived) {
+                yield* engine
+                  .dispatch({
+                    type: "thread.unarchive",
+                    commandId: CommandId.make(yield* nextId()),
+                    threadId,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TeleportInvalidInputError({
+                          reason: "Failed to unarchive the existing teleport thread.",
+                          cause,
+                        }),
+                    ),
+                  );
               }
               updatedInPlace = true;
               const replaceCommandId = CommandId.make(yield* nextId());
@@ -494,7 +496,7 @@ export const make = Effect.gen(function* () {
                   Effect.mapError(
                     (cause) =>
                       new TeleportInvalidInputError({
-                        message: "Failed to replace thread history.",
+                        reason: "Failed to replace thread history.",
                         cause,
                       }),
                   ),
@@ -511,7 +513,7 @@ export const make = Effect.gen(function* () {
                     Effect.mapError(
                       (cause) =>
                         new TeleportInvalidInputError({
-                          message: "Failed to update imported thread title.",
+                          reason: "Failed to update imported thread title.",
                           cause,
                         }),
                     ),
@@ -540,7 +542,7 @@ export const make = Effect.gen(function* () {
                   Effect.mapError(
                     (cause) =>
                       new TeleportInvalidInputError({
-                        message: "Failed to create an imported thread.",
+                        reason: "Failed to create an imported thread.",
                         cause,
                       }),
                   ),
@@ -557,7 +559,7 @@ export const make = Effect.gen(function* () {
                   Effect.mapError(
                     (cause) =>
                       new TeleportInvalidInputError({
-                        message: "Failed to write imported thread history.",
+                        reason: "Failed to write imported thread history.",
                         cause,
                       }),
                   ),
@@ -582,7 +584,7 @@ export const make = Effect.gen(function* () {
                 threadId,
                 provider: driver,
                 providerInstanceId,
-                status: existingStatus ?? "stopped",
+                status: "stopped",
                 resumeCursor: buildTeleportResumeCursor({
                   provider: parsed.provider,
                   externalSessionId: parsed.externalSessionId,
@@ -593,7 +595,7 @@ export const make = Effect.gen(function* () {
                 Effect.mapError(
                   (cause) =>
                     new TeleportDiscoveryError({
-                      message: "Failed to bind the imported native session.",
+                      reason: "Failed to bind the imported native session.",
                       cause,
                     }),
                 ),
@@ -614,7 +616,7 @@ export const make = Effect.gen(function* () {
                 Effect.mapError(
                   (cause) =>
                     new TeleportInvalidInputError({
-                      message: "Failed to persist teleport presence.",
+                      reason: "Failed to persist teleport presence.",
                       cause,
                     }),
                 ),
@@ -639,7 +641,7 @@ export const make = Effect.gen(function* () {
         Effect.catchTags({
           PlatformError: (cause: PlatformError.PlatformError) =>
             new TeleportDiscoveryError({
-              message: "Native filesystem error during teleport import.",
+              reason: "Native filesystem error during teleport import.",
               cause,
             }),
         }),
@@ -657,19 +659,19 @@ export const make = Effect.gen(function* () {
             Effect.mapError(
               (cause) =>
                 new TeleportInvalidInputError({
-                  message: "Failed to load the thread for export.",
+                  reason: "Failed to load the thread for export.",
                   cause,
                 }),
             ),
           );
           if (Option.isNone(thread)) {
             return yield* new TeleportInvalidInputError({
-              message: `Thread '${input.threadId}' was not found.`,
+              reason: `Thread '${input.threadId}' was not found.`,
             });
           }
           if (isBusySessionStatus(thread.value.session?.status)) {
             return yield* new TeleportInvalidInputError({
-              message: "Cannot export while this T3 session is running.",
+              reason: "Cannot export while this T3 session is running.",
             });
           }
 
@@ -677,14 +679,14 @@ export const make = Effect.gen(function* () {
             Effect.mapError(
               (cause) =>
                 new TeleportProjectResolutionError({
-                  message: "Failed to load the thread's project.",
+                  reason: "Failed to load the thread's project.",
                   cause,
                 }),
             ),
           );
           if (Option.isNone(project)) {
             return yield* new TeleportProjectResolutionError({
-              message: "The thread's project was not found.",
+              reason: "The thread's project was not found.",
             });
           }
 
@@ -692,7 +694,7 @@ export const make = Effect.gen(function* () {
             Effect.mapError(
               (cause) =>
                 new TeleportInvalidInputError({
-                  message: "Failed to read the thread's provider binding.",
+                  reason: "Failed to read the thread's provider binding.",
                   cause,
                 }),
             ),
@@ -708,7 +710,7 @@ export const make = Effect.gen(function* () {
               : undefined);
           if (!driverKind) {
             return yield* new TeleportInvalidInputError({
-              message: "Teleport export could not resolve a supported provider for this thread.",
+              reason: "Teleport export could not resolve a supported provider for this thread.",
             });
           }
           const provider = yield* toTeleportProvider(driverKind);
@@ -717,8 +719,7 @@ export const make = Effect.gen(function* () {
             : undefined;
           if (resolveTeleportPresence(existingPayload) === "native") {
             return yield* new TeleportInvalidInputError({
-              message:
-                "This thread is already in the native CLI. Import it before exporting again.",
+              reason: "This thread is already in the native CLI. Import it before exporting again.",
             });
           }
 
@@ -764,19 +765,19 @@ export const make = Effect.gen(function* () {
             Effect.mapError(
               (cause) =>
                 new TeleportInvalidInputError({
-                  message: "Failed to re-check the thread before export.",
+                  reason: "Failed to re-check the thread before export.",
                   cause,
                 }),
             ),
           );
           if (Option.isNone(latest)) {
             return yield* new TeleportInvalidInputError({
-              message: `Thread '${input.threadId}' was not found.`,
+              reason: `Thread '${input.threadId}' was not found.`,
             });
           }
           if (isBusySessionStatus(latest.value.session?.status)) {
             return yield* new TeleportInvalidInputError({
-              message: "Cannot export while this T3 session is running.",
+              reason: "Cannot export while this T3 session is running.",
             });
           }
           const cwdSource =
@@ -813,7 +814,7 @@ export const make = Effect.gen(function* () {
               Effect.mapError(
                 (cause) =>
                   new TeleportInvalidInputError({
-                    message: "Failed to persist teleport presence.",
+                    reason: "Failed to persist teleport presence.",
                     cause,
                   }),
               ),
@@ -914,7 +915,7 @@ export const make = Effect.gen(function* () {
               Effect.mapError(
                 (cause) =>
                   new TeleportInvalidInputError({
-                    message: "Failed to persist teleport presence.",
+                    reason: "Failed to persist teleport presence.",
                     cause,
                   }),
               ),

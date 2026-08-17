@@ -140,19 +140,17 @@ export function isForeignOpenCodeProjectFolder(projectCwd: string): boolean {
 }
 
 /**
- * OpenCode stores the process cwd, which is often a parent of the T3 project
- * folder. Exact match still wins; otherwise the project may sit under the
- * session directory unless that directory is a generic root or a sibling
- * harness folder such as `codex` / `claude` / `grok`.
+ * Cheap sqlite prefilter: keep session rows that might belong to this T3
+ * project. Generic launch directories are dropped here; foreign harness
+ * folders and symlink spellings are decided by `opencodeSessionMatchesProjectCwd`.
  */
 export function openCodeDirectoryMayMatch(sessionCwd: string, projectCwd: string): boolean {
   if (teleportCwdsMatch(sessionCwd, projectCwd)) {
     return true;
   }
-  if (isGenericTeleportCwd(sessionCwd) || isForeignOpenCodeProjectFolder(projectCwd)) {
-    return false;
-  }
-  return isTeleportCwdWithin(projectCwd, sessionCwd);
+  // Only drop generic launch directories here. Foreign harness folders and
+  // symlink spellings are decided by `opencodeSessionMatchesProjectCwd`.
+  return !isGenericTeleportCwd(sessionCwd);
 }
 
 export const opencodeSessionMatchesProjectCwd = Effect.fn("opencodeSessionMatchesProjectCwd")(

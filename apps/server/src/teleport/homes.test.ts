@@ -10,6 +10,7 @@ import {
   resolveClaudeProjectsRootForInstance,
   resolveCodexSessionsRoot,
   resolveTeleportHomes,
+  codexSearchRoots,
 } from "./homes.ts";
 
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
@@ -72,7 +73,14 @@ describe("resolveTeleportHomes", () => {
       );
 
       assert.equal(homes.codexSessionsRoot, path.join(sharedHome, "sessions"));
-      assert.deepStrictEqual(homes.extraCodexSessionsRoots, []);
+      assert.equal(homes.extraCodexSessionsRoots.length, 1);
+      assert.equal(homes.extraCodexSessionsRoots[0]?.instanceId, "codex_work");
+      assert.equal(homes.extraCodexSessionsRoots[0]?.root, path.join(sharedHome, "sessions"));
+      assert.equal(
+        resolveCodexSessionsRoot(homes, ProviderInstanceId.make("codex_work")),
+        path.join(sharedHome, "sessions"),
+      );
+      assert.equal(codexSearchRoots(homes).length, 1);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

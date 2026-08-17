@@ -362,6 +362,77 @@ describe("teleport OpenCode format", () => {
     ),
   );
 
+  it.effect("lists JSON-only OpenCode sessions even when sqlite has other matches", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-opencode-json-list-" });
+      writeOpenCodeSqliteFixture({
+        dbPath: path.join(root, "opencode.db"),
+        sessions: [
+          {
+            id: "ses_sqlite",
+            directory: "/workspace",
+            title: "sqlite session",
+            messages: [
+              {
+                id: "msg_sqlite",
+                role: "user",
+                parts: [{ type: "text", text: "from sqlite" }],
+              },
+            ],
+          },
+        ],
+      });
+      const jsonSessionId = "ses_json_only";
+      const jsonMessageId = "msg_json_only";
+      yield* fs.makeDirectory(path.join(root, "storage", "session", "t3"), { recursive: true });
+      yield* fs.makeDirectory(path.join(root, "storage", "message", jsonSessionId), {
+        recursive: true,
+      });
+      yield* fs.makeDirectory(path.join(root, "storage", "part", jsonMessageId), {
+        recursive: true,
+      });
+      yield* fs.writeFileString(
+        path.join(root, "storage", "session", "t3", `${jsonSessionId}.json`),
+        `${JSON.stringify({
+          id: jsonSessionId,
+          directory: "/workspace",
+          title: "json session",
+          time: { created: 1, updated: 2 },
+        })}\n`,
+      );
+      yield* fs.writeFileString(
+        path.join(root, "storage", "message", jsonSessionId, `${jsonMessageId}.json`),
+        `${JSON.stringify({
+          id: jsonMessageId,
+          role: "user",
+          time: { created: 1 },
+        })}\n`,
+      );
+      yield* fs.writeFileString(
+        path.join(root, "storage", "part", jsonMessageId, "prt_json.json"),
+        `${JSON.stringify({
+          type: "text",
+          text: "from json",
+          time: { created: 1 },
+        })}\n`,
+      );
+      const listed = yield* listOpenCodeSessions({
+        opencodeRoot: root,
+        cwd: "/workspace",
+      });
+      assert.deepStrictEqual(
+        listed.map((session) => session.externalSessionId).toSorted(),
+        [jsonSessionId, "ses_sqlite"].toSorted(),
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it("treats opencode.db as the shared live store, not a session file", () => {
     assert.equal(isOpenCodeSharedStorePath("/home/user/.local/share/opencode/opencode.db"), true);
     assert.equal(

@@ -375,7 +375,7 @@ registerTeleportFormat({
     });
     if (Option.isNone(parsed)) {
       return yield* new TeleportDiscoveryError({
-        message: `Native Codex session '${input.externalSessionId}' could not be parsed.`,
+        reason: `Native Codex session '${input.externalSessionId}' could not be parsed.`,
       });
     }
     return parsed.value;

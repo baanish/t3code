@@ -137,12 +137,16 @@ export const listOpenCodeSessions = Effect.fn("listOpenCodeSessions")(function* 
     opencodeRoot: input.opencodeRoot,
     cwd: input.cwd,
   });
-  const candidates =
-    sqliteSessions.length > 0
-      ? sqliteSessions
-      : yield* readOpenCodeJsonSessions(input.opencodeRoot);
+  const jsonSessions = yield* readOpenCodeJsonSessions(input.opencodeRoot);
+  const byId = new Map<string, ParsedNativeSession>();
+  for (const session of jsonSessions) {
+    byId.set(session.externalSessionId, session);
+  }
+  for (const session of sqliteSessions) {
+    byId.set(session.externalSessionId, session);
+  }
   const sessions: ParsedNativeSession[] = [];
-  for (const session of candidates) {
+  for (const session of byId.values()) {
     if (yield* opencodeSessionMatchesProjectCwd(session.cwd, input.cwd)) {
       sessions.push(session);
     }
@@ -783,7 +787,7 @@ registerTeleportFormat({
     });
     if (Option.isNone(parsed)) {
       return yield* new TeleportDiscoveryError({
-        message: `Native OpenCode session '${input.externalSessionId}' could not be read.`,
+        reason: `Native OpenCode session '${input.externalSessionId}' could not be read.`,
       });
     }
     return parsed.value;

@@ -137,10 +137,14 @@ export const TELEPORTED_OUT_SEND_DISABLED_REASON =
 export class TeleportInvalidInputError extends Schema.TaggedErrorClass<TeleportInvalidInputError>()(
   "TeleportInvalidInputError",
   {
-    message: TrimmedNonEmptyString,
+    reason: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    return this.reason;
+  }
+}
 
 export class TeleportUnsupportedProviderError extends Schema.TaggedErrorClass<TeleportUnsupportedProviderError>()(
   "TeleportUnsupportedProviderError",
@@ -195,18 +199,26 @@ export class TeleportIdentityConflictError extends Schema.TaggedErrorClass<Telep
 export class TeleportProjectResolutionError extends Schema.TaggedErrorClass<TeleportProjectResolutionError>()(
   "TeleportProjectResolutionError",
   {
-    message: TrimmedNonEmptyString,
+    reason: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    return this.reason;
+  }
+}
 
 export class TeleportDiscoveryError extends Schema.TaggedErrorClass<TeleportDiscoveryError>()(
   "TeleportDiscoveryError",
   {
-    message: TrimmedNonEmptyString,
+    reason: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    return this.reason;
+  }
+}
 
 export class TeleportNativeWriteError extends Schema.TaggedErrorClass<TeleportNativeWriteError>()(
   "TeleportNativeWriteError",

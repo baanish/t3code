@@ -20,6 +20,8 @@ import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
+const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
+const GROK_DRIVER = ProviderDriverKind.make("grok");
 
 export interface TeleportInstanceRoot {
   readonly root: string;
@@ -85,11 +87,71 @@ export function teleportNativeRootFor(
   provider: TeleportProvider,
   instanceId: ProviderInstanceId,
 ): string {
+  return (
+    configuredTeleportNativeRootFor(homes, provider, instanceId) ??
+    fallbackNativeRoot(homes, provider)
+  );
+}
+
+export function configuredInstanceRootsForProvider(
+  homes: TeleportHomes,
+  provider: TeleportProvider,
+): ReadonlyArray<TeleportInstanceRoot> {
   switch (provider) {
     case "codex":
-      return resolveCodexSessionsRoot(homes, instanceId);
+      return [
+        {
+          root: homes.codexSessionsRoot,
+          instanceId: defaultInstanceIdForDriver(CODEX_DRIVER),
+        },
+        ...homes.extraCodexSessionsRoots,
+      ];
     case "claudeAgent":
-      return resolveClaudeProjectsRootForInstance(homes, instanceId);
+      return [
+        {
+          root: homes.claudeProjectsRoot,
+          instanceId: defaultInstanceIdForDriver(CLAUDE_DRIVER),
+        },
+        ...homes.extraClaudeProjectsRoots,
+      ];
+    case "opencode":
+      return [
+        {
+          root: homes.opencodeRoot,
+          instanceId: defaultInstanceIdForDriver(OPENCODE_DRIVER),
+        },
+      ];
+    case "grok":
+      return [
+        {
+          root: homes.grokSessionsRoot,
+          instanceId: defaultInstanceIdForDriver(GROK_DRIVER),
+        },
+      ];
+    default: {
+      const _exhaustive: never = provider;
+      return _exhaustive;
+    }
+  }
+}
+
+export function configuredTeleportNativeRootFor(
+  homes: TeleportHomes,
+  provider: TeleportProvider,
+  instanceId: ProviderInstanceId,
+): string | undefined {
+  const match = configuredInstanceRootsForProvider(homes, provider).find(
+    (root) => root.instanceId === instanceId,
+  );
+  return match?.root;
+}
+
+function fallbackNativeRoot(homes: TeleportHomes, provider: TeleportProvider): string {
+  switch (provider) {
+    case "codex":
+      return homes.codexSessionsRoot;
+    case "claudeAgent":
+      return homes.claudeProjectsRoot;
     case "opencode":
       return homes.opencodeRoot;
     case "grok":
@@ -106,6 +168,15 @@ export function nativePathIsUnderRoot(nativePath: string, root: string): boolean
   const normalizedRoot = root.replaceAll("\\", "/").replace(/\/+$/u, "");
   return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
 }
+
+export const canonicalizeTeleportNativePath = Effect.fn("canonicalizeTeleportNativePath")(
+  function* (value: string): Effect.fn.Return<string, never, FileSystem.FileSystem | Path.Path> {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const resolved = path.resolve(value);
+    return yield* fs.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved));
+  },
+);
 
 export function claudeSearchRoots(homes: TeleportHomes): ReadonlyArray<TeleportInstanceRoot> {
   return uniqueInstanceRoots([
@@ -229,13 +300,9 @@ export const resolveTeleportHomes = Effect.fn("resolveTeleportHomes")(function* 
 
   return {
     codexSessionsRoot,
-    extraCodexSessionsRoots: extraCodexSessionsRoots.filter(
-      (root) => root.root !== codexSessionsRoot,
-    ),
+    extraCodexSessionsRoots,
     claudeProjectsRoot,
-    extraClaudeProjectsRoots: extraClaudeProjectsRoots.filter(
-      (root) => root.root !== claudeProjectsRoot,
-    ),
+    extraClaudeProjectsRoots,
     opencodeRoot: path.join(xdgData, "opencode"),
     grokSessionsRoot: path.join(NodeOS.homedir(), ".grok", "sessions"),
   };
