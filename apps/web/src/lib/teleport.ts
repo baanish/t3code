@@ -41,6 +41,10 @@ export function teleportProviderLabel(provider: TeleportProvider): string {
       return "Codex";
     case "claudeAgent":
       return "Claude";
+    case "opencode":
+      return "OpenCode";
+    case "grok":
+      return "Grok";
     default: {
       const _exhaustive: never = provider;
       return _exhaustive;

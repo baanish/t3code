@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeOS from "node:os";
+
 import {
   defaultInstanceIdForDriver,
   ProviderDriverKind,
@@ -11,11 +14,14 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import { expandHomePath } from "../pathExpansion.ts";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
+const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
+const GROK_DRIVER = ProviderDriverKind.make("grok");
 
 export interface TeleportInstanceRoot {
   readonly root: string;
@@ -27,6 +33,8 @@ export interface TeleportHomes {
   readonly extraCodexSessionsRoots: ReadonlyArray<TeleportInstanceRoot>;
   readonly claudeProjectsRoot: string;
   readonly extraClaudeProjectsRoots: ReadonlyArray<TeleportInstanceRoot>;
+  readonly opencodeRoot: string;
+  readonly grokSessionsRoot: string;
 }
 
 function uniqueInstanceRoots(
@@ -106,6 +114,20 @@ export function configuredInstanceRootsForProvider(
         },
         ...homes.extraClaudeProjectsRoots,
       ];
+    case "opencode":
+      return [
+        {
+          root: homes.opencodeRoot,
+          instanceId: defaultInstanceIdForDriver(OPENCODE_DRIVER),
+        },
+      ];
+    case "grok":
+      return [
+        {
+          root: homes.grokSessionsRoot,
+          instanceId: defaultInstanceIdForDriver(GROK_DRIVER),
+        },
+      ];
     default: {
       const _exhaustive: never = provider;
       return _exhaustive;
@@ -130,6 +152,10 @@ function fallbackNativeRoot(homes: TeleportHomes, provider: TeleportProvider): s
       return homes.codexSessionsRoot;
     case "claudeAgent":
       return homes.claudeProjectsRoot;
+    case "opencode":
+      return homes.opencodeRoot;
+    case "grok":
+      return homes.grokSessionsRoot;
     default: {
       const _exhaustive: never = provider;
       return _exhaustive;
@@ -265,10 +291,19 @@ export const resolveTeleportHomes = Effect.fn("resolveTeleportHomes")(function* 
     extraClaudeProjectsRoots.push({ root: projectsRoot, instanceId });
   }
 
+  // OpenCode stores sessions at ~/.local/share/opencode on macOS/Linux and
+  // %USERPROFILE%\.local\share\opencode on Windows. XDG_DATA_HOME still wins.
+  const xdgData =
+    process.env.XDG_DATA_HOME && process.env.XDG_DATA_HOME.trim().length > 0
+      ? expandHomePath(process.env.XDG_DATA_HOME)
+      : path.join(NodeOS.homedir(), ".local", "share");
+
   return {
     codexSessionsRoot,
     extraCodexSessionsRoots,
     claudeProjectsRoot,
     extraClaudeProjectsRoots,
+    opencodeRoot: path.join(xdgData, "opencode"),
+    grokSessionsRoot: path.join(NodeOS.homedir(), ".grok", "sessions"),
   };
 });

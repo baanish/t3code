@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderInstanceId } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -7,6 +8,7 @@ import * as Path from "effect/Path";
 
 import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
 import { serializeCodexSession } from "./formats/codex.ts";
+import { writeOpenCodeSession } from "./formats/opencode.ts";
 import {
   getTeleportFormat,
   listRegisteredTeleportProviders,
@@ -22,6 +24,8 @@ function homesFor(root: string, path: Path.Path): TeleportHomes {
     extraCodexSessionsRoots: [],
     claudeProjectsRoot: path.join(root, "claude", "projects"),
     extraClaudeProjectsRoots: [],
+    opencodeRoot: path.join(root, "opencode"),
+    grokSessionsRoot: path.join(root, "grok", "sessions"),
   };
 }
 
@@ -115,5 +119,58 @@ describe("teleport discovery", () => {
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not import a generic OpenCode parent cwd via an explicit nativePath", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-opencode-tmp-path-" });
+      const homes = homesFor(root, path);
+      const session = sampleTeleportSession("opencode", "/tmp");
+      const nativePath = yield* writeOpenCodeSession({
+        opencodeRoot: homes.opencodeRoot,
+        session,
+      });
+      const result = yield* loadTeleportSession({
+        homes,
+        provider: "opencode",
+        externalSessionId: session.externalSessionId,
+        cwd: "/tmp/oc-wire-test",
+        nativePath,
+      }).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect("still imports an OpenCode parent project cwd via an explicit nativePath", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-opencode-parent-path-" });
+      const homes = homesFor(root, path);
+      const session = sampleTeleportSession("opencode", "/home/user/projects/native");
+      const nativePath = yield* writeOpenCodeSession({
+        opencodeRoot: homes.opencodeRoot,
+        session,
+      });
+      const parsed = yield* loadTeleportSession({
+        homes,
+        provider: "opencode",
+        externalSessionId: session.externalSessionId,
+        cwd: "/home/user/projects/native/opencode",
+        nativePath,
+      });
+      assert.equal(parsed.nativePath, nativePath);
+      assert.equal(parsed.cwd, "/home/user/projects/native");
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(NodeServices.layer),
+    ),
   );
 });

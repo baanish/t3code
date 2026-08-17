@@ -7,7 +7,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 export const TELEPORT_SCHEMA_VERSION = 1 as const;
 export const TELEPORT_NATIVE_FORMAT_VERSION = 1 as const;
 
-export const TeleportProvider = Schema.Literals(["codex", "claudeAgent"]);
+export const TeleportProvider = Schema.Literals(["codex", "claudeAgent", "opencode", "grok"]);
 export type TeleportProvider = typeof TeleportProvider.Type;
 
 export const TeleportSyncDirection = Schema.Literals(["import", "export"]);
@@ -115,7 +115,7 @@ export const TeleportRuntimePayload = Schema.Struct({
 export type TeleportRuntimePayload = typeof TeleportRuntimePayload.Type;
 
 export function isTeleportProvider(value: string): value is TeleportProvider {
-  return value === "codex" || value === "claudeAgent";
+  return value === "codex" || value === "claudeAgent" || value === "opencode" || value === "grok";
 }
 
 export function resolveTeleportPresence(

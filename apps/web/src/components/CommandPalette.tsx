@@ -29,7 +29,6 @@ import {
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
-  type TeleportProvider,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -1298,7 +1297,7 @@ function OpenCommandPaletteDialog(props: {
     async (
       project: Project,
       session: {
-        readonly provider: TeleportProvider;
+        readonly provider: "codex" | "claudeAgent" | "opencode" | "grok";
         readonly providerInstanceId?: ProviderInstanceId;
         readonly externalSessionId: string;
       },
@@ -1948,7 +1947,16 @@ function OpenCommandPaletteDialog(props: {
       actionItems.push({
         kind: "action",
         value: "action:import-sessions",
-        searchTerms: ["import sessions", "teleport", "codex", "claude", "native", "cli"],
+        searchTerms: [
+          "import sessions",
+          "teleport",
+          "codex",
+          "claude",
+          "opencode",
+          "grok",
+          "native",
+          "cli",
+        ],
         title: "Import sessions...",
         icon: <ImportIcon className={ITEM_ICON_CLASS} />,
         keepOpen: true,

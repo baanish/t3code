@@ -2486,9 +2486,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         )
         VALUES (
           'thread-teleport', 'project-teleport', 'Native thread',
-          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+          '{"provider":"grok","model":"grok-4"}', 'full-access', 'default',
           0, 0, 0, '2026-08-14T00:00:00.000Z', '2026-08-14T00:00:00.000Z', NULL,
-          '{"presence":"native","provider":"codex","externalSessionId":"session-1","nativePath":"/tmp/native","lastSyncedAt":"2026-08-14T00:00:01.000Z"}'
+          '{"presence":"native","provider":"grok","externalSessionId":"session-1","nativePath":"/tmp/native","lastSyncedAt":"2026-08-14T00:00:01.000Z"}'
         )
       `;
       for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
@@ -2500,7 +2500,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
 
       const expectedTeleport = {
         presence: "native",
-        provider: "codex",
+        provider: "grok",
         externalSessionId: "session-1",
         nativePath: "/tmp/native",
         lastSyncedAt: "2026-08-14T00:00:01.000Z",
