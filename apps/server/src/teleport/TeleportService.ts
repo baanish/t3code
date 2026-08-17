@@ -39,11 +39,13 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Ref from "effect/Ref";
 
 import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
@@ -61,6 +63,11 @@ import {
   uniqueTeleportCwds,
 } from "./cwd.ts";
 import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
+import {
+  pendingTeleportNativePath,
+  realExportNativePath,
+  teleportExportPresenceOnFailure,
+} from "./exportPresence.ts";
 import * as TeleportFormatRegistry from "./formats/registry.ts";
 import { resolveTeleportHomes, type TeleportHomes } from "./homes.ts";
 import { definedField, firstUserTitle, truncateTitle } from "./json.ts";
@@ -821,7 +828,7 @@ export const make = Effect.gen(function* () {
             ),
           );
           const homes = yield* resolveTeleportHomes(settings);
-          const existingNativePath = existingPayload?.nativePath;
+          const existingNativePath = realExportNativePath(existingPayload?.nativePath);
           const externalSessionId = allocateExportSessionId(existingPayload, yield* nextId());
           yield* claimExtraInFlight(inFlightKeys, `session:${provider}:${externalSessionId}`);
           const providerInstanceId =
@@ -854,7 +861,7 @@ export const make = Effect.gen(function* () {
           const cwd = yield* resolveTeleportCwdPath(cwdSource);
           const messages = capMessages(orchestrationToNative(latest.value.messages));
           const pendingNativePath =
-            existingNativePath ?? `teleport-pending:${provider}:${externalSessionId}`;
+            existingNativePath ?? pendingTeleportNativePath(provider, externalSessionId);
           const pendingPayload: TeleportRuntimePayload = {
             schemaVersion: TELEPORT_SCHEMA_VERSION,
             externalSessionId,
@@ -864,28 +871,6 @@ export const make = Effect.gen(function* () {
             nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
             presence: "native",
           };
-          yield* engine
-            .dispatch({
-              type: "thread.teleport.set",
-              commandId: CommandId.make(yield* nextId()),
-              threadId: input.threadId,
-              teleport: teleportThreadStateFromPayload({
-                provider,
-                providerInstanceId,
-                payload: pendingPayload,
-              }),
-              createdAt: now,
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new TeleportInvalidInputError({
-                    reason: "Failed to persist teleport presence.",
-                    cause,
-                  }),
-              ),
-            );
-
           const revertExportPresence = engine
             .dispatch({
               type: "thread.teleport.set",
@@ -907,6 +892,63 @@ export const make = Effect.gen(function* () {
                 }),
               ),
             );
+          const persistExportedNative = (nativePath: string) => {
+            const teleportPayload: TeleportRuntimePayload = {
+              schemaVersion: TELEPORT_SCHEMA_VERSION,
+              externalSessionId,
+              nativePath,
+              lastSyncDirection: "export",
+              lastSyncedAt: now,
+              nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+              presence: "native",
+            };
+            const adapter = formats.get(provider);
+            return Effect.gen(function* () {
+              if (adapter) {
+                yield* directory
+                  .upsert({
+                    threadId: input.threadId,
+                    provider: driverKind,
+                    providerInstanceId,
+                    status: "stopped",
+                    resumeCursor: buildTeleportResumeCursor({
+                      provider,
+                      externalSessionId,
+                      adapter,
+                    }),
+                    runtimePayload: { teleport: teleportPayload },
+                  })
+                  .pipe(
+                    Effect.catch(() =>
+                      Effect.logWarning("teleport.export.binding-persist-on-failure", {
+                        threadId: input.threadId,
+                        nativePath,
+                      }),
+                    ),
+                  );
+              }
+              yield* engine
+                .dispatch({
+                  type: "thread.teleport.set",
+                  commandId: CommandId.make(yield* nextId()),
+                  threadId: input.threadId,
+                  teleport: teleportThreadStateFromPayload({
+                    provider,
+                    providerInstanceId,
+                    payload: teleportPayload,
+                  }),
+                  createdAt: now,
+                })
+                .pipe(
+                  Effect.catch(() =>
+                    Effect.logWarning("teleport.export.presence-persist-on-failure", {
+                      threadId: input.threadId,
+                      nativePath,
+                    }),
+                  ),
+                );
+            });
+          };
 
           const nativeSession: ParsedNativeSession = {
             provider,
@@ -920,85 +962,124 @@ export const make = Effect.gen(function* () {
             messages,
             providerInstanceId,
           };
+          const writtenNativePathRef = yield* Ref.make<string | undefined>(undefined);
 
-          const adapter = formats.get(provider);
-          if (!adapter) {
-            yield* revertExportPresence;
-            return yield* new TeleportUnsupportedProviderError({
-              provider: driverKind,
-              message: `Teleport does not support provider '${provider}'.`,
-            });
-          }
-          const nativePath = yield* adapter
-            .write({
-              homes,
-              session: nativeSession,
-              ...(existingNativePath !== undefined ? { existingNativePath } : {}),
-            })
-            .pipe(Effect.tapError(() => revertExportPresence));
-
-          const teleportPayload: TeleportRuntimePayload = {
-            schemaVersion: TELEPORT_SCHEMA_VERSION,
-            externalSessionId,
-            nativePath,
-            lastSyncDirection: "export",
-            lastSyncedAt: now,
-            nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-            presence: "native",
-          };
-          yield* directory
-            .upsert({
-              threadId: input.threadId,
-              provider: driverKind,
-              providerInstanceId,
-              status: "stopped",
-              resumeCursor: buildTeleportResumeCursor({
-                provider,
-                externalSessionId,
-                adapter,
-              }),
-              runtimePayload: { teleport: teleportPayload },
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new TeleportNativeWriteError({
-                    nativePath,
-                    message: "Failed to bind the exported native session.",
-                    cause,
-                  }),
+          return yield* Effect.acquireUseRelease(
+            engine
+              .dispatch({
+                type: "thread.teleport.set",
+                commandId: CommandId.make(yield* nextId()),
+                threadId: input.threadId,
+                teleport: teleportThreadStateFromPayload({
+                  provider,
+                  providerInstanceId,
+                  payload: pendingPayload,
+                }),
+                createdAt: now,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new TeleportInvalidInputError({
+                      reason: "Failed to persist teleport presence.",
+                      cause,
+                    }),
+                ),
               ),
-            );
-          yield* engine
-            .dispatch({
-              type: "thread.teleport.set",
-              commandId: CommandId.make(yield* nextId()),
-              threadId: input.threadId,
-              teleport: teleportThreadStateFromPayload({
-                provider,
-                providerInstanceId,
-                payload: teleportPayload,
-              }),
-              createdAt: now,
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new TeleportInvalidInputError({
-                    reason: "Failed to persist teleport presence.",
-                    cause,
-                  }),
-              ),
-            );
+            () =>
+              Effect.gen(function* () {
+                const adapter = formats.get(provider);
+                if (!adapter) {
+                  return yield* new TeleportUnsupportedProviderError({
+                    provider: driverKind,
+                    message: `Teleport does not support provider '${provider}'.`,
+                  });
+                }
+                const nativePath = yield* adapter.write({
+                  homes,
+                  session: nativeSession,
+                  ...(existingNativePath !== undefined ? { existingNativePath } : {}),
+                });
+                yield* Ref.set(writtenNativePathRef, nativePath);
 
-          return {
-            schemaVersion: TELEPORT_SCHEMA_VERSION,
-            provider,
-            providerInstanceId,
-            externalSessionId,
-            nativePath,
-            cwd,
-          };
+                const teleportPayload: TeleportRuntimePayload = {
+                  schemaVersion: TELEPORT_SCHEMA_VERSION,
+                  externalSessionId,
+                  nativePath,
+                  lastSyncDirection: "export",
+                  lastSyncedAt: now,
+                  nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+                  presence: "native",
+                };
+                yield* directory
+                  .upsert({
+                    threadId: input.threadId,
+                    provider: driverKind,
+                    providerInstanceId,
+                    status: "stopped",
+                    resumeCursor: buildTeleportResumeCursor({
+                      provider,
+                      externalSessionId,
+                      adapter,
+                    }),
+                    runtimePayload: { teleport: teleportPayload },
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TeleportNativeWriteError({
+                          nativePath,
+                          message: "Failed to bind the exported native session.",
+                          cause,
+                        }),
+                    ),
+                  );
+                yield* engine
+                  .dispatch({
+                    type: "thread.teleport.set",
+                    commandId: CommandId.make(yield* nextId()),
+                    threadId: input.threadId,
+                    teleport: teleportThreadStateFromPayload({
+                      provider,
+                      providerInstanceId,
+                      payload: teleportPayload,
+                    }),
+                    createdAt: now,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TeleportInvalidInputError({
+                          reason: "Failed to persist teleport presence.",
+                          cause,
+                        }),
+                    ),
+                  );
+
+                return {
+                  schemaVersion: TELEPORT_SCHEMA_VERSION,
+                  provider,
+                  providerInstanceId,
+                  externalSessionId,
+                  nativePath,
+                  cwd,
+                };
+              }),
+            (_acquired, exit) => {
+              if (Exit.isSuccess(exit)) {
+                return Effect.void;
+              }
+              return Ref.get(writtenNativePathRef).pipe(
+                Effect.flatMap((writtenNativePath) =>
+                  teleportExportPresenceOnFailure({
+                    writtenNativePath,
+                    revert: revertExportPresence,
+                    persistWritten: persistExportedNative,
+                  }),
+                ),
+              );
+            },
+          );
         }),
       ).pipe(
         Effect.catchTags({
