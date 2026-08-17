@@ -244,7 +244,7 @@ interface OpenCodeSessionContext {
    * Projected status is still flipped to `ready` immediately so Stop does
    * not leave the UI stuck on "Working".
    */
-  abortInFlight: Deferred.Deferred<void, never> | undefined;
+  readonly abortGate: Ref.Ref<Deferred.Deferred<void, never> | null>;
   /**
    * One-shot guard flipped by `stopOpenCodeContext` / `emitUnexpectedExit`.
    * The session lifecycle is owned by `sessionScope`; this Ref exists only
@@ -1410,7 +1410,7 @@ export function makeOpenCodeAdapter(
           activeTurnId: undefined,
           activeAgent: undefined,
           activeVariant: undefined,
-          abortInFlight: undefined,
+          abortGate: yield* Ref.make<Deferred.Deferred<void, never> | null>(null),
           stopped: yield* Ref.make(false),
           sessionScope: started.sessionScope,
         };
@@ -1438,8 +1438,9 @@ export function makeOpenCodeAdapter(
 
     const sendTurn: OpenCodeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
       const context = yield* ensureSessionContext(sessions, input.threadId);
-      if (context.abortInFlight !== undefined) {
-        yield* Deferred.await(context.abortInFlight);
+      const pendingAbort = yield* Ref.get(context.abortGate);
+      if (pendingAbort !== null) {
+        yield* Deferred.await(pendingAbort);
       }
       // A sendTurn while a turn is active is a steer: OpenCode queues the
       // prompt into the busy session and the work continues as one turn, so
@@ -1575,47 +1576,48 @@ export function makeOpenCodeAdapter(
         const context = sessions.get(threadId);
         const abortedTurnId = turnId ?? context?.activeTurnId;
         if (context && !(yield* Ref.get(context.stopped))) {
-          const pendingAbort = context.abortInFlight;
-          if (pendingAbort !== undefined) {
-            yield* Deferred.await(pendingAbort);
-          } else {
-            const abortInFlight = yield* Deferred.make<void>();
-            context.abortInFlight = abortInFlight;
-            // Settle projected state first so Stop does not leave "Working",
-            // but keep sendTurn blocked until abort finishes or times out.
-            yield* Effect.ensuring(
-              Effect.gen(function* () {
-                context.activeTurnId = undefined;
-                yield* updateProviderSession(
-                  context,
-                  { status: "ready" },
-                  { clearActiveTurnId: true },
-                );
-                if (abortedTurnId) {
-                  yield* emit({
-                    ...(yield* buildEventBase({
-                      threadId,
-                      turnId: abortedTurnId,
-                    })),
-                    type: "turn.aborted",
-                    payload: {
-                      reason: "Interrupted by user.",
-                    },
-                  });
-                }
-                yield* runOpenCodeSdk("session.abort", () =>
-                  context.client.session.abort({ sessionID: context.openCodeSessionId }),
-                ).pipe(Effect.timeout("2 seconds"), Effect.ignore({ log: true }));
-              }),
-              Effect.gen(function* () {
-                yield* Deferred.succeed(abortInFlight, undefined);
-                if (context.abortInFlight === abortInFlight) {
-                  context.abortInFlight = undefined;
-                }
-              }),
-            );
+          const abortInFlight = yield* Deferred.make<void>();
+          const claimed = yield* Ref.modify(context.abortGate, (current) =>
+            current !== null
+              ? ([current, current] as const)
+              : ([abortInFlight, abortInFlight] as const),
+          );
+          if (claimed !== abortInFlight) {
+            yield* Deferred.await(claimed);
             return;
           }
+          // Settle projected state first so Stop does not leave "Working",
+          // but keep sendTurn blocked until abort finishes or times out.
+          yield* Effect.ensuring(
+            Effect.gen(function* () {
+              context.activeTurnId = undefined;
+              yield* updateProviderSession(
+                context,
+                { status: "ready" },
+                { clearActiveTurnId: true },
+              );
+              if (abortedTurnId) {
+                yield* emit({
+                  ...(yield* buildEventBase({
+                    threadId,
+                    turnId: abortedTurnId,
+                  })),
+                  type: "turn.aborted",
+                  payload: {
+                    reason: "Interrupted by user.",
+                  },
+                });
+              }
+              yield* runOpenCodeSdk("session.abort", () =>
+                context.client.session.abort({ sessionID: context.openCodeSessionId }),
+              ).pipe(Effect.timeout("2 seconds"), Effect.ignore({ log: true }));
+            }),
+            Effect.gen(function* () {
+              yield* Deferred.succeed(abortInFlight, undefined);
+              yield* Ref.set(context.abortGate, null);
+            }),
+          );
+          return;
         }
         if (abortedTurnId) {
           yield* emit({

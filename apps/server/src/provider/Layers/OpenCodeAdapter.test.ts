@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -907,6 +908,58 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const secondTurn = yield* Fiber.join(sendFiber);
       NodeAssert.equal(runtimeMock.state.promptCalls.length, 2);
       NodeAssert.notEqual(String(secondTurn.turnId), String(firstTurn.turnId));
+    }),
+  );
+
+  it.effect("emits a single turn.aborted when interrupt is called concurrently", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-interrupt-concurrent");
+      const abortedCount = yield* Ref.make(0);
+      yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "turn.aborted"),
+        Stream.tap(() => Ref.update(abortedCount, (count) => count + 1)),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+
+      let releaseAbort: () => void = () => {};
+      const abortStarted = new Promise<void>((resolve) => {
+        runtimeMock.state.abortStarted = resolve;
+      });
+      runtimeMock.state.abortHold = new Promise<void>((resolve) => {
+        releaseAbort = resolve;
+      });
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "keep going",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("opencode"),
+          model: "openai/gpt-5",
+        },
+      });
+
+      const firstInterrupt = yield* adapter
+        .interruptTurn(threadId, turn.turnId)
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => abortStarted);
+      const secondInterrupt = yield* adapter
+        .interruptTurn(threadId, turn.turnId)
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      releaseAbort();
+      yield* Fiber.join(firstInterrupt);
+      yield* Fiber.join(secondInterrupt);
+      NodeAssert.equal(yield* Ref.get(abortedCount), 1);
+      NodeAssert.equal(runtimeMock.state.abortCalls.length, 1);
     }),
   );
 
