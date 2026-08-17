@@ -62,7 +62,8 @@ function isReplaceConflict(cause: unknown): boolean {
 
 /**
  * Rename `from` onto `to`. Unix rename replaces an existing file; Windows
- * throws if the destination exists, so we remove then rename. A locked
+ * throws if the destination exists, so we move the destination aside, then
+ * rename. If the replacement rename fails, the original is restored. A locked
  * destination becomes `TeleportFileLockedError`.
  */
 export const replaceNativeFile = Effect.fn("replaceNativeFile")(function* (input: {
@@ -79,7 +80,7 @@ export const replaceNativeFile = Effect.fn("replaceNativeFile")(function* (input
   const failed = (cause: unknown) =>
     new TeleportNativeWriteError({
       nativePath: input.to,
-      message: `Failed to replace ${input.to}.`,
+      stage: "replace",
       cause,
     });
 
@@ -93,13 +94,18 @@ export const replaceNativeFile = Effect.fn("replaceNativeFile")(function* (input
         cause: PlatformError.PlatformError,
       ): Effect.Effect<void, TeleportFileLockedError | TeleportNativeWriteError> => {
         if (platform === "win32" && isReplaceConflict(cause) && !isNativeFileBusy(cause)) {
-          return fs.remove(input.to).pipe(
-            Effect.mapError((removeCause): TeleportFileLockedError | TeleportNativeWriteError =>
-              isNativeFileBusy(removeCause) || isReplaceConflict(removeCause)
-                ? locked(removeCause)
-                : failed(removeCause),
+          const backupPath = `${input.to}.teleport-bak`;
+          return fs.rename(input.to, backupPath).pipe(
+            Effect.mapError(asReplaceError),
+            Effect.andThen(
+              rename.pipe(
+                Effect.tapError(() =>
+                  fs.rename(backupPath, input.to).pipe(Effect.catch(() => Effect.void)),
+                ),
+                Effect.mapError(asReplaceError),
+                Effect.andThen(fs.remove(backupPath).pipe(Effect.catch(() => Effect.void))),
+              ),
             ),
-            Effect.andThen(rename.pipe(Effect.mapError(asReplaceError))),
           );
         }
         return Effect.fail(asReplaceError(cause));
@@ -134,7 +140,7 @@ export const writeNativeSessionAtomically = Effect.fn("writeNativeSessionAtomica
         (cause) =>
           new TeleportNativeWriteError({
             nativePath: input.filePath,
-            message: `Failed to create directory for ${input.filePath}.`,
+            stage: "create-directory",
             cause,
           }),
       ),
@@ -152,7 +158,7 @@ export const writeNativeSessionAtomically = Effect.fn("writeNativeSessionAtomica
               (cause) =>
                 new TeleportNativeWriteError({
                   nativePath: input.filePath,
-                  message: `Failed to create a temp file for ${input.filePath}.`,
+                  stage: "create-temp",
                   cause,
                 }),
             ),
@@ -163,7 +169,7 @@ export const writeNativeSessionAtomically = Effect.fn("writeNativeSessionAtomica
             (cause) =>
               new TeleportNativeWriteError({
                 nativePath: input.filePath,
-                message: `Failed to write temp session file for ${input.filePath}.`,
+                stage: "write-temp",
                 cause,
               }),
           ),
@@ -173,7 +179,7 @@ export const writeNativeSessionAtomically = Effect.fn("writeNativeSessionAtomica
             (cause) =>
               new TeleportNativeWriteError({
                 nativePath: input.filePath,
-                message: `Failed to re-read temp session file for ${input.filePath}.`,
+                stage: "read-temp",
                 cause,
               }),
           ),

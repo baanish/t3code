@@ -150,10 +150,13 @@ export class TeleportUnsupportedProviderError extends Schema.TaggedErrorClass<Te
   "TeleportUnsupportedProviderError",
   {
     provider: ProviderDriverKind,
-    message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    return `Teleport does not support provider '${this.provider}'.`;
+  }
+}
 
 export class TeleportSchemaVersionError extends Schema.TaggedErrorClass<TeleportSchemaVersionError>()(
   "TeleportSchemaVersionError",
@@ -249,14 +252,61 @@ export class TeleportDiscoveryError extends Schema.TaggedErrorClass<TeleportDisc
   }
 }
 
+export const TeleportNativeWriteStage = Schema.Literals([
+  "create-directory",
+  "create-temp",
+  "write-temp",
+  "read-temp",
+  "replace",
+  "verify",
+  "unsafe-session-id",
+  "bind",
+  "read-settings",
+  "filesystem",
+]);
+export type TeleportNativeWriteStage = typeof TeleportNativeWriteStage.Type;
+
 export class TeleportNativeWriteError extends Schema.TaggedErrorClass<TeleportNativeWriteError>()(
   "TeleportNativeWriteError",
   {
-    nativePath: TrimmedNonEmptyString,
-    message: TrimmedNonEmptyString,
+    nativePath: Schema.optional(TrimmedNonEmptyString),
+    stage: TeleportNativeWriteStage,
+    sessionId: Schema.optional(TrimmedNonEmptyString),
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    const nativePath = this.nativePath ?? "native session";
+    switch (this.stage) {
+      case "create-directory":
+        return `Failed to create directory for ${nativePath}.`;
+      case "create-temp":
+        return `Failed to create a temp file for ${nativePath}.`;
+      case "write-temp":
+        return `Failed to write temp session file for ${nativePath}.`;
+      case "read-temp":
+        return `Failed to re-read temp session file for ${nativePath}.`;
+      case "replace":
+        return `Failed to replace ${nativePath}.`;
+      case "verify":
+        return `Exported session failed verification: ${nativePath}`;
+      case "unsafe-session-id":
+        return this.sessionId === undefined
+          ? "Refusing to write a native session with an unsafe id."
+          : `Refusing to write a native session with an unsafe id '${this.sessionId}'.`;
+      case "bind":
+        return "Failed to bind the exported native session.";
+      case "read-settings":
+        return "Server settings could not be read for teleport export.";
+      case "filesystem":
+        return "Native filesystem error during teleport export.";
+      default: {
+        const _exhaustive: never = this.stage;
+        return _exhaustive;
+      }
+    }
+  }
+}
 
 export const TeleportListSessionsError = Schema.Union([
   TeleportInvalidInputError,

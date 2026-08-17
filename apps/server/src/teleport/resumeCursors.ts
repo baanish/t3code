@@ -25,7 +25,6 @@ export function toTeleportProvider(
   return Effect.fail(
     new TeleportUnsupportedProviderError({
       provider,
-      message: `Teleport does not support provider '${provider}'.`,
     }),
   );
 }

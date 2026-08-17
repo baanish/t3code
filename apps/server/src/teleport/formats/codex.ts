@@ -395,7 +395,8 @@ export const codexTeleportFormat: TeleportFormatAdapter = {
     if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
       return yield* new TeleportNativeWriteError({
         nativePath: sessionsRoot,
-        message: `Refusing to write a Codex session with an unsafe id '${input.session.externalSessionId}'.`,
+        stage: "unsafe-session-id",
+        sessionId: input.session.externalSessionId,
       });
     }
     const now = yield* DateTime.now;
@@ -418,18 +419,17 @@ export const codexTeleportFormat: TeleportFormatAdapter = {
               ? Effect.void
               : new TeleportNativeWriteError({
                   nativePath,
-                  message: `Exported Codex session failed verification: ${nativePath}`,
+                  stage: "verify",
                 }),
           ),
-          Effect.mapError((error) =>
-            error._tag === "TeleportSchemaVersionError"
-              ? new TeleportNativeWriteError({
-                  nativePath,
-                  message: error.message,
-                  cause: error,
-                })
-              : error,
-          ),
+          Effect.catchTags({
+            TeleportSchemaVersionError: (error) =>
+              new TeleportNativeWriteError({
+                nativePath,
+                stage: "verify",
+                cause: error,
+              }),
+          }),
         ),
     });
     return nativePath;

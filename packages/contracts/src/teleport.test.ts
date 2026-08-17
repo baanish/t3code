@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { ProjectId, ThreadId } from "./baseSchemas.ts";
+import { ProviderDriverKind } from "./providerInstance.ts";
 import {
   isTeleportedOut,
   isTeleportProvider,
@@ -13,9 +14,11 @@ import {
   TeleportIdentityConflictError,
   TeleportInvalidInputError,
   TeleportLockProbeError,
+  TeleportNativeWriteError,
   TeleportRuntimePayload,
   TeleportSchemaVersionError,
   TeleportThreadState,
+  TeleportUnsupportedProviderError,
 } from "./teleport.ts";
 
 const decodeTeleportThreadState = Schema.decodeUnknownSync(TeleportThreadState);
@@ -150,5 +153,26 @@ describe("teleport tagged errors", () => {
       existingProjectId: ProjectId.make("project-1"),
     });
     expect(error.message).toBe("Session 'session-1' is already bound to another T3 project.");
+  });
+
+  it("derives TeleportUnsupportedProviderError.message from the provider", () => {
+    const error = new TeleportUnsupportedProviderError({
+      provider: ProviderDriverKind.make("grok"),
+    });
+    expect(error.message).toBe("Teleport does not support provider 'grok'.");
+  });
+
+  it("derives TeleportNativeWriteError.message from stage and path", () => {
+    const error = new TeleportNativeWriteError({
+      nativePath: "/tmp/session.jsonl",
+      stage: "verify",
+    });
+    expect(error.message).toBe("Exported session failed verification: /tmp/session.jsonl");
+    const parsed = decodeTeleportExportError({
+      _tag: "TeleportNativeWriteError",
+      stage: "filesystem",
+    });
+    expect(parsed).toBeInstanceOf(TeleportNativeWriteError);
+    expect(parsed.message).toBe("Native filesystem error during teleport export.");
   });
 });

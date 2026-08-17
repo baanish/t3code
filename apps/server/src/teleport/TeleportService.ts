@@ -295,7 +295,6 @@ export const make = Effect.gen(function* () {
     if (!adapter) {
       return new TeleportUnsupportedProviderError({
         provider: ProviderDriverKind.make(parsed.provider),
-        message: `Teleport does not support provider '${parsed.provider}'.`,
       });
     }
     return adapter.requireUnlocked({
@@ -849,7 +848,7 @@ export const make = Effect.gen(function* () {
               (cause) =>
                 new TeleportNativeWriteError({
                   nativePath: project.value.workspaceRoot,
-                  message: "Server settings could not be read for teleport export.",
+                  stage: "read-settings",
                   cause,
                 }),
             ),
@@ -1026,7 +1025,6 @@ export const make = Effect.gen(function* () {
                 if (!adapter) {
                   return yield* new TeleportUnsupportedProviderError({
                     provider: driverKind,
-                    message: `Teleport does not support provider '${provider}'.`,
                   });
                 }
                 const nativePath = yield* adapter.write({
@@ -1063,7 +1061,7 @@ export const make = Effect.gen(function* () {
                       (cause) =>
                         new TeleportNativeWriteError({
                           nativePath,
-                          message: "Failed to bind the exported native session.",
+                          stage: "bind",
                           cause,
                         }),
                     ),
@@ -1119,8 +1117,7 @@ export const make = Effect.gen(function* () {
         Effect.catchTags({
           PlatformError: (cause: PlatformError.PlatformError) =>
             new TeleportNativeWriteError({
-              nativePath: "native session",
-              message: "Native filesystem error during teleport export.",
+              stage: "filesystem",
               cause,
             }),
         }),
