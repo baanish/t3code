@@ -22,7 +22,7 @@ import { claudeSearchRoots, resolveClaudeProjectsRootForInstance } from "../home
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { writeNativeSessionAtomically } from "../nativeWrite.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
-import { registerTeleportFormat } from "./registry.ts";
+import type { TeleportFormatAdapter } from "./adapter.ts";
 import {
   collectTextParts,
   firstUserTitle,
@@ -298,7 +298,7 @@ const walkJsonl = Effect.fn("walkClaudeJsonl")(function* (root: string) {
   return files;
 });
 
-registerTeleportFormat({
+export const claudeTeleportFormat: TeleportFormatAdapter = {
   provider: "claudeAgent",
   list: Effect.fn("listClaudeSessions")(function* (input) {
     const sessions = [];
@@ -390,4 +390,4 @@ registerTeleportFormat({
     isRecord(resumeCursor)
       ? (nonEmptyString(resumeCursor.resume) ?? nonEmptyString(resumeCursor.threadId))
       : undefined,
-});
+};

@@ -12,7 +12,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import { isTeleportCwdWithin, teleportCwdsEquivalent } from "./cwd.ts";
-import { getTeleportFormat, listRegisteredTeleportProviders } from "./formats/registry.ts";
+import * as TeleportFormatRegistry from "./formats/registry.ts";
 import {
   canonicalizeTeleportNativePath,
   configuredInstanceRootsForProvider,
@@ -30,13 +30,14 @@ export const discoverTeleportSessions = Effect.fn("discoverTeleportSessions")(fu
 }): Effect.fn.Return<
   TeleportListSessionsResult,
   TeleportSchemaVersionError | TeleportDiscoveryError,
-  FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path | TeleportFormatRegistry.TeleportFormatRegistry
 > {
-  const providers = input.providers ?? listRegisteredTeleportProviders();
+  const formats = yield* TeleportFormatRegistry.TeleportFormatRegistry;
+  const providers = input.providers ?? formats.providers;
   const sessions = [];
 
   for (const provider of providers) {
-    const adapter = getTeleportFormat(provider);
+    const adapter = formats.get(provider);
     if (!adapter) {
       continue;
     }
@@ -126,9 +127,10 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
 }): Effect.fn.Return<
   ParsedNativeSession,
   TeleportSchemaVersionError | TeleportDiscoveryError,
-  FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path | TeleportFormatRegistry.TeleportFormatRegistry
 > {
-  const adapter = getTeleportFormat(input.provider);
+  const formats = yield* TeleportFormatRegistry.TeleportFormatRegistry;
+  const adapter = formats.get(input.provider);
   if (!adapter) {
     return yield* new TeleportDiscoveryError({
       reason: `Native ${input.provider} session support is not registered.`,

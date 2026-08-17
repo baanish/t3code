@@ -19,6 +19,7 @@ import {
   listClaudeJsonlFiles,
   parseClaudeSessionContents,
   serializeClaudeSession,
+  claudeTeleportFormat,
 } from "./claude.ts";
 
 describe("teleport Claude format", () => {
@@ -240,8 +241,10 @@ describe("teleport Claude format", () => {
         resumeCursor: buildTeleportResumeCursor({
           provider: "claudeAgent",
           externalSessionId: TELEPORT_TEST_SESSION_ID,
+          adapter: claudeTeleportFormat,
         }),
         runtimePayload: null,
+        adapter: claudeTeleportFormat,
       }),
       TELEPORT_TEST_SESSION_ID,
     );

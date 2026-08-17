@@ -3,16 +3,12 @@ import { ProviderInstanceId } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
 import { serializeCodexSession } from "./formats/codex.ts";
-import {
-  getTeleportFormat,
-  listRegisteredTeleportProviders,
-  registerTeleportFormat,
-  resetTeleportFormats,
-} from "./formats/registry.ts";
+import * as TeleportFormatRegistry from "./formats/registry.ts";
 import type { TeleportHomes } from "./homes.ts";
 import { sampleTeleportSession, TELEPORT_TEST_SESSION_ID } from "./testFixtures.ts";
 
@@ -28,25 +24,33 @@ function homesFor(root: string, path: Path.Path): TeleportHomes {
 describe("teleport discovery", () => {
   it.effect("lists nothing when no native formats are registered", () =>
     Effect.gen(function* () {
-      const snapshot = listRegisteredTeleportProviders()
-        .map((provider) => getTeleportFormat(provider))
-        .filter((adapter) => adapter !== undefined);
-      resetTeleportFormats();
-      try {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-empty-registry-" });
-        const listed = yield* discoverTeleportSessions({
-          homes: homesFor(root, path),
-          cwd: "/workspace",
-        });
-        assert.deepStrictEqual(listed.sessions, []);
-      } finally {
-        for (const adapter of snapshot) {
-          registerTeleportFormat(adapter);
-        }
-      }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-empty-registry-" });
+      const listed = yield* discoverTeleportSessions({
+        homes: homesFor(root, path),
+        cwd: "/workspace",
+      });
+      assert.deepStrictEqual(listed.sessions, []);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.merge(
+          NodeServices.layer,
+          Layer.succeed(
+            TeleportFormatRegistry.TeleportFormatRegistry,
+            TeleportFormatRegistry.fromAdapters([]),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("registers Codex and Claude native formats", () =>
+    Effect.gen(function* () {
+      const formats = yield* TeleportFormatRegistry.TeleportFormatRegistry;
+      assert.deepStrictEqual([...formats.providers].toSorted(), ["claudeAgent", "codex"]);
+    }).pipe(Effect.provide(TeleportFormatRegistry.layer)),
   );
 
   it.effect("refuses a client nativePath outside the configured instance root", () =>
@@ -65,7 +69,10 @@ describe("teleport discovery", () => {
         nativePath: outsidePath,
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
   );
 
   it.effect("refuses a nativePath that symlink-escapes the instance root", () =>
@@ -87,7 +94,10 @@ describe("teleport discovery", () => {
         nativePath: insideLink,
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
   );
 
   it.effect("refuses a fabricated provider instance id even when the default root matches", () =>
@@ -114,6 +124,9 @@ describe("teleport discovery", () => {
         nativePath,
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
   );
 });

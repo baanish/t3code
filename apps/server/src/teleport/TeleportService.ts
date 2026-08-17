@@ -54,8 +54,7 @@ import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDi
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "./cwd.ts";
 import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
-import { getTeleportFormat } from "./formats/registry.ts";
-import "./formats/register.ts";
+import * as TeleportFormatRegistry from "./formats/registry.ts";
 import { resolveTeleportHomes, type TeleportHomes } from "./homes.ts";
 import { firstUserTitle, truncateTitle } from "./json.ts";
 import {
@@ -167,9 +166,16 @@ export const make = Effect.gen(function* () {
   const instanceRegistry = yield* ProviderInstanceRegistry;
   const providerService = yield* ProviderService;
   const crypto = yield* Crypto.Crypto;
-  const nativeContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+  const formats = yield* TeleportFormatRegistry.TeleportFormatRegistry;
+  const nativeContext = yield* Effect.context<
+    FileSystem.FileSystem | Path.Path | TeleportFormatRegistry.TeleportFormatRegistry
+  >();
   const provideNative = <A, E>(
-    effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
+    effect: Effect.Effect<
+      A,
+      E,
+      FileSystem.FileSystem | Path.Path | TeleportFormatRegistry.TeleportFormatRegistry
+    >,
   ): Effect.Effect<A, E> => effect.pipe(Effect.provideContext(nativeContext));
 
   const nextId = () => crypto.randomUUIDv4;
@@ -216,7 +222,7 @@ export const make = Effect.gen(function* () {
     });
 
   const requireParsedSessionUnlocked = (parsed: ParsedNativeSession, homes: TeleportHomes) => {
-    const adapter = getTeleportFormat(parsed.provider);
+    const adapter = formats.get(parsed.provider);
     if (!adapter) {
       return new TeleportUnsupportedProviderError({
         provider: ProviderDriverKind.make(parsed.provider),
@@ -374,6 +380,9 @@ export const make = Effect.gen(function* () {
                 provider: binding.provider,
                 resumeCursor: binding.resumeCursor,
                 runtimePayload: binding.runtimePayload,
+                adapter: isTeleportProvider(binding.provider)
+                  ? formats.get(binding.provider)
+                  : undefined,
               });
               if (externalSessionId !== parsed.externalSessionId) {
                 continue;
@@ -582,6 +591,7 @@ export const make = Effect.gen(function* () {
                 resumeCursor: buildTeleportResumeCursor({
                   provider: parsed.provider,
                   externalSessionId: parsed.externalSessionId,
+                  adapter: formats.get(parsed.provider),
                 }),
                 runtimePayload: { teleport: teleportPayload },
               })
@@ -845,7 +855,7 @@ export const make = Effect.gen(function* () {
             providerInstanceId,
           };
 
-          const adapter = getTeleportFormat(provider);
+          const adapter = formats.get(provider);
           if (!adapter) {
             yield* revertExportPresence;
             return yield* new TeleportUnsupportedProviderError({
@@ -876,7 +886,11 @@ export const make = Effect.gen(function* () {
               provider: driverKind,
               providerInstanceId,
               status: "stopped",
-              resumeCursor: buildTeleportResumeCursor({ provider, externalSessionId }),
+              resumeCursor: buildTeleportResumeCursor({
+                provider,
+                externalSessionId,
+                adapter,
+              }),
               runtimePayload: { teleport: teleportPayload },
             })
             .pipe(
@@ -940,4 +954,6 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(TeleportService, make);
+export const layer = Layer.effect(TeleportService, make).pipe(
+  Layer.provide(TeleportFormatRegistry.layer),
+);

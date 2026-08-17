@@ -31,7 +31,7 @@ import {
   uuidFromPath,
 } from "../json.ts";
 import { writeNativeSessionAtomically } from "../nativeWrite.ts";
-import { registerTeleportFormat } from "./registry.ts";
+import type { TeleportFormatAdapter } from "./adapter.ts";
 import {
   nativeTextMessage,
   parsedNativeSession,
@@ -341,7 +341,7 @@ const walkFiles = Effect.fn("walkFiles")(function* (
   return files;
 });
 
-registerTeleportFormat({
+export const codexTeleportFormat: TeleportFormatAdapter = {
   provider: "codex",
   list: Effect.fn("listCodexSessions")(function* (input) {
     const sessions = [];
@@ -432,4 +432,4 @@ registerTeleportFormat({
   resumeCursor: (externalSessionId) => ({ threadId: externalSessionId }),
   readExternalSessionId: (resumeCursor) =>
     isRecord(resumeCursor) ? nonEmptyString(resumeCursor.threadId) : undefined,
-});
+};

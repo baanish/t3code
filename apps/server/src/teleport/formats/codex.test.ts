@@ -9,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
@@ -17,13 +18,13 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { discoverTeleportSessions, loadTeleportSession } from "../discovery.ts";
 import type { TeleportHomes } from "../homes.ts";
 import { buildTeleportResumeCursor, readTeleportExternalSessionId } from "../resumeCursors.ts";
-import { getTeleportFormat } from "./registry.ts";
+import * as TeleportFormatRegistry from "./registry.ts";
 import {
   sampleTeleportSession,
   TELEPORT_TEST_CREATED_AT,
   TELEPORT_TEST_SESSION_ID,
 } from "../testFixtures.ts";
-import { parseCodexSessionContents, serializeCodexSession } from "./codex.ts";
+import { codexTeleportFormat, parseCodexSessionContents, serializeCodexSession } from "./codex.ts";
 
 describe("teleport Codex format", () => {
   it.effect("roundtrips Codex jsonl", () =>
@@ -184,8 +185,10 @@ describe("teleport Codex format", () => {
         resumeCursor: buildTeleportResumeCursor({
           provider: "codex",
           externalSessionId: TELEPORT_TEST_SESSION_ID,
+          adapter: codexTeleportFormat,
         }),
         runtimePayload: null,
+        adapter: codexTeleportFormat,
       }),
       TELEPORT_TEST_SESSION_ID,
     );
@@ -219,7 +222,10 @@ describe("teleport Codex format", () => {
       assert.equal(listed.sessions.length, 1);
       assert.equal(listed.sessions[0]?.provider, "codex");
       assert.equal(listed.sessions[0]?.externalSessionId, TELEPORT_TEST_SESSION_ID);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
   );
 
   it.effect("lists Codex sessions from extra instance homePaths", () =>
@@ -263,7 +269,10 @@ describe("teleport Codex format", () => {
       assert.equal(listed.sessions.length, 1);
       assert.equal(listed.sessions[0]?.externalSessionId, workSessionId);
       assert.equal(listed.sessions[0]?.providerInstanceId, "codex_work");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
   );
 
   it.effect("loads the Codex session for the requested instance when ids collide", () =>
@@ -330,7 +339,10 @@ describe("teleport Codex format", () => {
       assert.equal(parsed.nativePath, extraPath);
       assert.equal(parsed.providerInstanceId, "codex_work");
       assert.equal(parsed.messages[1]?.text, "Work instance transcript");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
   );
 
   it.effect("loads a shared-home custom instance from the default listing label", () =>
@@ -368,7 +380,10 @@ describe("teleport Codex format", () => {
       });
       assert.equal(parsed.nativePath, nativePath);
       assert.equal(parsed.providerInstanceId, "codex_work");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
   );
 
   it.effect("writes a new Codex session under the selected instance home", () =>
@@ -389,7 +404,7 @@ describe("teleport Codex format", () => {
         claudeProjectsRoot: path.join(root, "claude", "projects"),
         extraClaudeProjectsRoots: [],
       };
-      const adapter = getTeleportFormat("codex");
+      const adapter = codexTeleportFormat;
       assert.ok(adapter);
       const nativePath = yield* adapter.write({
         homes,
