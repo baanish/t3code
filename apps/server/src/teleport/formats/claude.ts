@@ -17,7 +17,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "../cwd.ts";
+import {
+  listingTeleportCwds,
+  resolveTeleportCwdPath,
+  teleportSessionBelongsToProject,
+} from "../cwd.ts";
 import { claudeSearchRoots, resolveClaudeProjectsRootForInstance } from "../homes.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { writeNativeSessionAtomically } from "../nativeWrite.ts";
@@ -25,6 +29,7 @@ import { readNativeSessionFile } from "../sessionFile.ts";
 import type { TeleportFormatAdapter } from "./adapter.ts";
 import {
   collectTextParts,
+  definedField,
   firstUserTitle,
   isRecord,
   isSafeTeleportSessionId,
@@ -304,7 +309,10 @@ export const claudeTeleportFormat: TeleportFormatAdapter = {
     const sessions = [];
     const seen = new Set<string>();
     for (const home of claudeSearchRoots(input.homes)) {
-      const files = yield* listClaudeJsonlFiles(home.root, input.cwd);
+      const files: string[] = [];
+      for (const cwd of listingTeleportCwds(input.cwd, input.extraCwds)) {
+        files.push(...(yield* listClaudeJsonlFiles(home.root, cwd)));
+      }
       for (const nativePath of files) {
         if (seen.has(nativePath)) {
           continue;
@@ -316,7 +324,13 @@ export const claudeTeleportFormat: TeleportFormatAdapter = {
         if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
           continue;
         }
-        if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
+        if (
+          !(yield* teleportSessionBelongsToProject({
+            sessionCwd: parsed.value.cwd,
+            projectCwd: input.cwd,
+            ...definedField("extraCwds", input.extraCwds),
+          }))
+        ) {
           continue;
         }
         seen.add(nativePath);

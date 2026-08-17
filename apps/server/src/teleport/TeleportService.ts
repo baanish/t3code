@@ -20,6 +20,7 @@ import {
   resolveTeleportPresence,
   type ModelSelection,
   type OrchestrationMessage,
+  type ProjectId,
   type ProviderInstanceId,
   type TeleportExportError,
   type TeleportExportSessionInput,
@@ -53,11 +54,16 @@ import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceR
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { resolveTeleportCwdPath, teleportCwdsEquivalent } from "./cwd.ts";
+import {
+  normalizeTeleportCwd,
+  resolveTeleportCwdPath,
+  teleportCwdsEquivalent,
+  uniqueTeleportCwds,
+} from "./cwd.ts";
 import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
 import * as TeleportFormatRegistry from "./formats/registry.ts";
 import { resolveTeleportHomes, type TeleportHomes } from "./homes.ts";
-import { firstUserTitle, truncateTitle } from "./json.ts";
+import { definedField, firstUserTitle, truncateTitle } from "./json.ts";
 import {
   buildTeleportResumeCursor,
   readTeleportExternalSessionId,
@@ -215,6 +221,55 @@ export const make = Effect.gen(function* () {
         ),
       );
     });
+  const worktreeCwdsFromThreads = (
+    threads: ReadonlyArray<{
+      readonly projectId: ProjectId;
+      readonly worktreePath: string | null;
+    }>,
+    projectId: ProjectId,
+  ): string[] =>
+    uniqueTeleportCwds(
+      threads.flatMap((thread) => {
+        if (thread.projectId !== projectId || thread.worktreePath === null) {
+          return [];
+        }
+        if (normalizeTeleportCwd(thread.worktreePath) === "/") {
+          return [];
+        }
+        return [thread.worktreePath];
+      }),
+    );
+  const loadProjectWorktreeCwds = (projectId: ProjectId) =>
+    snapshotQuery.getShellSnapshot().pipe(
+      Effect.map((shell) => worktreeCwdsFromThreads(shell.threads, projectId)),
+      Effect.mapError(
+        (cause) =>
+          new TeleportDiscoveryError({
+            reason: "Failed to load project worktree paths for teleport.",
+            cause,
+          }),
+      ),
+    );
+  const loadWorkspaceWorktreeCwds = (cwd: string) =>
+    snapshotQuery.getShellSnapshot().pipe(
+      Effect.flatMap((shell) =>
+        Effect.gen(function* () {
+          for (const project of shell.projects) {
+            if (yield* teleportCwdsEquivalent(project.workspaceRoot, cwd)) {
+              return worktreeCwdsFromThreads(shell.threads, project.id);
+            }
+          }
+          return [] as string[];
+        }),
+      ),
+      Effect.mapError(
+        (cause) =>
+          new TeleportDiscoveryError({
+            reason: "Failed to load project worktree paths for teleport.",
+            cause,
+          }),
+      ),
+    );
   const claimExtraInFlight = (keys: string[], extra: string) =>
     Effect.suspend((): Effect.Effect<void, TeleportInvalidInputError> => {
       if (keys.includes(extra)) {
@@ -284,9 +339,11 @@ export const make = Effect.gen(function* () {
           ),
         );
         const homes = yield* resolveTeleportHomes(settings);
+        const extraCwds = yield* loadWorkspaceWorktreeCwds(cwd);
         return yield* discoverTeleportSessions({
           homes,
           cwd,
+          ...definedField("extraCwds", extraCwds.length > 0 ? extraCwds : undefined),
           ...(input.providers ? { providers: input.providers } : {}),
         });
       }),
@@ -341,6 +398,7 @@ export const make = Effect.gen(function* () {
             ),
           );
           const homes = yield* resolveTeleportHomes(settings);
+          const extraCwds = yield* loadProjectWorktreeCwds(input.projectId);
           const bindings = yield* directory.listBindings().pipe(
             Effect.mapError(
               (cause) =>
@@ -358,6 +416,7 @@ export const make = Effect.gen(function* () {
               provider: ref.provider,
               externalSessionId: ref.externalSessionId,
               cwd,
+              ...definedField("extraCwds", extraCwds.length > 0 ? extraCwds : undefined),
               ...(ref.providerInstanceId === undefined
                 ? {}
                 : { providerInstanceId: ref.providerInstanceId }),

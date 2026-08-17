@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { isTeleportCwdWithin, teleportCwdsEquivalent } from "./cwd.ts";
+import { teleportSessionBelongsToProject } from "./cwd.ts";
 import * as TeleportFormatRegistry from "./formats/registry.ts";
 import {
   canonicalizeTeleportNativePath,
@@ -26,6 +26,7 @@ import type { ParsedNativeSession } from "./types.ts";
 export const discoverTeleportSessions = Effect.fn("discoverTeleportSessions")(function* (input: {
   readonly homes: TeleportHomes;
   readonly cwd: string;
+  readonly extraCwds?: ReadonlyArray<string>;
   readonly providers?: ReadonlyArray<TeleportProvider>;
 }): Effect.fn.Return<
   TeleportListSessionsResult,
@@ -41,7 +42,13 @@ export const discoverTeleportSessions = Effect.fn("discoverTeleportSessions")(fu
     if (!adapter) {
       continue;
     }
-    sessions.push(...(yield* adapter.list({ homes: input.homes, cwd: input.cwd })));
+    sessions.push(
+      ...(yield* adapter.list({
+        homes: input.homes,
+        cwd: input.cwd,
+        ...definedField("extraCwds", input.extraCwds),
+      })),
+    );
   }
 
   return {
@@ -122,6 +129,7 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
   readonly provider: TeleportProvider;
   readonly externalSessionId: string;
   readonly cwd: string;
+  readonly extraCwds?: ReadonlyArray<string>;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly nativePath?: string;
 }): Effect.fn.Return<
@@ -143,6 +151,7 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
       homes: input.homes,
       cwd: input.cwd,
       providers: [input.provider],
+      ...definedField("extraCwds", input.extraCwds),
     });
     const candidate = listed.sessions.find(
       (session) =>
@@ -178,10 +187,11 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
       reason: `Native ${input.provider} session at '${resolved.nativePath}' no longer matches '${input.externalSessionId}'.`,
     });
   }
-  const cwdMatches =
-    (yield* teleportCwdsEquivalent(parsed.cwd, input.cwd)) ||
-    isTeleportCwdWithin(parsed.cwd, input.cwd) ||
-    isTeleportCwdWithin(input.cwd, parsed.cwd);
+  const cwdMatches = yield* teleportSessionBelongsToProject({
+    sessionCwd: parsed.cwd,
+    projectCwd: input.cwd,
+    ...definedField("extraCwds", input.extraCwds),
+  });
   if (!cwdMatches) {
     return yield* new TeleportDiscoveryError({
       reason: `Native ${input.provider} session '${input.externalSessionId}' no longer belongs to this project.`,

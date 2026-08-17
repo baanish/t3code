@@ -16,11 +16,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { teleportCwdsEquivalent } from "../cwd.ts";
+import { teleportSessionBelongsToProject } from "../cwd.ts";
 import { codexSearchRoots, resolveCodexSessionsRoot } from "../homes.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import {
+  definedField,
   firstUserTitle,
   isRecord,
   isSafeTeleportSessionId,
@@ -359,7 +360,13 @@ export const codexTeleportFormat: TeleportFormatAdapter = {
         if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
           continue;
         }
-        if (!(yield* teleportCwdsEquivalent(parsed.value.cwd, input.cwd))) {
+        if (
+          !(yield* teleportSessionBelongsToProject({
+            sessionCwd: parsed.value.cwd,
+            projectCwd: input.cwd,
+            ...definedField("extraCwds", input.extraCwds),
+          }))
+        ) {
           continue;
         }
         seen.add(nativePath);

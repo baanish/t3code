@@ -276,6 +276,89 @@ describe("teleport Codex format", () => {
     ),
   );
 
+  it.effect("lists Codex sessions from a project worktree cwd", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-codex-worktree-" });
+      const homes: TeleportHomes = {
+        codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [],
+        claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
+      };
+      const worktreeCwd = path.join(root, "worktrees", "feature");
+      const projectCwd = path.join(root, "project");
+      const nativePath = path.join(
+        homes.codexSessionsRoot,
+        "2026",
+        "08",
+        "14",
+        `rollout-2026-08-14T06-00-00-${TELEPORT_TEST_SESSION_ID}.jsonl`,
+      );
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(
+        nativePath,
+        serializeCodexSession(sampleTeleportSession("codex", worktreeCwd)),
+      );
+      const hidden = yield* discoverTeleportSessions({
+        homes,
+        cwd: projectCwd,
+        providers: ["codex"],
+      });
+      assert.equal(hidden.sessions.length, 0);
+      const listed = yield* discoverTeleportSessions({
+        homes,
+        cwd: projectCwd,
+        extraCwds: [worktreeCwd],
+        providers: ["codex"],
+      });
+      assert.equal(listed.sessions.length, 1);
+      assert.equal(listed.sessions[0]?.cwd, worktreeCwd);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
+  );
+
+  it.effect("lists Codex sessions started in a project subdirectory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-codex-subdir-" });
+      const homes: TeleportHomes = {
+        codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [],
+        claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
+      };
+      const projectCwd = path.join(root, "project");
+      const nestedCwd = path.join(projectCwd, "packages", "app");
+      const nativePath = path.join(
+        homes.codexSessionsRoot,
+        "2026",
+        "08",
+        "14",
+        `rollout-2026-08-14T06-00-00-${TELEPORT_TEST_SESSION_ID}.jsonl`,
+      );
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(
+        nativePath,
+        serializeCodexSession(sampleTeleportSession("codex", nestedCwd)),
+      );
+      const listed = yield* discoverTeleportSessions({
+        homes,
+        cwd: projectCwd,
+        providers: ["codex"],
+      });
+      assert.equal(listed.sessions.length, 1);
+      assert.equal(listed.sessions[0]?.cwd, nestedCwd);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
+  );
+
   it.effect("loads the Codex session for the requested instance when ids collide", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

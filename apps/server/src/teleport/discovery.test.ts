@@ -129,4 +129,78 @@ describe("teleport discovery", () => {
       Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
     ),
   );
+
+  it.effect("loads a worktree session when that worktree is an extra project cwd", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-worktree-load-" });
+      const homes = homesFor(root, path);
+      const worktreeCwd = path.join(root, "worktrees", "feature");
+      const nativePath = path.join(
+        homes.codexSessionsRoot,
+        "2026",
+        "08",
+        "14",
+        `rollout-2026-08-14T06-00-00-${TELEPORT_TEST_SESSION_ID}.jsonl`,
+      );
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(
+        nativePath,
+        serializeCodexSession(sampleTeleportSession("codex", worktreeCwd)),
+      );
+      const parsed = yield* loadTeleportSession({
+        homes,
+        provider: "codex",
+        externalSessionId: TELEPORT_TEST_SESSION_ID,
+        cwd: path.join(root, "project"),
+        extraCwds: [worktreeCwd],
+        nativePath,
+      });
+      assert.equal(parsed.cwd, worktreeCwd);
+      const listed = yield* loadTeleportSession({
+        homes,
+        provider: "codex",
+        externalSessionId: TELEPORT_TEST_SESSION_ID,
+        cwd: path.join(root, "project"),
+        extraCwds: [worktreeCwd],
+      });
+      assert.equal(listed.nativePath, nativePath);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
+  );
+
+  it.effect("refuses a native session whose cwd is an ancestor of the project", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-ancestor-cwd-" });
+      const homes = homesFor(root, path);
+      const nativePath = path.join(
+        homes.codexSessionsRoot,
+        "2026",
+        "08",
+        "14",
+        `rollout-2026-08-14T06-00-00-${TELEPORT_TEST_SESSION_ID}.jsonl`,
+      );
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(
+        nativePath,
+        serializeCodexSession(sampleTeleportSession("codex", "/")),
+      );
+      const result = yield* loadTeleportSession({
+        homes,
+        provider: "codex",
+        externalSessionId: TELEPORT_TEST_SESSION_ID,
+        cwd: path.join(root, "project"),
+        nativePath,
+      }).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
+  );
 });

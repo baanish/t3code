@@ -11,6 +11,7 @@ import {
   resolveTeleportCwdPath,
   teleportCwdsEquivalent,
   teleportCwdsMatch,
+  teleportSessionBelongsToProject,
 } from "./cwd.ts";
 
 describe("teleport cwd matching", () => {
@@ -72,5 +73,55 @@ describe("teleport cwd matching", () => {
       const resolved = yield* resolveTeleportCwdPath(`${project}/`);
       assert.equal(resolved, yield* fs.realPath(project));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("treats a T3 worktree cwd as part of the project when listed as extra", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/home/user/.t3/worktrees/repo/feature",
+      projectCwd: "/home/user/projects/repo",
+      extraCwds: ["/home/user/.t3/worktrees/repo/feature"],
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, true);
+      }),
+    ),
+  );
+
+  it.effect("treats a project subdirectory cwd as part of the project", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/home/user/projects/repo/packages/app",
+      projectCwd: "/home/user/projects/repo",
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, true);
+      }),
+    ),
+  );
+
+  it.effect("does not treat an ancestor cwd as part of the project", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/",
+      projectCwd: "/home/user/projects/repo",
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, false);
+      }),
+    ),
+  );
+
+  it.effect("does not treat an unrelated worktree as part of the project", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/home/user/.t3/worktrees/other/feature",
+      projectCwd: "/home/user/projects/repo",
+      extraCwds: ["/home/user/.t3/worktrees/repo/feature"],
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, false);
+      }),
+    ),
   );
 });

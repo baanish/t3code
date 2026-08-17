@@ -46,6 +46,30 @@ export function isTeleportCwdWithin(inner: string, outer: string): boolean {
   return innerCwd.startsWith(prefix);
 }
 
+export function uniqueTeleportCwds(cwds: ReadonlyArray<string>): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const cwd of cwds) {
+    if (cwd.length === 0) {
+      continue;
+    }
+    const key = normalizeTeleportCwd(cwd);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(cwd);
+  }
+  return unique;
+}
+
+export function listingTeleportCwds(
+  projectCwd: string,
+  extraCwds: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> {
+  return uniqueTeleportCwds([projectCwd, ...(extraCwds ?? [])]);
+}
+
 /**
  * Same location, including macOS `/tmp` → `/private/tmp` and case-insensitive
  * default volumes. Lexical equality short-circuits; otherwise both sides go
@@ -71,3 +95,33 @@ export const teleportCwdsEquivalent = Effect.fn("teleportCwdsEquivalent")(functi
   }
   return false;
 });
+
+/**
+ * Native sessions belong to a T3 project when their cwd is the project root,
+ * a subdirectory of that root, or an extra cwd such as a T3 worktree. Ancestor
+ * cwds (`/` or `$HOME`) are not accepted: those would bind a session into any
+ * project.
+ */
+export const teleportSessionBelongsToProject = Effect.fn("teleportSessionBelongsToProject")(
+  function* (input: {
+    readonly sessionCwd: string;
+    readonly projectCwd: string;
+    readonly extraCwds?: ReadonlyArray<string>;
+  }) {
+    if (yield* teleportCwdsEquivalent(input.sessionCwd, input.projectCwd)) {
+      return true;
+    }
+    if (isTeleportCwdWithin(input.sessionCwd, input.projectCwd)) {
+      return true;
+    }
+    for (const extraCwd of input.extraCwds ?? []) {
+      if (yield* teleportCwdsEquivalent(input.sessionCwd, extraCwd)) {
+        return true;
+      }
+      if (isTeleportCwdWithin(input.sessionCwd, extraCwd)) {
+        return true;
+      }
+    }
+    return false;
+  },
+);

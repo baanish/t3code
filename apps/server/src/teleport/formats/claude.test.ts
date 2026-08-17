@@ -5,9 +5,12 @@ import { assert, describe, it } from "@effect/vitest";
 import { ProviderDriverKind, TELEPORT_NATIVE_FORMAT_VERSION } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import { discoverTeleportSessions } from "../discovery.ts";
+import type { TeleportHomes } from "../homes.ts";
 import { buildTeleportResumeCursor, readTeleportExternalSessionId } from "../resumeCursors.ts";
 import {
   sampleTeleportSession,
@@ -21,6 +24,7 @@ import {
   serializeClaudeSession,
   claudeTeleportFormat,
 } from "./claude.ts";
+import * as TeleportFormatRegistry from "./registry.ts";
 
 describe("teleport Claude format", () => {
   it.effect("skips Claude tool_result-only user records", () =>
@@ -214,6 +218,49 @@ describe("teleport Claude format", () => {
       const files = yield* listClaudeJsonlFiles(projectsRoot, link);
       assert.equal(files.includes(nativePath), true);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("lists Claude sessions from a project worktree cwd", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-claude-worktree-" });
+      const projectCwd = path.join(root, "project");
+      const worktreeCwd = path.join(root, "worktrees", "feature");
+      const homes: TeleportHomes = {
+        codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [],
+        claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
+      };
+      const nativePath = path.join(
+        homes.claudeProjectsRoot,
+        encodeClaudeProjectPath(worktreeCwd),
+        `${TELEPORT_TEST_SESSION_ID}.jsonl`,
+      );
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(
+        nativePath,
+        serializeClaudeSession(sampleTeleportSession("claudeAgent", worktreeCwd)),
+      );
+      const hidden = yield* discoverTeleportSessions({
+        homes,
+        cwd: projectCwd,
+        providers: ["claudeAgent"],
+      });
+      assert.equal(hidden.sessions.length, 0);
+      const listed = yield* discoverTeleportSessions({
+        homes,
+        cwd: projectCwd,
+        extraCwds: [worktreeCwd],
+        providers: ["claudeAgent"],
+      });
+      assert.equal(listed.sessions.length, 1);
+      assert.equal(listed.sessions[0]?.cwd, worktreeCwd);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
   );
 
   it.effect("reads a Claude session id from a Windows native path", () =>

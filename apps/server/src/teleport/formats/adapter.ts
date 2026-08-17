@@ -20,6 +20,7 @@ export interface TeleportFormatAdapter {
   readonly list: (input: {
     readonly homes: TeleportHomes;
     readonly cwd: string;
+    readonly extraCwds?: ReadonlyArray<string>;
   }) => Effect.Effect<
     ReadonlyArray<TeleportSessionCandidate>,
     TeleportSchemaVersionError | TeleportDiscoveryError,
