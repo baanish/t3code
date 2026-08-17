@@ -1,3 +1,4 @@
+import * as NodeOS from "node:os";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderInstanceId, ServerSettings } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
@@ -120,6 +121,36 @@ describe("resolveTeleportHomes", () => {
       assert.equal(
         resolveClaudeProjectsRootForInstance(homes, ProviderInstanceId.make("claudeAgent")),
         path.join(defaultHome, "projects"),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("uses the provider default home when an extra instance sets an empty homePath", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-homes-empty-" });
+      const defaultHome = path.join(root, "codex-default");
+      const homes = yield* resolveTeleportHomes(
+        decodeServerSettings({
+          providers: {
+            codex: { homePath: defaultHome },
+          },
+          providerInstances: {
+            [ProviderInstanceId.make("codex_work")]: {
+              driver: "codex",
+              config: { homePath: "" },
+            },
+          },
+        }),
+      );
+
+      assert.equal(homes.codexSessionsRoot, path.join(defaultHome, "sessions"));
+      assert.equal(homes.extraCodexSessionsRoots.length, 1);
+      assert.equal(homes.extraCodexSessionsRoots[0]?.instanceId, "codex_work");
+      assert.equal(
+        homes.extraCodexSessionsRoots[0]?.root,
+        path.join(NodeOS.homedir(), ".codex", "sessions"),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

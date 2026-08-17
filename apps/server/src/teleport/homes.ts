@@ -170,8 +170,9 @@ function instanceConfigString(config: unknown, key: string): string | undefined 
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  // Keep explicit empty strings so extra instances can opt into the provider
+  // default home instead of inheriting the default instance's configured path.
+  return value.trim();
 }
 
 function instanceIdsForDriver(
