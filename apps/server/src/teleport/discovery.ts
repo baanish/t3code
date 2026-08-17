@@ -11,7 +11,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { isTeleportCwdWithin, teleportCwdsEquivalent } from "./cwd.ts";
+import {
+  isTeleportCwdWithin,
+  opencodeSessionMatchesProjectCwd,
+  teleportCwdsEquivalent,
+} from "./cwd.ts";
 import { getTeleportFormat, listRegisteredTeleportProviders } from "./formats/registry.ts";
 import {
   canonicalizeTeleportNativePath,
@@ -191,9 +195,11 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
     });
   }
   const cwdMatches =
-    (yield* teleportCwdsEquivalent(parsed.cwd, input.cwd)) ||
-    isTeleportCwdWithin(parsed.cwd, input.cwd) ||
-    isTeleportCwdWithin(input.cwd, parsed.cwd);
+    input.provider === "opencode"
+      ? yield* opencodeSessionMatchesProjectCwd(parsed.cwd, input.cwd)
+      : (yield* teleportCwdsEquivalent(parsed.cwd, input.cwd)) ||
+        isTeleportCwdWithin(parsed.cwd, input.cwd) ||
+        isTeleportCwdWithin(input.cwd, parsed.cwd);
   if (!cwdMatches) {
     return yield* new TeleportDiscoveryError({
       reason: `Native ${input.provider} session '${input.externalSessionId}' no longer belongs to this project.`,
