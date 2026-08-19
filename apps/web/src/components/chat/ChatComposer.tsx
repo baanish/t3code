@@ -2327,6 +2327,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   const addComposerImages = async (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
+    if (isSendDisabled) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to add to chat",
+        description: sendDisabledReason ?? "The composer is busy; try again once it is ready.",
+      });
+      return;
+    }
     if (pendingUserInputs.length > 0) {
       toastManager.add({
         type: "error",
@@ -2437,6 +2445,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ): boolean => {
     if (
       text.length === 0 ||
+      isSendDisabled ||
       isConnecting ||
       isComposerApprovalState ||
       pendingUserInputs.length > 0 ||
