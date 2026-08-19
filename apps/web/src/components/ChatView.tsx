@@ -171,7 +171,6 @@ import {
 } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
 import { teleportSendDisabledReason } from "~/lib/teleport";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
@@ -260,6 +259,7 @@ import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
+import { WorkspacePageHeader } from "./WorkspacePageHeader";
 import {
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
@@ -6255,20 +6255,11 @@ function ChatViewContent(props: ChatViewProps) {
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
       >
         {/* Top bar */}
-        <header
+        <WorkspacePageHeader
           data-chat-header
-          className={cn(
-            "bg-background transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none",
-            isElectron
-              ? cn(
-                  "drag-region relative flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center px-3 sm:px-5",
-                  reserveTitleBarControlInset &&
-                    !inlineRightPanelOwnsTitleBar &&
-                    "wco:pr-[var(--workspace-native-controls-inset)]",
-                )
-              : "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)]",
-            COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-          )}
+          electron={isElectron}
+          reserveNativeControls={reserveTitleBarControlInset && !inlineRightPanelOwnsTitleBar}
+          className="relative bg-background"
         >
           {!rightPanelOpen ? panelLayoutControls : null}
           <ChatHeader
@@ -6299,7 +6290,7 @@ function ChatViewContent(props: ChatViewProps) {
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
           />
-        </header>
+        </WorkspacePageHeader>
 
         <ThreadErrorBanner
           error={visibleThreadError}
