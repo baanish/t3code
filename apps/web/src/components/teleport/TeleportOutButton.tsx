@@ -80,6 +80,9 @@ export function TeleportOutButton({
             className={busy ? "shrink-0 cursor-not-allowed opacity-64" : "shrink-0"}
             variant="outline"
             size="icon-xs"
+            // The tooltip wrapper replaces data-slot="button", so themed
+            // toolbar styling needs its own hook.
+            data-toolbar-control=""
             aria-label={
               teleportedOut
                 ? "Import this thread from the native CLI"
