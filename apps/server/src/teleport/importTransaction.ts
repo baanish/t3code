@@ -78,7 +78,11 @@ export type InPlaceTeleportImportPorts<E, R = never> = {
 const revertOnError = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   revert: Effect.Effect<void, never, R>,
-): Effect.Effect<A, E, R> => effect.pipe(Effect.tapError(() => revert));
+): Effect.Effect<A, E, R> =>
+  // `onError` observes typed failures, defects, and interruption, and the
+  // revert itself is uninterruptible so a cancelled RPC cannot leave
+  // `presence: "importing"` stranded until process restart.
+  effect.pipe(Effect.onError(() => revert));
 
 /**
  * In-place import durability protocol:
@@ -89,17 +93,22 @@ const revertOnError = <A, E, R>(
  * 5. directory presence finalize (best-effort)
  * 6. title (best-effort)
  *
- * Failures before the T3 commit revert the importing fence. Title and the
- * post-commit directory finalize cannot invalidate a successful T3 commit.
+ * Typed failures, defects, and interruptions before the T3 commit revert the
+ * importing fence. Title and the post-commit directory finalize cannot
+ * invalidate a successful T3 commit.
  */
 export const runInPlaceTeleportImport = <E, R = never>(
   ports: InPlaceTeleportImportPorts<E, R>,
 ): Effect.Effect<void, E, R> =>
   Effect.gen(function* () {
     yield* ports.beginImporting;
-    yield* revertOnError(ports.stopSession, ports.revertImporting);
-    yield* revertOnError(ports.persistDirectory, ports.revertImporting);
-    yield* revertOnError(ports.commitOrchestration, ports.revertImporting);
+    yield* revertOnError(
+      ports.stopSession.pipe(
+        Effect.flatMap(() => ports.persistDirectory),
+        Effect.flatMap(() => ports.commitOrchestration),
+      ),
+      ports.revertImporting,
+    );
     yield* ports.finalizeDirectory.pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("teleport.import.directory-finalize-skipped").pipe(

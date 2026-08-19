@@ -1,6 +1,10 @@
 import { CommandId, TELEPORT_IMPORT_BATCH_SEMANTICS, ThreadId } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 
 import {
@@ -141,6 +145,86 @@ describe("teleport import transaction", () => {
         "commitOrchestration",
         "revertImporting",
       ]);
+    }),
+  );
+
+  it.effect("reverts the importing fence when a pre-commit step dies", () =>
+    Effect.gen(function* () {
+      const steps = yield* Ref.make<string[]>([]);
+      const record = (step: string) => Ref.update(steps, (current) => [...current, step]);
+      const defect = new Error("commitOrchestration");
+      const exit = yield* runInPlaceTeleportImport({
+        beginImporting: record("beginImporting"),
+        stopSession: record("stopSession"),
+        persistDirectory: record("persistDirectory"),
+        commitOrchestration: record("commitOrchestration").pipe(
+          Effect.flatMap(() => Effect.die(defect)),
+        ),
+        finalizeDirectory: record("finalizeDirectory"),
+        updateTitle: record("updateTitle"),
+        revertImporting: record("revertImporting"),
+      }).pipe(Effect.exit);
+      assert.equal(Exit.isFailure(exit), true);
+      if (Exit.isFailure(exit)) {
+        assert.equal(Cause.hasDies(exit.cause), true);
+        assert.equal(Cause.squash(exit.cause), defect);
+      }
+      assert.deepEqual(yield* Ref.get(steps), [
+        "beginImporting",
+        "stopSession",
+        "persistDirectory",
+        "commitOrchestration",
+        "revertImporting",
+      ]);
+    }),
+  );
+
+  it.effect("reverts the importing fence when a pre-commit step is interrupted", () =>
+    Effect.gen(function* () {
+      const steps = yield* Ref.make<string[]>([]);
+      const record = (step: string) => Ref.update(steps, (current) => [...current, step]);
+      const exit = yield* runInPlaceTeleportImport({
+        beginImporting: record("beginImporting"),
+        stopSession: record("stopSession"),
+        persistDirectory: record("persistDirectory").pipe(Effect.flatMap(() => Effect.interrupt)),
+        commitOrchestration: record("commitOrchestration"),
+        finalizeDirectory: record("finalizeDirectory"),
+        updateTitle: record("updateTitle"),
+        revertImporting: record("revertImporting"),
+      }).pipe(Effect.exit);
+      assert.equal(Exit.isFailure(exit), true);
+      if (Exit.isFailure(exit)) {
+        assert.equal(Cause.hasInterrupts(exit.cause), true);
+      }
+      assert.deepEqual(yield* Ref.get(steps), [
+        "beginImporting",
+        "stopSession",
+        "persistDirectory",
+        "revertImporting",
+      ]);
+    }),
+  );
+
+  it.effect("reverts the importing fence when the import fiber is interrupted", () =>
+    Effect.gen(function* () {
+      const steps = yield* Ref.make<string[]>([]);
+      const started = yield* Deferred.make<void>();
+      const record = (step: string) => Ref.update(steps, (current) => [...current, step]);
+      const fiber = yield* runInPlaceTeleportImport({
+        beginImporting: record("beginImporting"),
+        stopSession: record("stopSession").pipe(
+          Effect.flatMap(() => Deferred.succeed(started, undefined)),
+          Effect.flatMap(() => Effect.never),
+        ),
+        persistDirectory: record("persistDirectory"),
+        commitOrchestration: record("commitOrchestration"),
+        finalizeDirectory: record("finalizeDirectory"),
+        updateTitle: record("updateTitle"),
+        revertImporting: record("revertImporting"),
+      }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(fiber);
+      assert.deepEqual(yield* Ref.get(steps), ["beginImporting", "stopSession", "revertImporting"]);
     }),
   );
 
