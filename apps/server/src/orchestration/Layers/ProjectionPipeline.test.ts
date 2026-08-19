@@ -3080,4 +3080,96 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       ]);
     }),
   );
+
+  it.effect("projects teleport import unarchive, presence, and history together", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const projectId = ProjectId.make("project-teleport-import");
+      const threadId = ThreadId.make("thread-teleport-import");
+
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-pipeline-import-project"),
+        projectId,
+        title: "Pipeline Import",
+        workspaceRoot: "/tmp/project-teleport-import",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-pipeline-import-thread"),
+        threadId,
+        projectId,
+        title: "Thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("cmd-pipeline-import-archive"),
+        threadId,
+      });
+      yield* engine.dispatch({
+        type: "thread.teleport.import",
+        commandId: CommandId.make("cmd-pipeline-import-commit"),
+        threadId,
+        teleport: {
+          presence: "t3",
+          provider: "codex",
+          externalSessionId: "session-pipeline",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncedAt: createdAt,
+        },
+        messages: [
+          {
+            id: MessageId.make("imported-pipeline"),
+            role: "user",
+            text: "imported",
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+        createdAt,
+      });
+
+      const threadRows = yield* sql<{
+        readonly archivedAt: string | null;
+        readonly teleportJson: string | null;
+      }>`
+        SELECT
+          archived_at AS "archivedAt",
+          teleport_json AS "teleportJson"
+        FROM projection_threads
+        WHERE thread_id = 'thread-teleport-import'
+      `;
+      assert.equal(threadRows[0]?.archivedAt, null);
+      assert.isTrue(threadRows[0]?.teleportJson?.includes('"presence":"t3"') === true);
+
+      const messageRows = yield* sql<{ readonly text: string }>`
+        SELECT text
+        FROM projection_thread_messages
+        WHERE thread_id = 'thread-teleport-import'
+        ORDER BY created_at
+      `;
+      assert.deepEqual(
+        messageRows.map((row) => row.text),
+        ["imported"],
+      );
+    }),
+  );
 });

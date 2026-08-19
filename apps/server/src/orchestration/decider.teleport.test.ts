@@ -28,6 +28,7 @@ function makeReadModel(input: {
   readonly teleport?: OrchestrationThread["teleport"];
   readonly session?: OrchestrationThread["session"];
   readonly messages?: OrchestrationThread["messages"];
+  readonly archivedAt?: OrchestrationThread["archivedAt"];
 }): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
@@ -45,7 +46,7 @@ function makeReadModel(input: {
         latestTurn: null,
         createdAt: NOW,
         updatedAt: NOW,
-        archivedAt: null,
+        archivedAt: input.archivedAt ?? null,
         settledOverride: null,
         settledAt: null,
         deletedAt: null,
@@ -176,6 +177,134 @@ it.layer(NodeServices.layer)("teleport thread decider", (it) => {
           type: "thread.history.replace",
           commandId: CommandId.make("cmd-history-busy"),
           threadId: ThreadId.make("thread-1"),
+          messages: [],
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: NOW,
+          },
+        }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      if (error._tag === "OrchestrationCommandInvariantError") {
+        expect(error.detail).toContain("starting or running");
+      }
+    }),
+  );
+
+  it.effect("rejects turn start while a native import is in progress", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-importing"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make("message-1"),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({
+          teleport: {
+            ...NATIVE_TELEPORT,
+            presence: "importing",
+            restorePresence: "native",
+          },
+        }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      if (error._tag === "OrchestrationCommandInvariantError") {
+        expect(error.detail).toContain("being imported");
+      }
+    }),
+  );
+
+  it.effect("imports native history, T3 ownership, and unarchive as one command", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.teleport.import",
+          commandId: CommandId.make("cmd-teleport-import"),
+          threadId: ThreadId.make("thread-1"),
+          teleport: {
+            ...NATIVE_TELEPORT,
+            presence: "t3",
+          },
+          messages: [
+            {
+              id: MessageId.make("imported-1"),
+              role: "user",
+              text: "imported",
+              turnId: null,
+              streaming: false,
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({
+          teleport: NATIVE_TELEPORT,
+          archivedAt: NOW,
+          messages: [
+            {
+              id: MessageId.make("old-1"),
+              role: "user",
+              text: "old",
+              turnId: null,
+              streaming: false,
+              createdAt: "2025-12-01T00:00:00.000Z",
+              updatedAt: "2025-12-01T00:00:00.000Z",
+            },
+          ],
+        }),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.unarchived",
+        "thread.teleported",
+        "thread.history-replaced",
+      ]);
+      expect(new Set(events.map((event) => event.commandId)).size).toBe(1);
+      const teleported = events[1];
+      const replaced = events[2];
+      expect(teleported?.type).toBe("thread.teleported");
+      if (teleported?.type === "thread.teleported") {
+        expect(teleported.payload.teleport.presence).toBe("t3");
+        expect(teleported.payload.teleport.restorePresence).toBeUndefined();
+      }
+      expect(replaced?.type).toBe("thread.history-replaced");
+      if (replaced?.type === "thread.history-replaced") {
+        expect(replaced.payload.messages).toHaveLength(1);
+        expect(replaced.payload.messages[0]?.text).toBe("imported");
+      }
+    }),
+  );
+
+  it.effect("rejects native history import while the T3 session is running", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.teleport.import",
+          commandId: CommandId.make("cmd-import-busy"),
+          threadId: ThreadId.make("thread-1"),
+          teleport: {
+            ...NATIVE_TELEPORT,
+            presence: "t3",
+          },
           messages: [],
           createdAt: NOW,
         },

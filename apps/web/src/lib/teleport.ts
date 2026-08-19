@@ -2,12 +2,19 @@ import {
   isTeleportProvider,
   isTeleportedOut,
   TELEPORTED_OUT_SEND_DISABLED_REASON,
+  TELEPORT_IMPORTING_SEND_DISABLED_REASON,
+  teleportSendDisabledReason,
   type ExecutionEnvironmentCapabilities,
   type ProviderInstanceId,
   type TeleportProvider,
 } from "@t3tools/contracts";
 
-export { isTeleportedOut, TELEPORTED_OUT_SEND_DISABLED_REASON };
+export {
+  isTeleportedOut,
+  TELEPORTED_OUT_SEND_DISABLED_REASON,
+  TELEPORT_IMPORTING_SEND_DISABLED_REASON,
+  teleportSendDisabledReason,
+};
 
 export function environmentSupportsTeleport(
   capabilities: ExecutionEnvironmentCapabilities | null | undefined,

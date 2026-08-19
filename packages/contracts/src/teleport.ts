@@ -13,8 +13,11 @@ export type TeleportProvider = typeof TeleportProvider.Type;
 export const TeleportSyncDirection = Schema.Literals(["import", "export"]);
 export type TeleportSyncDirection = typeof TeleportSyncDirection.Type;
 
-export const TeleportPresence = Schema.Literals(["t3", "native"]);
+export const TeleportPresence = Schema.Literals(["t3", "native", "importing"]);
 export type TeleportPresence = typeof TeleportPresence.Type;
+
+export const TeleportRestorePresence = Schema.Literals(["t3", "native"]);
+export type TeleportRestorePresence = typeof TeleportRestorePresence.Type;
 
 export const TeleportThreadState = Schema.Struct({
   presence: TeleportPresence,
@@ -23,6 +26,9 @@ export const TeleportThreadState = Schema.Struct({
   externalSessionId: TrimmedNonEmptyString,
   nativePath: TrimmedNonEmptyString,
   lastSyncedAt: IsoDateTime,
+  // Set only while presence is "importing". Restart recovery restores this
+  // presence so a crashed import cannot strand the thread.
+  restorePresence: Schema.optional(TeleportRestorePresence),
 });
 export type TeleportThreadState = typeof TeleportThreadState.Type;
 
@@ -60,6 +66,13 @@ export const TeleportListSessionsResult = Schema.Struct({
   sessions: Schema.Array(TeleportSessionCandidate),
 });
 export type TeleportListSessionsResult = typeof TeleportListSessionsResult.Type;
+
+/**
+ * Import is atomic per listed session, not all-or-nothing for the batch.
+ * If a later session fails, earlier successful imports are retained and the
+ * RPC still fails.
+ */
+export const TELEPORT_IMPORT_BATCH_SEMANTICS = "per-session" as const;
 
 export const TeleportImportSessionsInput = Schema.Struct({
   projectId: ProjectId,
@@ -122,17 +135,55 @@ export function resolveTeleportPresence(
   payload: Pick<TeleportRuntimePayload, "presence" | "lastSyncDirection"> | null | undefined,
 ): TeleportPresence {
   if (payload?.presence) {
-    return payload.presence;
+    switch (payload.presence) {
+      case "t3":
+      case "native":
+      case "importing":
+        return payload.presence;
+      default: {
+        const _exhaustive: never = payload.presence;
+        return _exhaustive;
+      }
+    }
   }
   return payload?.lastSyncDirection === "export" ? "native" : "t3";
 }
 
+export function teleportPresenceBlocksThreadTurnStart(
+  presence: TeleportPresence | null | undefined,
+): boolean {
+  return presence === "native" || presence === "importing";
+}
+
 export function isTeleportedOut(teleport: TeleportThreadState | null | undefined): boolean {
-  return teleport?.presence === "native";
+  return teleportPresenceBlocksThreadTurnStart(teleport?.presence);
 }
 
 export const TELEPORTED_OUT_SEND_DISABLED_REASON =
   "This thread is in the native CLI. Import it to keep chatting here.";
+
+export const TELEPORT_IMPORTING_SEND_DISABLED_REASON =
+  "This thread is being imported from the native CLI.";
+
+export function teleportSendDisabledReason(
+  teleport: TeleportThreadState | null | undefined,
+): string | null {
+  if (teleport == null) {
+    return null;
+  }
+  switch (teleport.presence) {
+    case "native":
+      return TELEPORTED_OUT_SEND_DISABLED_REASON;
+    case "importing":
+      return TELEPORT_IMPORTING_SEND_DISABLED_REASON;
+    case "t3":
+      return null;
+    default: {
+      const _exhaustive: never = teleport.presence;
+      return _exhaustive;
+    }
+  }
+}
 
 export class TeleportInvalidInputError extends Schema.TaggedErrorClass<TeleportInvalidInputError>()(
   "TeleportInvalidInputError",

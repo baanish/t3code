@@ -21,7 +21,6 @@ import {
   ProviderDriverKind,
   RuntimeMode,
   TerminalOpenInput,
-  isTeleportedOut,
 } from "@t3tools/contracts";
 import {
   connectionStatusTitle,
@@ -171,7 +170,7 @@ import {
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
-import { TELEPORTED_OUT_SEND_DISABLED_REASON } from "~/lib/teleport";
+import { teleportSendDisabledReason } from "~/lib/teleport";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
@@ -4965,12 +4964,16 @@ function ChatViewContent(props: ChatViewProps) {
       notifyDirectAnnotationAttached();
       return;
     }
-    if (isTeleportedOut(activeThread.teleport)) {
+    const teleportSendBlockReason = teleportSendDisabledReason(activeThread.teleport);
+    if (teleportSendBlockReason !== null) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: "Thread is in the native CLI",
-          description: TELEPORTED_OUT_SEND_DISABLED_REASON,
+          title:
+            activeThread.teleport?.presence === "importing"
+              ? "Thread is being imported"
+              : "Thread is in the native CLI",
+          description: teleportSendBlockReason,
         }),
       );
       return;
@@ -6477,9 +6480,7 @@ function ChatViewContent(props: ChatViewProps) {
                             sendDisabledReason={
                               threadDetailLoading
                                 ? "Messages loading"
-                                : isTeleportedOut(activeThread?.teleport)
-                                  ? TELEPORTED_OUT_SEND_DISABLED_REASON
-                                  : null
+                                : teleportSendDisabledReason(activeThread?.teleport)
                             }
                             isPreparingWorktree={isPreparingWorktree}
                             environmentUnavailable={activeEnvironmentUnavailableState}

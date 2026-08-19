@@ -8,6 +8,8 @@ import {
   isTeleportProvider,
   resolveTeleportPresence,
   TELEPORTED_OUT_SEND_DISABLED_REASON,
+  TELEPORT_IMPORTING_SEND_DISABLED_REASON,
+  teleportSendDisabledReason,
   TeleportDiscoveryError,
   TeleportExportError,
   TeleportFileLockedError,
@@ -45,6 +47,19 @@ describe("teleport presence", () => {
     });
     expect(parsed.presence).toBe("native");
     expect(parsed.provider).toBe("codex");
+  });
+
+  it("decodes importing presence and restorePresence", () => {
+    const parsed = decodeTeleportThreadState({
+      presence: "importing",
+      provider: "codex",
+      externalSessionId: "session-1",
+      nativePath: "/tmp/session.jsonl",
+      lastSyncedAt: "2026-08-14T22:00:00.000Z",
+      restorePresence: "native",
+    });
+    expect(parsed.presence).toBe("importing");
+    expect(parsed.restorePresence).toBe("native");
   });
 
   it("uses an explicit presence on the runtime payload", () => {
@@ -92,6 +107,40 @@ describe("teleport presence", () => {
       }),
     ).toBe(true);
     expect(TELEPORTED_OUT_SEND_DISABLED_REASON.length).toBeGreaterThan(0);
+  });
+
+  it("treats importing presence as teleported-out for composer and import retry", () => {
+    expect(
+      isTeleportedOut({
+        presence: "importing",
+        provider: "codex",
+        externalSessionId: "session-1",
+        nativePath: "/tmp/session.jsonl",
+        lastSyncedAt: "2026-08-14T22:00:00.000Z",
+        restorePresence: "native",
+      }),
+    ).toBe(true);
+  });
+
+  it("uses a distinct send-disabled reason while import is in progress", () => {
+    expect(
+      teleportSendDisabledReason({
+        presence: "importing",
+        provider: "codex",
+        externalSessionId: "session-1",
+        nativePath: "/tmp/session.jsonl",
+        lastSyncedAt: "2026-08-14T22:00:00.000Z",
+      }),
+    ).toBe(TELEPORT_IMPORTING_SEND_DISABLED_REASON);
+    expect(
+      teleportSendDisabledReason({
+        presence: "native",
+        provider: "codex",
+        externalSessionId: "session-1",
+        nativePath: "/tmp/session.jsonl",
+        lastSyncedAt: "2026-08-14T22:00:00.000Z",
+      }),
+    ).toBe(TELEPORTED_OUT_SEND_DISABLED_REASON);
   });
 });
 

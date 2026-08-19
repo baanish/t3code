@@ -1,6 +1,6 @@
 import {
   isTeleportedOut,
-  TELEPORTED_OUT_SEND_DISABLED_REASON,
+  teleportSendDisabledReason,
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
@@ -293,11 +293,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
   const teleportedOut = isTeleportedOut(props.selectedThread.teleport);
+  const teleportSendBlockReason = teleportSendDisabledReason(props.selectedThread.teleport);
   // Opening and presentation count as active so the composer stays expanded
   // while focus moves between its native editor and the settings picker.
   const isExpanded = isFocused || settingsSheetPresentation.isActive;
   const canSend = hasContent && !teleportedOut;
-  const placeholder = teleportedOut ? TELEPORTED_OUT_SEND_DISABLED_REASON : props.placeholder;
+  const placeholder = teleportSendBlockReason ?? props.placeholder;
 
   // Notify the parent from the derived value, not focus events: the parent
   // sizes the feed inset from this, and blur-during-sheet would otherwise

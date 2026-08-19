@@ -108,7 +108,10 @@ import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
-import { TELEPORTED_OUT_SEND_DISABLED_REASON } from "~/lib/teleport";
+import {
+  TELEPORTED_OUT_SEND_DISABLED_REASON,
+  TELEPORT_IMPORTING_SEND_DISABLED_REASON,
+} from "~/lib/teleport";
 import { Separator } from "../ui/separator";
 import {
   getComposerPromptLengthValidationMessage,
@@ -679,6 +682,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onExpandImage,
   } = props;
   const isSendDisabled = sendDisabledReason !== null;
+  const isTeleportComposerLocked =
+    sendDisabledReason === TELEPORTED_OUT_SEND_DISABLED_REASON ||
+    sendDisabledReason === TELEPORT_IMPORTING_SEND_DISABLED_REASON;
 
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -3075,8 +3081,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 onCommandKeyDown={onComposerCommandKey}
                 onPaste={onComposerPaste}
                 placeholder={
-                  sendDisabledReason === TELEPORTED_OUT_SEND_DISABLED_REASON
-                    ? TELEPORTED_OUT_SEND_DISABLED_REASON
+                  isTeleportComposerLocked
+                    ? sendDisabledReason
                     : isComposerApprovalState
                       ? (activePendingApproval?.detail ??
                         "Resolve this approval request to continue")
@@ -3096,7 +3102,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   isConnecting ||
                   isComposerApprovalState ||
                   projectSelectionRequired ||
-                  sendDisabledReason === TELEPORTED_OUT_SEND_DISABLED_REASON
+                  isTeleportComposerLocked
                 }
               />
               {showMobilePendingAnswerActions ? (

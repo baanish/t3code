@@ -942,3 +942,33 @@ it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects 
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
 });
+
+it.effect("decodes thread.teleport.import commands", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.teleport.import",
+      commandId: "cmd-teleport-import",
+      threadId: "thread-1",
+      teleport: {
+        presence: "t3",
+        provider: "codex",
+        externalSessionId: "session-1",
+        nativePath: "/tmp/session.jsonl",
+        lastSyncedAt: "2026-08-14T22:00:00.000Z",
+      },
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          text: "imported",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-08-14T22:00:00.000Z",
+          updatedAt: "2026-08-14T22:00:00.000Z",
+        },
+      ],
+      createdAt: "2026-08-14T22:00:00.000Z",
+    });
+    assert.strictEqual(parsed.type, "thread.teleport.import");
+  }),
+);

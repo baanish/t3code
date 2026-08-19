@@ -1061,6 +1061,15 @@ const ThreadTeleportSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTeleportImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.teleport.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  teleport: TeleportThreadState,
+  messages: Schema.Array(OrchestrationMessage),
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1072,6 +1081,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTitleRegenerationCompleteCommand,
   ThreadHistoryReplaceCommand,
   ThreadTeleportSetCommand,
+  ThreadTeleportImportCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
