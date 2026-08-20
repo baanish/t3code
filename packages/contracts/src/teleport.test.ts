@@ -9,6 +9,7 @@ import {
   resolveTeleportPresence,
   TELEPORTED_OUT_SEND_DISABLED_REASON,
   TELEPORT_IMPORTING_SEND_DISABLED_REASON,
+  isTeleportSendDisabledReason,
   teleportSendDisabledReason,
   TeleportDiscoveryError,
   TeleportExportError,
@@ -141,6 +142,13 @@ describe("teleport presence", () => {
         lastSyncedAt: "2026-08-14T22:00:00.000Z",
       }),
     ).toBe(TELEPORTED_OUT_SEND_DISABLED_REASON);
+  });
+
+  it("identifies teleport send-disabled reasons for post-await composer guards", () => {
+    expect(isTeleportSendDisabledReason(TELEPORTED_OUT_SEND_DISABLED_REASON)).toBe(true);
+    expect(isTeleportSendDisabledReason(TELEPORT_IMPORTING_SEND_DISABLED_REASON)).toBe(true);
+    expect(isTeleportSendDisabledReason("Messages loading")).toBe(false);
+    expect(isTeleportSendDisabledReason(null)).toBe(false);
   });
 });
 

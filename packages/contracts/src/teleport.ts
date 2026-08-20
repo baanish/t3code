@@ -165,6 +165,17 @@ export const TELEPORTED_OUT_SEND_DISABLED_REASON =
 export const TELEPORT_IMPORTING_SEND_DISABLED_REASON =
   "This thread is being imported from the native CLI.";
 
+export function isTeleportSendDisabledReason(
+  reason: string | null | undefined,
+): reason is
+  | typeof TELEPORTED_OUT_SEND_DISABLED_REASON
+  | typeof TELEPORT_IMPORTING_SEND_DISABLED_REASON {
+  return (
+    reason === TELEPORTED_OUT_SEND_DISABLED_REASON ||
+    reason === TELEPORT_IMPORTING_SEND_DISABLED_REASON
+  );
+}
+
 export function teleportSendDisabledReason(
   teleport: TeleportThreadState | null | undefined,
 ): string | null {

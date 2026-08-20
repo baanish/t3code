@@ -115,10 +115,7 @@ import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
-import {
-  TELEPORTED_OUT_SEND_DISABLED_REASON,
-  TELEPORT_IMPORTING_SEND_DISABLED_REASON,
-} from "~/lib/teleport";
+import { isTeleportSendDisabledReason } from "~/lib/teleport";
 import { Separator } from "../ui/separator";
 import {
   getComposerPromptLengthValidationMessage,
@@ -711,9 +708,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onExpandImage,
   } = props;
   const isSendDisabled = sendDisabledReason !== null;
-  const isTeleportComposerLocked =
-    sendDisabledReason === TELEPORTED_OUT_SEND_DISABLED_REASON ||
-    sendDisabledReason === TELEPORT_IMPORTING_SEND_DISABLED_REASON;
+  const teleportLockReason = isTeleportSendDisabledReason(sendDisabledReason)
+    ? sendDisabledReason
+    : null;
+  const isTeleportComposerLocked = teleportLockReason !== null;
+  const sendDisabledReasonRef = useRef(sendDisabledReason);
+  sendDisabledReasonRef.current = sendDisabledReason;
 
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -2023,6 +2023,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const restoreStashEntry = useCallback(
     (entry: PromptStashEntry) => {
+      if (isTeleportSendDisabledReason(sendDisabledReasonRef.current)) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to restore stash",
+          description:
+            sendDisabledReasonRef.current ?? "The composer is busy; try again once it is ready.",
+        });
+        return;
+      }
       // Remove first so a double activation (click + Enter) can't restore twice.
       const { entry: taken, durable } = takeStashEntry(entry.id);
       if (!taken) return;
@@ -2159,6 +2168,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const images = [...composerImagesRef.current];
     if (prompt.length === 0 && images.length === 0) {
       setIsStashMenuOpen((open) => !open);
+      return;
+    }
+    if (isTeleportSendDisabledReason(sendDisabledReasonRef.current)) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to stash prompt",
+        description:
+          sendDisabledReasonRef.current ?? "The composer is busy; try again once it is ready.",
+      });
       return;
     }
     // A repeat ⌘S on the *same* still-unencoded snapshot would stash it
@@ -2495,6 +2513,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         // Images over the wire cap are downscaled to fit rather than
         // refused; files already within it pass through byte-for-byte.
         const compressed = await compressImageToByteLimit(file, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
+        if (sendDisabledReasonRef.current !== null) {
+          break;
+        }
         if (!compressed.ok) {
           compressionError =
             compressed.reason === "unreadable"
@@ -2513,6 +2534,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           previewUrl,
           file: attachmentFile,
         });
+      }
+      const currentSendDisabledReason = sendDisabledReasonRef.current;
+      // Teleport/send-disabled can flip while compression is in flight. Do
+      // not commit attachments into a draft the user can no longer edit.
+      if (currentSendDisabledReason !== null) {
+        for (const image of nextImages) {
+          URL.revokeObjectURL(image.previewUrl);
+        }
+        toastManager.add({
+          type: "error",
+          title: "Unable to add to chat",
+          description: currentSendDisabledReason,
+        });
+        return;
       }
       if (nextImages.length === 1 && nextImages[0]) {
         addComposerImage(nextImages[0]);
@@ -3226,8 +3261,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onCommandKeyDown={onComposerCommandKey}
                   onPaste={onComposerPaste}
                   placeholder={
-                    isTeleportComposerLocked
-                      ? sendDisabledReason
+                    teleportLockReason !== null
+                      ? teleportLockReason
                       : isComposerApprovalState
                         ? (activePendingApproval?.detail ??
                           "Resolve this approval request to continue")

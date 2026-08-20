@@ -3,6 +3,7 @@ import {
   isTeleportedOut,
   TELEPORTED_OUT_SEND_DISABLED_REASON,
   TELEPORT_IMPORTING_SEND_DISABLED_REASON,
+  isTeleportSendDisabledReason,
   teleportSendDisabledReason,
   type ExecutionEnvironmentCapabilities,
   type ProviderInstanceId,
@@ -13,6 +14,7 @@ export {
   isTeleportedOut,
   TELEPORTED_OUT_SEND_DISABLED_REASON,
   TELEPORT_IMPORTING_SEND_DISABLED_REASON,
+  isTeleportSendDisabledReason,
   teleportSendDisabledReason,
 };
 
