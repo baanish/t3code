@@ -714,6 +714,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isTeleportComposerLocked = teleportLockReason !== null;
   const sendDisabledReasonRef = useRef(sendDisabledReason);
   sendDisabledReasonRef.current = sendDisabledReason;
+  const canMutateTeleportDraft = useCallback(
+    () => !isTeleportSendDisabledReason(sendDisabledReasonRef.current),
+    [],
+  );
 
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -1231,6 +1235,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   const setPromptFromTraits = useCallback(
     (nextPrompt: string) => {
+      if (!canMutateTeleportDraft()) {
+        return;
+      }
       if (nextPrompt === promptRef.current) {
         scheduleComposerFocus();
         return;
@@ -1242,7 +1249,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
       scheduleComposerFocus();
     },
-    [composerDraftTarget, promptRef, scheduleComposerFocus, setComposerDraftPrompt],
+    [
+      canMutateTeleportDraft,
+      composerDraftTarget,
+      promptRef,
+      scheduleComposerFocus,
+      setComposerDraftPrompt,
+    ],
   );
 
   const providerTraitsMenuContent = renderProviderTraitsMenuContent({
@@ -1300,9 +1313,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   const setPrompt = useCallback(
     (nextPrompt: string) => {
+      if (!canMutateTeleportDraft()) {
+        return;
+      }
       setComposerDraftPrompt(composerDraftTarget, nextPrompt);
     },
-    [composerDraftTarget, setComposerDraftPrompt],
+    [canMutateTeleportDraft, composerDraftTarget, setComposerDraftPrompt],
   );
 
   const addComposerImage = useCallback(
@@ -1321,13 +1337,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const removeComposerImageFromDraft = useCallback(
     (imageId: string) => {
+      if (!canMutateTeleportDraft()) {
+        return;
+      }
       removeComposerDraftImage(composerDraftTarget, imageId);
     },
-    [composerDraftTarget, removeComposerDraftImage],
+    [canMutateTeleportDraft, composerDraftTarget, removeComposerDraftImage],
   );
 
   const removeComposerTerminalContextFromDraft = useCallback(
     (contextId: string) => {
+      if (!canMutateTeleportDraft()) {
+        return;
+      }
       const contextIndex = composerTerminalContexts.findIndex(
         (context) => context.id === contextId,
       );
@@ -1343,10 +1365,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [
       composerDraftTarget,
       composerTerminalContexts,
+      canMutateTeleportDraft,
       promptRef,
       removeComposerDraftTerminalContext,
       setPrompt,
     ],
+  );
+
+  const removeComposerElementContextFromDraft = useCallback(
+    (contextId: string) => {
+      if (canMutateTeleportDraft()) {
+        removeComposerDraftElementContext(composerDraftTarget, contextId);
+      }
+    },
+    [canMutateTeleportDraft, composerDraftTarget, removeComposerDraftElementContext],
+  );
+
+  const removeComposerPreviewAnnotationFromDraft = useCallback(
+    (annotationId: string) => {
+      if (canMutateTeleportDraft()) {
+        removeComposerDraftPreviewAnnotation(composerDraftTarget, annotationId);
+      }
+    },
+    [canMutateTeleportDraft, composerDraftTarget, removeComposerDraftPreviewAnnotation],
+  );
+
+  const removeComposerReviewCommentFromDraft = useCallback(
+    (commentId: string) => {
+      if (canMutateTeleportDraft()) {
+        removeComposerDraftReviewComment(composerDraftTarget, commentId);
+      }
+    },
+    [canMutateTeleportDraft, composerDraftTarget, removeComposerDraftReviewComment],
   );
 
   // ------------------------------------------------------------------
@@ -2745,7 +2795,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
       },
       addTerminalContext: (selection: TerminalContextSelection) => {
-        if (!activeThread) return;
+        if (!activeThread || !canMutateTeleportDraft()) return;
         const snapshot = composerEditorRef.current?.readSnapshot() ?? {
           value: promptRef.current,
           cursor: composerCursor,
@@ -2808,6 +2858,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [
       activeThread,
       addComposerImages,
+      canMutateTeleportDraft,
       composerDraftTarget,
       composerCursor,
       composerTerminalContexts,
@@ -3123,9 +3174,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <ComposerPreviewAnnotationCards
                     annotations={composerPreviewAnnotations}
                     images={composerImages}
-                    onRemove={(annotationId) =>
-                      removeComposerDraftPreviewAnnotation(composerDraftTarget, annotationId)
-                    }
+                    onRemove={removeComposerPreviewAnnotationFromDraft}
                     onExpandImage={(imageId) => {
                       const preview = buildExpandedImagePreview(composerImages, imageId);
                       if (preview) onExpandImage(preview);
@@ -3140,9 +3189,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 composerReviewComments.length > 0 && (
                   <ComposerPendingReviewComments
                     comments={composerReviewComments}
-                    onRemove={(commentId) =>
-                      removeComposerDraftReviewComment(composerDraftTarget, commentId)
-                    }
+                    onRemove={removeComposerReviewCommentFromDraft}
                     className="mb-3"
                   />
                 )}
@@ -3153,9 +3200,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 composerElementContexts.length > 0 && (
                   <ComposerPendingElementContexts
                     contexts={composerElementContexts}
-                    onRemove={(contextId) =>
-                      removeComposerDraftElementContext(composerDraftTarget, contextId)
-                    }
+                    onRemove={removeComposerElementContextFromDraft}
                     className="mb-3"
                   />
                 )}
