@@ -1591,6 +1591,9 @@ function ChatViewContent(props: ChatViewProps) {
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
   const activeThreadEnvironmentId = activeThread?.environmentId ?? null;
+  const [pendingTeleportForkThreadId, setPendingTeleportForkThreadId] = useState<ThreadId | null>(
+    null,
+  );
   const teleportNativeConflict = useTeleportNativeConflict({
     environmentId,
     threadId: isServerThread ? activeThreadId : null,
@@ -1598,15 +1601,28 @@ function ChatViewContent(props: ChatViewProps) {
     teleport: activeThread?.teleport,
     sessionUpdatedAt: activeThread?.session?.updatedAt,
     onForked: (forkedThreadId) => {
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: {
-          environmentId,
-          threadId: forkedThreadId,
-        },
-      });
+      setPendingTeleportForkThreadId(forkedThreadId);
     },
   });
+  useEffect(() => {
+    if (pendingTeleportForkThreadId === null) {
+      return;
+    }
+    const forkedThreadKey = scopedThreadKey(
+      scopeThreadRef(environmentId, pendingTeleportForkThreadId),
+    );
+    if (!serverThreadKeys.includes(forkedThreadKey)) {
+      return;
+    }
+    setPendingTeleportForkThreadId(null);
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: {
+        environmentId,
+        threadId: pendingTeleportForkThreadId,
+      },
+    });
+  }, [environmentId, navigate, pendingTeleportForkThreadId, serverThreadKeys]);
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: activeThread?.environmentId ?? null,
     threadId: activeThreadId,
