@@ -112,6 +112,18 @@ describe("teleport cwd matching", () => {
     ),
   );
 
+  it.effect("does not treat a dot-dot sibling as part of the project", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/home/user/projects/repo/../other",
+      projectCwd: "/home/user/projects/repo",
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, false);
+      }),
+    ),
+  );
+
   it.effect("does not treat an unrelated worktree as part of the project", () =>
     teleportSessionBelongsToProject({
       sessionCwd: "/home/user/.t3/worktrees/other/feature",

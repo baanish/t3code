@@ -92,7 +92,6 @@ describe("resolveTeleportHomes", () => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-claude-homes-" });
       const defaultHome = path.join(root, "claude-default");
       const workHome = path.join(root, "claude-work");
-      yield* fs.makeDirectory(path.join(workHome, ".claude", "projects"), { recursive: true });
       const homes = yield* resolveTeleportHomes(
         decodeServerSettings({
           providers: {
@@ -112,16 +111,51 @@ describe("resolveTeleportHomes", () => {
       assert.equal(homes.extraClaudeProjectsRoots[0]?.instanceId, "claude_work");
       assert.equal(
         homes.extraClaudeProjectsRoots[0]?.root,
-        path.join(workHome, ".claude", "projects"),
+        path.join(workHome, "projects"),
       );
       assert.equal(
         resolveClaudeProjectsRootForInstance(homes, ProviderInstanceId.make("claude_work")),
-        path.join(workHome, ".claude", "projects"),
+        path.join(workHome, "projects"),
       );
       assert.equal(
         resolveClaudeProjectsRootForInstance(homes, ProviderInstanceId.make("claudeAgent")),
         path.join(defaultHome, "projects"),
       );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("uses the native Claude config root regardless of directory existence", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const homes = yield* resolveTeleportHomes(
+        decodeServerSettings({
+          providers: {
+            claudeAgent: { homePath: "" },
+          },
+        }),
+      );
+      assert.equal(
+        homes.claudeProjectsRoot,
+        path.join(NodeOS.homedir(), ".claude", "projects"),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("treats an explicit Claude homePath as CLAUDE_CONFIG_DIR", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-claude-config-" });
+      yield* fs.makeDirectory(path.join(root, ".claude", "projects"), { recursive: true });
+      yield* fs.makeDirectory(path.join(root, "projects"), { recursive: true });
+      const homes = yield* resolveTeleportHomes(
+        decodeServerSettings({
+          providers: {
+            claudeAgent: { homePath: root },
+          },
+        }),
+      );
+      assert.equal(homes.claudeProjectsRoot, path.join(root, "projects"));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

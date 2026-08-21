@@ -152,6 +152,22 @@ export const canonicalizeTeleportNativePath = Effect.fn("canonicalizeTeleportNat
   },
 );
 
+export const canonicalizeTeleportNativeWritePath = Effect.fn(
+  "canonicalizeTeleportNativeWritePath",
+)(function* (value: string): Effect.fn.Return<string, never, FileSystem.FileSystem | Path.Path> {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const resolved = path.resolve(value);
+  return yield* fs.realPath(resolved).pipe(
+    Effect.catch(() =>
+      fs.realPath(path.dirname(resolved)).pipe(
+        Effect.orElseSucceed(() => path.dirname(resolved)),
+        Effect.map((parent) => path.join(parent, path.basename(resolved))),
+      ),
+    ),
+  );
+});
+
 export function claudeSearchRoots(homes: TeleportHomes): ReadonlyArray<TeleportInstanceRoot> {
   return uniqueInstanceRoots([
     {
@@ -223,16 +239,6 @@ function claudeSettingsForInstance(
   };
 }
 
-const resolveClaudeProjectsRoot = Effect.fn("resolveClaudeProjectsRoot")(function* (
-  claudeHome: string,
-): Effect.fn.Return<string, never, FileSystem.FileSystem | Path.Path> {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const nestedClaude = path.join(claudeHome, ".claude", "projects");
-  const nestedExists = yield* fs.exists(nestedClaude).pipe(Effect.orElseSucceed(() => false));
-  return nestedExists ? nestedClaude : path.join(claudeHome, "projects");
-});
-
 export const resolveTeleportHomes = Effect.fn("resolveTeleportHomes")(function* (
   settings: ServerSettings,
 ): Effect.fn.Return<TeleportHomes, never, FileSystem.FileSystem | Path.Path> {
@@ -255,10 +261,12 @@ export const resolveTeleportHomes = Effect.fn("resolveTeleportHomes")(function* 
   let claudeProjectsRoot = "";
   const extraClaudeProjectsRoots: TeleportInstanceRoot[] = [];
   for (const instanceId of instanceIdsForDriver(settings, CLAUDE_DRIVER)) {
-    const claudeHome = yield* resolveClaudeHomePath(
-      claudeSettingsForInstance(settings, instanceId),
-    );
-    const projectsRoot = yield* resolveClaudeProjectsRoot(claudeHome);
+    const claudeSettings = claudeSettingsForInstance(settings, instanceId);
+    const claudeHome = yield* resolveClaudeHomePath(claudeSettings);
+    const projectsRoot =
+      claudeSettings.homePath.trim().length === 0
+        ? path.join(claudeHome, ".claude", "projects")
+        : path.join(claudeHome, "projects");
     if (instanceId === defaultClaudeId) {
       claudeProjectsRoot = projectsRoot;
       continue;

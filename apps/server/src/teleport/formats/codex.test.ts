@@ -289,6 +289,17 @@ describe("teleport Codex format", () => {
       yield* fs.makeDirectory(path.dirname(codexPath), { recursive: true });
       yield* fs.writeFileString(codexPath, serializeCodexSession(sampleTeleportSession("codex")));
       yield* fs.writeFileString(path.join(path.dirname(codexPath), "garbage.jsonl"), "not-json\n");
+      yield* fs.writeFileString(
+        path.join(path.dirname(codexPath), "future.jsonl"),
+        `${JSON.stringify({
+          type: "session_meta",
+          nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION + 1,
+          payload: {
+            id: "22222222-2222-4222-8222-222222222222",
+            cwd: "/workspace",
+          },
+        })}\n`,
+      );
       const listed = yield* discoverTeleportSessions({
         homes,
         cwd: "/workspace",
@@ -638,6 +649,45 @@ describe("teleport Codex format", () => {
             TeleportFormatRegistry.layer,
             ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
           ),
+        ),
+      ),
+      Effect.provideService(HostProcessPlatform, "linux"),
+    ),
+  );
+
+  it.effect("refuses to replace a Codex session outside its configured home", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-codex-sandbox-" });
+      const homes: TeleportHomes = {
+        codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [],
+        claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
+      };
+      const outside = path.join(root, "outside.jsonl");
+      const result = yield* codexTeleportFormat
+        .write({
+          homes,
+          session: sampleTeleportSession("codex"),
+          existingNativePath: outside,
+        })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure._tag, "TeleportNativeWriteError");
+        if (result.failure._tag === "TeleportNativeWriteError") {
+          assert.equal(result.failure.stage, "unsafe-native-path");
+        }
+      }
+      assert.equal(yield* fs.exists(outside), false);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.merge(
+          NodeServices.layer,
+          ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
         ),
       ),
       Effect.provideService(HostProcessPlatform, "linux"),

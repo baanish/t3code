@@ -9,6 +9,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
+import * as ProcessRunner from "../../processRunner.ts";
 import { discoverTeleportSessions } from "../discovery.ts";
 import type { TeleportHomes } from "../homes.ts";
 import { buildTeleportResumeCursor, readTeleportExternalSessionId } from "../resumeCursors.ts";
@@ -118,6 +121,121 @@ describe("teleport Claude format", () => {
         assert.deepEqual(
           parsed.value.messages.map((message) => message.text),
           ["root prompt", "base answer", "kept prompt", "kept answer"],
+        );
+      }
+    }),
+  );
+
+  it.effect("does not let a late tool result select an abandoned Claude branch", () =>
+    Effect.gen(function* () {
+      const records = [
+        {
+          type: "user",
+          uuid: "root",
+          parentUuid: null,
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "user", content: "root" },
+        },
+        {
+          type: "assistant",
+          uuid: "abandoned",
+          parentUuid: "root",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "abandoned answer" },
+              { type: "tool_use", id: "call-1", name: "Bash", input: {} },
+            ],
+          },
+        },
+        {
+          type: "user",
+          uuid: "kept-user",
+          parentUuid: "root",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "user", content: "kept prompt" },
+        },
+        {
+          type: "assistant",
+          uuid: "kept-assistant",
+          parentUuid: "kept-user",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "assistant", content: "kept answer" },
+        },
+        {
+          type: "user",
+          uuid: "late-tool-result",
+          parentUuid: "abandoned",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "call-1", content: "ok" }],
+          },
+        },
+      ];
+      const parsed = yield* parseClaudeSessionContents({
+        contents: records.map((record) => JSON.stringify(record)).join("\n"),
+        nativePath: "/tmp/claude-late-tool.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.deepEqual(
+          parsed.value.messages.map((message) => message.text),
+          ["root", "kept prompt", "kept answer"],
+        );
+      }
+    }),
+  );
+
+  it.effect("uses Claude summary leafUuid instead of a later abandoned sibling", () =>
+    Effect.gen(function* () {
+      const records = [
+        {
+          type: "user",
+          uuid: "root",
+          parentUuid: null,
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "user", content: "root" },
+        },
+        {
+          type: "assistant",
+          uuid: "kept",
+          parentUuid: "root",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "assistant", content: "kept answer" },
+        },
+        {
+          type: "assistant",
+          uuid: "abandoned",
+          parentUuid: "root",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "assistant", content: "abandoned answer" },
+        },
+        {
+          type: "summary",
+          leafUuid: "kept",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+        },
+      ];
+      const parsed = yield* parseClaudeSessionContents({
+        contents: records.map((record) => JSON.stringify(record)).join("\n"),
+        nativePath: "/tmp/claude-summary-leaf.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.deepEqual(
+          parsed.value.messages.map((message) => message.text),
+          ["root", "kept answer"],
         );
       }
     }),
@@ -266,6 +384,39 @@ describe("teleport Claude format", () => {
     }),
   );
 
+  it.effect("does not let Claude system records replace the session identity", () =>
+    Effect.gen(function* () {
+      const contents = [
+        {
+          type: "user",
+          uuid: "root",
+          parentUuid: null,
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "user", content: "hello" },
+        },
+        {
+          type: "system",
+          subtype: "compact_boundary",
+          uuid: "boundary",
+          parentUuid: "root",
+          sessionId: "22222222-2222-4222-8222-222222222222",
+          cwd: "/workspace",
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n");
+      const parsed = yield* parseClaudeSessionContents({
+        contents,
+        nativePath: `/tmp/${TELEPORT_TEST_SESSION_ID}.jsonl`,
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.externalSessionId, TELEPORT_TEST_SESSION_ID);
+      }
+    }),
+  );
+
   it.effect("preserves leading and trailing whitespace in Claude message text", () =>
     Effect.gen(function* () {
       const contents = `${JSON.stringify({
@@ -331,9 +482,13 @@ describe("teleport Claude format", () => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-claude-subagents-" });
       const projectDir = path.join(root, encodeClaudeProjectPath("/workspace"));
       const subagentsDir = path.join(projectDir, TELEPORT_TEST_SESSION_ID, "subagents");
+      const toolResultsDir = path.join(projectDir, "tool-results");
       yield* fs.makeDirectory(subagentsDir, { recursive: true });
+      yield* fs.makeDirectory(toolResultsDir, { recursive: true });
       const parentPath = path.join(projectDir, `${TELEPORT_TEST_SESSION_ID}.jsonl`);
       const childPath = path.join(subagentsDir, "agent-1.jsonl");
+      const legacyAgentPath = path.join(projectDir, "agent-deadbeef.jsonl");
+      const toolResultPath = path.join(toolResultsDir, "result.jsonl");
       const record = `${JSON.stringify({
         type: "user",
         sessionId: TELEPORT_TEST_SESSION_ID,
@@ -343,9 +498,13 @@ describe("teleport Claude format", () => {
       })}\n`;
       yield* fs.writeFileString(parentPath, record);
       yield* fs.writeFileString(childPath, record);
+      yield* fs.writeFileString(legacyAgentPath, record);
+      yield* fs.writeFileString(toolResultPath, record);
       const files = yield* listClaudeJsonlFiles(root, "/workspace");
       assert.equal(files.includes(parentPath), true);
       assert.equal(files.includes(childPath), false);
+      assert.equal(files.includes(legacyAgentPath), false);
+      assert.equal(files.includes(toolResultPath), false);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -408,6 +567,14 @@ describe("teleport Claude format", () => {
     assert.equal(encodeClaudeProjectPath(`${longPath}/`), encodeClaudeProjectPath(longPath));
   });
 
+  it("matches Claude project folder encoding for emoji and long paths", () => {
+    assert.equal(encodeClaudeProjectPath("/tmp/proj-😀-x"), "-tmp-proj----x");
+    assert.equal(
+      encodeClaudeProjectPath(`/${"a".repeat(210)}`),
+      `-${"a".repeat(199)}-djaaup`,
+    );
+  });
+
   it.effect("lists Claude sessions from the realpath-encoded folder", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -438,6 +605,25 @@ describe("teleport Claude format", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("lists Claude sessions from a custom sibling project folder", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-claude-custom-" });
+      const encodedDir = path.join(root, encodeClaudeProjectPath("/workspace"));
+      const customDir = path.join(root, "pinned-project");
+      yield* fs.makeDirectory(encodedDir, { recursive: true });
+      yield* fs.makeDirectory(customDir, { recursive: true });
+      const nativePath = path.join(customDir, `${TELEPORT_TEST_SESSION_ID}.jsonl`);
+      yield* fs.writeFileString(
+        nativePath,
+        serializeClaudeSession(sampleTeleportSession("claudeAgent")),
+      );
+      const files = yield* listClaudeJsonlFiles(root, "/workspace");
+      assert.equal(files.includes(nativePath), true);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("lists Claude sessions from a project worktree cwd", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -460,6 +646,16 @@ describe("teleport Claude format", () => {
       yield* fs.writeFileString(
         nativePath,
         serializeClaudeSession(sampleTeleportSession("claudeAgent", worktreeCwd)),
+      );
+      yield* fs.writeFileString(
+        path.join(path.dirname(nativePath), "future.jsonl"),
+        `${JSON.stringify({
+          type: "user",
+          nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION + 1,
+          sessionId: "22222222-2222-4222-8222-222222222222",
+          cwd: worktreeCwd,
+          message: { role: "user", content: "future" },
+        })}\n`,
       );
       const hidden = yield* discoverTeleportSessions({
         homes,
@@ -484,7 +680,7 @@ describe("teleport Claude format", () => {
   it.effect("reads a Claude session id from a Windows native path", () =>
     Effect.gen(function* () {
       const parsed = yield* parseClaudeSessionContents({
-        nativePath: "C:\\Users\\Foo\\.claude\\projects\\proj\\abc-session.jsonl",
+        nativePath: `C:\\Users\\Foo\\.claude\\projects\\proj\\${TELEPORT_TEST_SESSION_ID}.jsonl`,
         contents: `${JSON.stringify({
           type: "user",
           cwd: "C:\\Users\\Foo\\proj",
@@ -494,7 +690,7 @@ describe("teleport Claude format", () => {
       });
       assert.equal(parsed._tag, "Some");
       if (parsed._tag === "Some") {
-        assert.equal(parsed.value.externalSessionId, "abc-session");
+        assert.equal(parsed.value.externalSessionId, TELEPORT_TEST_SESSION_ID);
       }
     }),
   );
@@ -514,4 +710,43 @@ describe("teleport Claude format", () => {
       TELEPORT_TEST_SESSION_ID,
     );
   });
+
+  it.effect("refuses to replace a Claude session outside its configured home", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-claude-sandbox-" });
+      const homes: TeleportHomes = {
+        codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [],
+        claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
+      };
+      const outside = path.join(root, "outside.jsonl");
+      const result = yield* claudeTeleportFormat
+        .write({
+          homes,
+          session: sampleTeleportSession("claudeAgent"),
+          existingNativePath: outside,
+        })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure._tag, "TeleportNativeWriteError");
+        if (result.failure._tag === "TeleportNativeWriteError") {
+          assert.equal(result.failure.stage, "unsafe-native-path");
+        }
+      }
+      assert.equal(yield* fs.exists(outside), false);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.merge(
+          NodeServices.layer,
+          ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+        ),
+      ),
+      Effect.provideService(HostProcessPlatform, "linux"),
+    ),
+  );
 });

@@ -111,14 +111,17 @@ export const teleportSessionBelongsToProject = Effect.fn("teleportSessionBelongs
     if (yield* teleportCwdsEquivalent(input.sessionCwd, input.projectCwd)) {
       return true;
     }
-    if (isTeleportCwdWithin(input.sessionCwd, input.projectCwd)) {
+    const canonicalSessionCwd = yield* resolveTeleportCwdPath(input.sessionCwd);
+    const canonicalProjectCwd = yield* resolveTeleportCwdPath(input.projectCwd);
+    if (isTeleportCwdWithin(canonicalSessionCwd, canonicalProjectCwd)) {
       return true;
     }
     for (const extraCwd of input.extraCwds ?? []) {
       if (yield* teleportCwdsEquivalent(input.sessionCwd, extraCwd)) {
         return true;
       }
-      if (isTeleportCwdWithin(input.sessionCwd, extraCwd)) {
+      const canonicalExtraCwd = yield* resolveTeleportCwdPath(extraCwd);
+      if (isTeleportCwdWithin(canonicalSessionCwd, canonicalExtraCwd)) {
         return true;
       }
     }

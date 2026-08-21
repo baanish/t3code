@@ -17,7 +17,13 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { teleportSessionBelongsToProject } from "../cwd.ts";
-import { codexSearchRoots, resolveCodexSessionsRoot } from "../homes.ts";
+import {
+  canonicalizeTeleportNativePath,
+  canonicalizeTeleportNativeWritePath,
+  codexSearchRoots,
+  nativePathIsUnderRoot,
+  resolveCodexSessionsRoot,
+} from "../homes.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import {
@@ -365,8 +371,19 @@ export const codexTeleportFormat: TeleportFormatAdapter = {
         const parsed = yield* readNativeSessionFile({
           nativePath,
           parse: parseCodexSessionContents,
-        });
-        if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
+        }).pipe(
+          Effect.catchTag("TeleportSchemaVersionError", (error) =>
+            Effect.logWarning("teleport.codex.unsupported-session-skipped", {
+              nativePath,
+              foundVersion: error.foundVersion,
+            }).pipe(Effect.as(Option.none<ParsedNativeSession>())),
+          ),
+        );
+        if (
+          Option.isNone(parsed) ||
+          !isSafeTeleportSessionId(parsed.value.externalSessionId) ||
+          !parsed.value.messages.some((message) => message.role === "user")
+        ) {
           continue;
         }
         if (
@@ -405,6 +422,11 @@ export const codexTeleportFormat: TeleportFormatAdapter = {
         reason: `Native Codex session '${input.externalSessionId}' could not be parsed.`,
       });
     }
+    if (!parsed.value.messages.some((message) => message.role === "user")) {
+      return yield* new TeleportDiscoveryError({
+        reason: `Native Codex session '${input.externalSessionId}' contains no importable user text.`,
+      });
+    }
     return parsed.value;
   }),
   write: Effect.fn("writeCodexSession")(function* (input) {
@@ -421,14 +443,24 @@ export const codexTeleportFormat: TeleportFormatAdapter = {
       });
     }
     const now = yield* DateTime.now;
-    const nativePath =
-      input.existingNativePath ??
-      allocateCodexSessionPath({
+    let nativePath: string;
+    if (input.existingNativePath === undefined) {
+      nativePath = allocateCodexSessionPath({
         sessionsRoot,
         sessionId: input.session.externalSessionId,
         createdAt: input.session.createdAt ?? input.session.updatedAt ?? DateTime.formatIso(now),
         join: path.join,
       });
+    } else {
+      const canonicalRoot = yield* canonicalizeTeleportNativePath(sessionsRoot);
+      nativePath = yield* canonicalizeTeleportNativeWritePath(input.existingNativePath);
+      if (!nativePathIsUnderRoot(nativePath, canonicalRoot)) {
+        return yield* new TeleportNativeWriteError({
+          nativePath,
+          stage: "unsafe-native-path",
+        });
+      }
+    }
     const contents = serializeCodexSession({ ...input.session, nativePath });
     yield* writeNativeSessionAtomically({
       filePath: nativePath,

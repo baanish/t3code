@@ -1,6 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off preferSchemaOverJson:off
-import * as NodeCrypto from "node:crypto";
-
+// @effect-diagnostics globalDate:off preferSchemaOverJson:off
 import {
   TELEPORT_NATIVE_FORMAT_VERSION,
   TeleportDiscoveryError,
@@ -22,7 +20,13 @@ import {
   resolveTeleportCwdPath,
   teleportSessionBelongsToProject,
 } from "../cwd.ts";
-import { claudeSearchRoots, resolveClaudeProjectsRootForInstance } from "../homes.ts";
+import {
+  canonicalizeTeleportNativePath,
+  canonicalizeTeleportNativeWritePath,
+  claudeSearchRoots,
+  nativePathIsUnderRoot,
+  resolveClaudeProjectsRootForInstance,
+} from "../homes.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { writeNativeSessionAtomically } from "../nativeWrite.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
@@ -46,6 +50,8 @@ import {
 } from "../types.ts";
 
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
+const CLAUDE_SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 type ClaudeSessionRecord = {
   readonly raw: Record<string, unknown>;
@@ -62,14 +68,21 @@ function isToolResultOnlyContent(content: unknown): boolean {
   );
 }
 
+function isClaudeSessionId(value: string): boolean {
+  return CLAUDE_SESSION_ID_RE.test(value);
+}
+
 export function encodeClaudeProjectPath(cwd: string): string {
   const normalized = normalizeProjectPathForDispatch(cwd);
-  const encoded = normalized.replace(/[^a-zA-Z0-9]/gu, "-");
+  const encoded = normalized.replace(/[^a-zA-Z0-9]/g, "-");
   if (encoded.length <= 200) {
     return encoded;
   }
-  const digest = NodeCrypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-  return `${encoded.slice(0, 200)}${digest}`;
+  let hash = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = ((hash << 5) - hash + normalized.charCodeAt(index)) | 0;
+  }
+  return `${encoded.slice(0, 200)}-${Math.abs(hash).toString(36)}`;
 }
 
 function extractClaudeMessage(record: Record<string, unknown>): NativeTextMessage | undefined {
@@ -155,7 +168,22 @@ function messagesOnPrimaryClaudeBranch(records: ReadonlyArray<ClaudeSessionRecor
   };
 
   const primaryUuids = new Set<string>();
-  let current = conversationRecords.at(-1);
+  let current: ClaudeSessionRecord | undefined;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    const leafUuid =
+      record?.raw.type === "summary" ? nonEmptyString(record.raw.leafUuid) : undefined;
+    if (leafUuid !== undefined) {
+      current = recordsByUuid.get(leafUuid);
+      if (current !== undefined) {
+        break;
+      }
+    }
+  }
+  current ??= conversationRecords.findLast((record) => record.message !== undefined);
+  if (current === undefined) {
+    return allMessages;
+  }
   while (current?.uuid !== undefined) {
     if (primaryUuids.has(current.uuid)) {
       return allMessages;
@@ -238,7 +266,12 @@ export function parseClaudeSessionContents(input: {
         }),
       );
     }
-    sessionId = nonEmptyString(record.sessionId) ?? sessionId;
+    if (
+      sessionId === undefined &&
+      (isClaudeConversationRecord(record) || record.type === "session")
+    ) {
+      sessionId = nonEmptyString(record.sessionId);
+    }
     cwd = nonEmptyString(record.cwd) ?? cwd;
     createdAt = createdAt ?? nonEmptyString(record.timestamp);
     const message = extractClaudeMessage(record);
@@ -276,7 +309,6 @@ export function serializeClaudeSession(session: ParsedNativeSession): string {
     lines.push(
       JSON.stringify({
         type: "session",
-        nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
         uuid: session.externalSessionId,
         parentUuid: null,
         sessionId: session.externalSessionId,
@@ -293,7 +325,6 @@ export function serializeClaudeSession(session: ParsedNativeSession): string {
     lines.push(
       JSON.stringify({
         type: message.role,
-        nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
         uuid,
         parentUuid,
         sessionId: session.externalSessionId,
@@ -340,14 +371,19 @@ export const listClaudeJsonlFiles = Effect.fn("listClaudeJsonlFiles")(function* 
       roots.push(encodedDir);
     }
   }
-  if (roots.length === 0) {
+  // Claude can pin a custom project directory name, and long-path hashing
+  // has changed across releases. Search sibling directories too; callers
+  // still filter every parsed session by its persisted cwd.
+  if (!roots.includes(projectsRoot)) {
     roots.push(projectsRoot);
   }
-  const files: string[] = [];
+  const files = new Set<string>();
   for (const root of roots) {
-    files.push(...(yield* walkJsonl(root)));
+    for (const file of yield* walkJsonl(root)) {
+      files.add(file);
+    }
   }
-  return files;
+  return [...files];
 });
 
 export function toClaudeCandidate(
@@ -392,11 +428,15 @@ const walkJsonl = Effect.fn("walkClaudeJsonl")(function* (root: string) {
         continue;
       }
       if (stat.type === "Directory") {
-        if (name === "subagents") {
+        if (name === "subagents" || name === "tool-results" || name === "workflows") {
           continue;
         }
         stack.push(entryPath);
-      } else if (stat.type === "File" && entryPath.endsWith(".jsonl")) {
+      } else if (
+        stat.type === "File" &&
+        entryPath.endsWith(".jsonl") &&
+        !name.startsWith("agent-")
+      ) {
         files.push(entryPath);
       }
     }
@@ -421,8 +461,20 @@ export const claudeTeleportFormat: TeleportFormatAdapter = {
         const parsed = yield* readNativeSessionFile({
           nativePath,
           parse: parseClaudeSessionContents,
-        });
-        if (Option.isNone(parsed) || !isSafeTeleportSessionId(parsed.value.externalSessionId)) {
+        }).pipe(
+          Effect.catchTag("TeleportSchemaVersionError", (error) =>
+            Effect.logWarning("teleport.claude.unsupported-session-skipped", {
+              nativePath,
+              foundVersion: error.foundVersion,
+            }).pipe(Effect.as(Option.none<ParsedNativeSession>())),
+          ),
+        );
+        if (
+          Option.isNone(parsed) ||
+          !isSafeTeleportSessionId(parsed.value.externalSessionId) ||
+          !isClaudeSessionId(parsed.value.externalSessionId) ||
+          !parsed.value.messages.some((message) => message.role === "user")
+        ) {
           continue;
         }
         if (
@@ -450,6 +502,16 @@ export const claudeTeleportFormat: TeleportFormatAdapter = {
         reason: `Native Claude session '${input.externalSessionId}' could not be parsed.`,
       });
     }
+    if (!isClaudeSessionId(parsed.value.externalSessionId)) {
+      return yield* new TeleportDiscoveryError({
+        reason: `Native Claude session '${input.externalSessionId}' has an invalid session id.`,
+      });
+    }
+    if (!parsed.value.messages.some((message) => message.role === "user")) {
+      return yield* new TeleportDiscoveryError({
+        reason: `Native Claude session '${input.externalSessionId}' contains no importable user text.`,
+      });
+    }
     return parsed.value;
   }),
   write: Effect.fn("writeClaudeSession")(function* (input) {
@@ -465,14 +527,24 @@ export const claudeTeleportFormat: TeleportFormatAdapter = {
         sessionId: input.session.externalSessionId,
       });
     }
-    const nativePath =
-      input.existingNativePath ??
-      allocateClaudeSessionPath({
+    let nativePath: string;
+    if (input.existingNativePath === undefined) {
+      nativePath = allocateClaudeSessionPath({
         projectsRoot,
         cwd: input.session.cwd,
         sessionId: input.session.externalSessionId,
         join: path.join,
       });
+    } else {
+      const canonicalRoot = yield* canonicalizeTeleportNativePath(projectsRoot);
+      nativePath = yield* canonicalizeTeleportNativeWritePath(input.existingNativePath);
+      if (!nativePathIsUnderRoot(nativePath, canonicalRoot)) {
+        return yield* new TeleportNativeWriteError({
+          nativePath,
+          stage: "unsafe-native-path",
+        });
+      }
+    }
     const contents = serializeClaudeSession({ ...input.session, nativePath });
     yield* writeNativeSessionAtomically({
       filePath: nativePath,
