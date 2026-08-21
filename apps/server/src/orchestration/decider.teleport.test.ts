@@ -170,6 +170,108 @@ it.layer(NodeServices.layer)("teleport thread decider", (it) => {
     }),
   );
 
+  it.effect("allows immediate export after importing recent native history", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.teleport.set",
+          commandId: CommandId.make("cmd-export-after-import"),
+          threadId: ThreadId.make("thread-1"),
+          teleport: NATIVE_TELEPORT,
+          createdAt: "2026-01-01T00:00:01.000Z",
+        },
+        readModel: makeReadModel({
+          teleport: {
+            ...NATIVE_TELEPORT,
+            presence: "t3",
+          },
+          messages: [
+            {
+              id: MessageId.make("imported-user"),
+              role: "user",
+              text: "imported prompt",
+              turnId: null,
+              streaming: false,
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+        }),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events[0]?.type).toBe("thread.teleported");
+    }),
+  );
+
+  it.effect("still rejects export when a T3 turn queued after the last import", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.teleport.set",
+          commandId: CommandId.make("cmd-export-queued"),
+          threadId: ThreadId.make("thread-1"),
+          teleport: NATIVE_TELEPORT,
+          createdAt: "2026-01-01T00:00:02.000Z",
+        },
+        readModel: makeReadModel({
+          teleport: {
+            ...NATIVE_TELEPORT,
+            presence: "t3",
+          },
+          messages: [
+            {
+              id: MessageId.make("queued-user"),
+              role: "user",
+              text: "queued prompt",
+              turnId: null,
+              streaming: false,
+              createdAt: "2026-01-01T00:00:01.000Z",
+              updatedAt: "2026-01-01T00:00:01.000Z",
+            },
+          ],
+        }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      if (error._tag === "OrchestrationCommandInvariantError") {
+        expect(error.detail).toContain("queued");
+      }
+    }),
+  );
+
+  it.effect("allows re-import fencing from native presence with recent history", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.teleport.set",
+          commandId: CommandId.make("cmd-reimport-native"),
+          threadId: ThreadId.make("thread-1"),
+          teleport: {
+            ...NATIVE_TELEPORT,
+            presence: "importing",
+            restorePresence: "native",
+          },
+          createdAt: "2026-01-01T00:00:01.000Z",
+        },
+        readModel: makeReadModel({
+          teleport: NATIVE_TELEPORT,
+          messages: [
+            {
+              id: MessageId.make("native-user"),
+              role: "user",
+              text: "native prompt",
+              turnId: null,
+              streaming: false,
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+        }),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events[0]?.type).toBe("thread.teleported");
+    }),
+  );
+
   it.effect("rejects history replace while the T3 session is running", () =>
     Effect.gen(function* () {
       const error = yield* decideOrchestrationCommand({

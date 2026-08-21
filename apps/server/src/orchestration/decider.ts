@@ -116,6 +116,7 @@ function threadHasQueuedTurnStart(
     readonly session: { readonly status: string } | null;
   },
   occurredAt: string,
+  latestHandledMessageAt?: string,
 ): boolean {
   const latestUserMessageAtMs = thread.messages.reduce(
     (latest, message) =>
@@ -135,10 +136,14 @@ function threadHasQueuedTurnStart(
           ),
         );
   const queuedAgeMs = Date.parse(occurredAt) - latestUserMessageAtMs;
+  const latestHandledMessageAtMs =
+    latestHandledMessageAt === undefined
+      ? Number.NEGATIVE_INFINITY
+      : Date.parse(latestHandledMessageAt);
   return (
     thread.session?.status !== "error" &&
     Number.isFinite(latestUserMessageAtMs) &&
-    latestUserMessageAtMs > latestTurnAtMs &&
+    latestUserMessageAtMs > Math.max(latestTurnAtMs, latestHandledMessageAtMs) &&
     Math.abs(queuedAgeMs) <= QUEUED_TURN_START_GRACE_MS
   );
 }
@@ -1464,7 +1469,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 : "Cannot teleport a thread to the native CLI while its T3 session is starting or running.",
           });
         }
-        if (threadHasQueuedTurnStart(thread, command.createdAt)) {
+        const canHaveQueuedT3Turn =
+          thread.teleport?.presence !== "native" && thread.teleport?.presence !== "importing";
+        if (
+          canHaveQueuedT3Turn &&
+          threadHasQueuedTurnStart(
+            thread,
+            command.createdAt,
+            thread.teleport?.presence === "t3" ? thread.teleport.lastSyncedAt : undefined,
+          )
+        ) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
             detail:

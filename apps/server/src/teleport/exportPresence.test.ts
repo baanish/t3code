@@ -6,6 +6,7 @@ import {
   isPendingTeleportNativePath,
   pendingTeleportNativePath,
   realExportNativePath,
+  recoveredInterruptedExportState,
   teleportExportPresenceOnFailure,
 } from "./exportPresence.ts";
 
@@ -24,6 +25,51 @@ describe("teleport export presence", () => {
       "/home/user/.codex/sessions/rollout.jsonl",
     );
     assert.equal(realExportNativePath(undefined), undefined);
+  });
+
+  it("recovers a pending export to T3 when no native file was written", () => {
+    assert.deepEqual(
+      recoveredInterruptedExportState(
+        {
+          presence: "native",
+          provider: "codex",
+          externalSessionId: "11111111-1111-4111-8111-111111111111",
+          nativePath: "teleport-pending:codex:11111111-1111-4111-8111-111111111111",
+          lastSyncedAt: "2026-08-14T22:00:00.000Z",
+        },
+        undefined,
+      ),
+      {
+        presence: "t3",
+        provider: "codex",
+        externalSessionId: "11111111-1111-4111-8111-111111111111",
+        nativePath: "teleport-pending:codex:11111111-1111-4111-8111-111111111111",
+        lastSyncedAt: "2026-08-14T22:00:00.000Z",
+      },
+    );
+  });
+
+  it("recovers a pending export to the discovered native file", () => {
+    const nativePath = "/home/user/.codex/sessions/rollout.jsonl";
+    assert.deepEqual(
+      recoveredInterruptedExportState(
+        {
+          presence: "native",
+          provider: "codex",
+          externalSessionId: "11111111-1111-4111-8111-111111111111",
+          nativePath: "teleport-pending:codex:11111111-1111-4111-8111-111111111111",
+          lastSyncedAt: "2026-08-14T22:00:00.000Z",
+        },
+        nativePath,
+      ),
+      {
+        presence: "native",
+        provider: "codex",
+        externalSessionId: "11111111-1111-4111-8111-111111111111",
+        nativePath,
+        lastSyncedAt: "2026-08-14T22:00:00.000Z",
+      },
+    );
   });
 
   it.effect("reverts presence when the native file was never written", () =>

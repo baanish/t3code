@@ -127,7 +127,6 @@ export const runInPlaceTeleportImport = <E, R = never>(
 
 export type NewThreadTeleportImportPorts<E, R = never> = {
   readonly beginImporting: Effect.Effect<void, E, R>;
-  readonly persistDirectory: Effect.Effect<void, E, R>;
   readonly commitOrchestration: Effect.Effect<void, E, R>;
   readonly finalizeDirectory: Effect.Effect<void, E, R>;
 };
@@ -137,9 +136,14 @@ export const runNewThreadTeleportImport = <E, R = never>(
 ): Effect.Effect<void, E, R> =>
   Effect.gen(function* () {
     yield* ports.beginImporting;
-    yield* ports.persistDirectory;
     yield* ports.commitOrchestration;
-    yield* ports.finalizeDirectory;
+    yield* ports.finalizeDirectory.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("teleport.import.directory-finalize-skipped").pipe(
+          Effect.annotateLogs({ cause: String(cause) }),
+        ),
+      ),
+    );
   });
 
 /**

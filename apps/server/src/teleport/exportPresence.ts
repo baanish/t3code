@@ -1,4 +1,4 @@
-import type { TeleportProvider } from "@t3tools/contracts";
+import type { TeleportProvider, TeleportThreadState } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 export const PENDING_TELEPORT_NATIVE_PATH_PREFIX = "teleport-pending:";
@@ -19,6 +19,23 @@ export function realExportNativePath(nativePath: string | undefined): string | u
     return undefined;
   }
   return nativePath;
+}
+
+export function recoveredInterruptedExportState(
+  teleport: TeleportThreadState,
+  discoveredNativePath: string | undefined,
+): TeleportThreadState | null {
+  if (
+    teleport.presence !== "native" ||
+    !isPendingTeleportNativePath(teleport.nativePath)
+  ) {
+    return null;
+  }
+  return {
+    ...teleport,
+    presence: discoveredNativePath === undefined ? "t3" : "native",
+    nativePath: discoveredNativePath ?? teleport.nativePath,
+  };
 }
 
 /**

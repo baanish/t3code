@@ -16,6 +16,7 @@ import {
   restorePresenceForImport,
   restoredTeleportStateAfterInterruptedImport,
   runInPlaceTeleportImport,
+  runNewThreadTeleportImport,
 } from "./importTransaction.ts";
 
 const BASE_TELEPORT = {
@@ -251,6 +252,58 @@ describe("teleport import transaction", () => {
         "finalizeDirectory",
         "updateTitle",
       ]);
+    }),
+  );
+
+  it.effect("claims the provider directory only after a new-thread T3 commit", () =>
+    Effect.gen(function* () {
+      const steps = yield* Ref.make<string[]>([]);
+      const record = (step: string) => Ref.update(steps, (current) => [...current, step]);
+      yield* runNewThreadTeleportImport({
+        beginImporting: record("beginImporting"),
+        commitOrchestration: record("commitOrchestration"),
+        finalizeDirectory: record("finalizeDirectory"),
+      });
+      assert.deepEqual(yield* Ref.get(steps), [
+        "beginImporting",
+        "commitOrchestration",
+        "finalizeDirectory",
+      ]);
+    }),
+  );
+
+  it.effect("keeps a committed new-thread import when directory finalize dies", () =>
+    Effect.gen(function* () {
+      const steps = yield* Ref.make<string[]>([]);
+      const record = (step: string) => Ref.update(steps, (current) => [...current, step]);
+      yield* runNewThreadTeleportImport({
+        beginImporting: record("beginImporting"),
+        commitOrchestration: record("commitOrchestration"),
+        finalizeDirectory: record("finalizeDirectory").pipe(
+          Effect.flatMap(() => Effect.die("directory finalize defect")),
+        ),
+      });
+      assert.deepEqual(yield* Ref.get(steps), [
+        "beginImporting",
+        "commitOrchestration",
+        "finalizeDirectory",
+      ]);
+    }),
+  );
+
+  it.effect("fails before directory persistence when a new-thread T3 commit fails", () =>
+    Effect.gen(function* () {
+      const steps = yield* Ref.make<string[]>([]);
+      const record = (step: string) => Ref.update(steps, (current) => [...current, step]);
+      const error = yield* runNewThreadTeleportImport({
+        beginImporting: record("beginImporting"),
+        commitOrchestration: record("commitOrchestration").pipe(
+          Effect.flatMap(() => Effect.fail(importStepError("commitOrchestration"))),
+        ),
+        finalizeDirectory: record("finalizeDirectory"),
+      }).pipe(Effect.flip);
+      assert.equal(error.step, "commitOrchestration");
+      assert.deepEqual(yield* Ref.get(steps), ["beginImporting", "commitOrchestration"]);
     }),
   );
 

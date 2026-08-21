@@ -65,8 +65,10 @@ import {
 } from "./cwd.ts";
 import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
 import {
+  isPendingTeleportNativePath,
   pendingTeleportNativePath,
   realExportNativePath,
+  recoveredInterruptedExportState,
   teleportExportPresenceOnFailure,
 } from "./exportPresence.ts";
 import * as TeleportFormatRegistry from "./formats/registry.ts";
@@ -821,7 +823,6 @@ export const make = Effect.gen(function* () {
                       createdAt: now,
                       reason: "Failed to persist teleport import presence.",
                     }),
-                    persistDirectory: persistDirectoryBinding(createdThreadId, "importing"),
                     commitOrchestration: dispatchTeleportImport({
                       threadId: createdThreadId,
                       teleport: committedTeleport,
@@ -944,9 +945,13 @@ export const make = Effect.gen(function* () {
             });
           }
           const provider = yield* toTeleportProvider(driverKind);
-          const existingPayload = Option.isSome(binding)
+          const persistedPayload = Option.isSome(binding)
             ? readTeleportRuntimePayload(binding.value.runtimePayload)
             : undefined;
+          const existingPayload =
+            persistedPayload && isPendingTeleportNativePath(persistedPayload.nativePath)
+              ? { ...persistedPayload, presence: "t3" as const }
+              : persistedPayload;
           if (resolveTeleportPresence(existingPayload) === "native") {
             return yield* new TeleportInvalidInputError({
               reason: "This thread is already in the native CLI. Import it before exporting again.",
@@ -1252,14 +1257,15 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  const recoverInterruptedImports = Effect.gen(function* () {
+  const recoverInterruptedTeleports = Effect.gen(function* () {
     const now = yield* nowIso;
     const [activeShell, archivedShell] = yield* Effect.all([
       snapshotQuery.getShellSnapshot(),
       snapshotQuery.getArchivedShellSnapshot(),
     ]);
+    const threads = [...activeShell.threads, ...archivedShell.threads];
     yield* recoverInterruptedImportTeleports({
-      threads: [...activeShell.threads, ...archivedShell.threads].map((thread) => ({
+      threads: threads.map((thread) => ({
         id: thread.id,
         ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
       })),
@@ -1272,9 +1278,101 @@ export const make = Effect.gen(function* () {
           reason: "Failed to recover an interrupted teleport import.",
         }),
     });
-  }).pipe(Effect.catchCause(() => Effect.logWarning("teleport.import.recovery-failed")));
 
-  yield* recoverInterruptedImports;
+    const pendingExports = threads.filter(
+      (thread) =>
+        thread.teleport?.presence === "native" &&
+        isPendingTeleportNativePath(thread.teleport.nativePath),
+    );
+    if (pendingExports.length === 0) {
+      return;
+    }
+
+    const settings = yield* settingsService.getSettings;
+    const homes = yield* resolveTeleportHomes(settings);
+    for (const thread of pendingExports) {
+      yield* Effect.gen(function* () {
+        const pending = thread.teleport;
+        if (pending == null) {
+          return;
+        }
+        const cwdSource = resolveThreadWorkspaceCwd({
+          thread,
+          projects: activeShell.projects,
+        });
+        const discovered =
+          cwdSource === undefined
+            ? undefined
+            : yield* resolveTeleportCwdPath(cwdSource).pipe(
+                Effect.flatMap((cwd) =>
+                  loadTeleportSession({
+                    homes,
+                    provider: pending.provider,
+                    externalSessionId: pending.externalSessionId,
+                    cwd,
+                    ...(pending.providerInstanceId === undefined
+                      ? {}
+                      : { providerInstanceId: pending.providerInstanceId }),
+                  }),
+                ),
+                Effect.map((session): ParsedNativeSession | undefined => session),
+                Effect.catchCause(() => Effect.succeed(undefined)),
+              );
+        const recoveredTeleport = recoveredInterruptedExportState(
+          pending,
+          discovered?.nativePath,
+        );
+        if (recoveredTeleport === null) {
+          return;
+        }
+        yield* dispatchTeleportSet({
+          threadId: thread.id,
+          teleport: recoveredTeleport,
+          createdAt: now,
+          reason: "Failed to recover an interrupted teleport export.",
+        });
+
+        const adapter = formats.get(pending.provider);
+        if (!adapter) {
+          return;
+        }
+        const driver = ProviderDriverKind.make(pending.provider);
+        const providerInstanceId =
+          pending.providerInstanceId ?? defaultInstanceIdForDriver(driver);
+        const runtimePayload: TeleportRuntimePayload = {
+          schemaVersion: TELEPORT_SCHEMA_VERSION,
+          externalSessionId: pending.externalSessionId,
+          nativePath: recoveredTeleport.nativePath,
+          lastSyncDirection: "export",
+          lastSyncedAt: pending.lastSyncedAt,
+          nativeFormatVersion:
+            discovered?.nativeFormatVersion ?? TELEPORT_NATIVE_FORMAT_VERSION,
+          presence: recoveredTeleport.presence,
+        };
+        yield* directory.upsert({
+          threadId: thread.id,
+          provider: driver,
+          providerInstanceId,
+          status: "stopped",
+          resumeCursor: buildTeleportResumeCursor({
+            provider: pending.provider,
+            externalSessionId: pending.externalSessionId,
+            adapter,
+          }),
+          runtimePayload: { teleport: runtimePayload },
+        });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("teleport.export.recovery-skipped", {
+            threadId: thread.id,
+            cause: String(cause),
+          }),
+        ),
+      );
+    }
+  }).pipe(Effect.catchCause(() => Effect.logWarning("teleport.recovery-failed")));
+
+  yield* recoverInterruptedTeleports;
 
   return TeleportService.of({
     listSessions,
