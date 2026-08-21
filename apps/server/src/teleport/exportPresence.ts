@@ -18,10 +18,7 @@ export function recoveredInterruptedExportState(
   teleport: TeleportThreadState,
   discoveredNativePath: string | undefined,
 ): TeleportThreadState | null {
-  if (
-    teleport.presence !== "native" ||
-    !isPendingTeleportNativePath(teleport.nativePath)
-  ) {
+  if (teleport.presence !== "native" || !isPendingTeleportNativePath(teleport.nativePath)) {
     return null;
   }
   return {

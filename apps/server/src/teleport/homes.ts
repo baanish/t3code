@@ -152,21 +152,21 @@ export const canonicalizeTeleportNativePath = Effect.fn("canonicalizeTeleportNat
   },
 );
 
-export const canonicalizeTeleportNativeWritePath = Effect.fn(
-  "canonicalizeTeleportNativeWritePath",
-)(function* (value: string): Effect.fn.Return<string, never, FileSystem.FileSystem | Path.Path> {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const resolved = path.resolve(value);
-  return yield* fs.realPath(resolved).pipe(
-    Effect.catch(() =>
-      fs.realPath(path.dirname(resolved)).pipe(
-        Effect.orElseSucceed(() => path.dirname(resolved)),
-        Effect.map((parent) => path.join(parent, path.basename(resolved))),
+export const canonicalizeTeleportNativeWritePath = Effect.fn("canonicalizeTeleportNativeWritePath")(
+  function* (value: string): Effect.fn.Return<string, never, FileSystem.FileSystem | Path.Path> {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const resolved = path.resolve(value);
+    return yield* fs.realPath(resolved).pipe(
+      Effect.catch(() =>
+        fs.realPath(path.dirname(resolved)).pipe(
+          Effect.orElseSucceed(() => path.dirname(resolved)),
+          Effect.map((parent) => path.join(parent, path.basename(resolved))),
+        ),
       ),
-    ),
-  );
-});
+    );
+  },
+);
 
 export function claudeSearchRoots(homes: TeleportHomes): ReadonlyArray<TeleportInstanceRoot> {
   return uniqueInstanceRoots([

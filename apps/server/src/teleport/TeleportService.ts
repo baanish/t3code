@@ -1316,10 +1316,7 @@ export const make = Effect.gen(function* () {
                 Effect.map((session): ParsedNativeSession | undefined => session),
                 Effect.catchCause(() => Effect.succeed(undefined)),
               );
-        const recoveredTeleport = recoveredInterruptedExportState(
-          pending,
-          discovered?.nativePath,
-        );
+        const recoveredTeleport = recoveredInterruptedExportState(pending, discovered?.nativePath);
         if (recoveredTeleport === null) {
           return;
         }
@@ -1335,16 +1332,14 @@ export const make = Effect.gen(function* () {
           return;
         }
         const driver = ProviderDriverKind.make(pending.provider);
-        const providerInstanceId =
-          pending.providerInstanceId ?? defaultInstanceIdForDriver(driver);
+        const providerInstanceId = pending.providerInstanceId ?? defaultInstanceIdForDriver(driver);
         const runtimePayload: TeleportRuntimePayload = {
           schemaVersion: TELEPORT_SCHEMA_VERSION,
           externalSessionId: pending.externalSessionId,
           nativePath: recoveredTeleport.nativePath,
           lastSyncDirection: "export",
           lastSyncedAt: pending.lastSyncedAt,
-          nativeFormatVersion:
-            discovered?.nativeFormatVersion ?? TELEPORT_NATIVE_FORMAT_VERSION,
+          nativeFormatVersion: discovered?.nativeFormatVersion ?? TELEPORT_NATIVE_FORMAT_VERSION,
           presence: recoveredTeleport.presence,
         };
         yield* directory.upsert({

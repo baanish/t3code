@@ -569,10 +569,7 @@ describe("teleport Claude format", () => {
 
   it("matches Claude project folder encoding for emoji and long paths", () => {
     assert.equal(encodeClaudeProjectPath("/tmp/proj-😀-x"), "-tmp-proj----x");
-    assert.equal(
-      encodeClaudeProjectPath(`/${"a".repeat(210)}`),
-      `-${"a".repeat(199)}-djaaup`,
-    );
+    assert.equal(encodeClaudeProjectPath(`/${"a".repeat(210)}`), `-${"a".repeat(199)}-djaaup`);
   });
 
   it.effect("lists Claude sessions from the realpath-encoded folder", () =>

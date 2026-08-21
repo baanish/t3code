@@ -109,10 +109,7 @@ describe("resolveTeleportHomes", () => {
       assert.equal(homes.claudeProjectsRoot, path.join(defaultHome, "projects"));
       assert.equal(homes.extraClaudeProjectsRoots.length, 1);
       assert.equal(homes.extraClaudeProjectsRoots[0]?.instanceId, "claude_work");
-      assert.equal(
-        homes.extraClaudeProjectsRoots[0]?.root,
-        path.join(workHome, "projects"),
-      );
+      assert.equal(homes.extraClaudeProjectsRoots[0]?.root, path.join(workHome, "projects"));
       assert.equal(
         resolveClaudeProjectsRootForInstance(homes, ProviderInstanceId.make("claude_work")),
         path.join(workHome, "projects"),
@@ -134,10 +131,7 @@ describe("resolveTeleportHomes", () => {
           },
         }),
       );
-      assert.equal(
-        homes.claudeProjectsRoot,
-        path.join(NodeOS.homedir(), ".claude", "projects"),
-      );
+      assert.equal(homes.claudeProjectsRoot, path.join(NodeOS.homedir(), ".claude", "projects"));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

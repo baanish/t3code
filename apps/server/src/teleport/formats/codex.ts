@@ -50,10 +50,7 @@ import {
 const CODEX = ProviderDriverKind.make("codex");
 
 function isForkedSessionMeta(payload: Record<string, unknown>): boolean {
-  if (
-    typeof payload.forked_from_id === "string" ||
-    typeof payload.parent_thread_id === "string"
-  ) {
+  if (typeof payload.forked_from_id === "string" || typeof payload.parent_thread_id === "string") {
     return true;
   }
   const source = payload.source;
