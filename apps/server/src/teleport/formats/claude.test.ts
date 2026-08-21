@@ -70,6 +70,222 @@ describe("teleport Claude format", () => {
     }),
   );
 
+  it.effect("imports only the latest Claude rewind branch", () =>
+    Effect.gen(function* () {
+      const record = (input: {
+        readonly type: "user" | "assistant";
+        readonly uuid: string;
+        readonly parentUuid: string | null;
+        readonly text: string;
+      }) =>
+        JSON.stringify({
+          type: input.type,
+          uuid: input.uuid,
+          parentUuid: input.parentUuid,
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          timestamp: TELEPORT_TEST_CREATED_AT,
+          message: {
+            role: input.type,
+            content: [{ type: "text", text: input.text }],
+          },
+        });
+      const contents = [
+        record({ type: "user", uuid: "root", parentUuid: null, text: "root prompt" }),
+        record({ type: "assistant", uuid: "base", parentUuid: "root", text: "base answer" }),
+        record({ type: "user", uuid: "old-user", parentUuid: "base", text: "abandoned prompt" }),
+        record({
+          type: "assistant",
+          uuid: "old-assistant",
+          parentUuid: "old-user",
+          text: "abandoned answer",
+        }),
+        record({ type: "user", uuid: "new-user", parentUuid: "base", text: "kept prompt" }),
+        record({
+          type: "assistant",
+          uuid: "new-assistant",
+          parentUuid: "new-user",
+          text: "kept answer",
+        }),
+      ].join("\n");
+
+      const parsed = yield* parseClaudeSessionContents({
+        contents,
+        nativePath: "/tmp/claude-rewind.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.deepEqual(
+          parsed.value.messages.map((message) => message.text),
+          ["root prompt", "base answer", "kept prompt", "kept answer"],
+        );
+      }
+    }),
+  );
+
+  it.effect("selects the primary path across many generated Claude rewind branches", () =>
+    Effect.gen(function* () {
+      const records: Record<string, unknown>[] = [
+        {
+          type: "user",
+          uuid: "root",
+          parentUuid: null,
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "user", content: "root prompt" },
+        },
+        {
+          type: "assistant",
+          uuid: "fork",
+          parentUuid: "root",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "assistant", content: "fork answer" },
+        },
+      ];
+      for (let branch = 0; branch < 128; branch += 1) {
+        records.push(
+          {
+            type: "user",
+            uuid: `user-${branch}`,
+            parentUuid: "fork",
+            sessionId: TELEPORT_TEST_SESSION_ID,
+            cwd: "/workspace",
+            message: { role: "user", content: `prompt-${branch}` },
+          },
+          {
+            type: "assistant",
+            uuid: `assistant-${branch}`,
+            parentUuid: `user-${branch}`,
+            sessionId: TELEPORT_TEST_SESSION_ID,
+            cwd: "/workspace",
+            message: { role: "assistant", content: `answer-${branch}` },
+          },
+        );
+      }
+
+      const parsed = yield* parseClaudeSessionContents({
+        contents: records.map((record) => JSON.stringify(record)).join("\n"),
+        nativePath: "/tmp/claude-many-rewinds.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.deepEqual(
+          parsed.value.messages.map((message) => message.text),
+          ["root prompt", "fork answer", "prompt-127", "answer-127"],
+        );
+      }
+    }),
+  );
+
+  it.effect("falls back to the flat Claude transcript when parent links are incomplete", () =>
+    Effect.gen(function* () {
+      const contents = [
+        {
+          type: "user",
+          uuid: "root",
+          parentUuid: null,
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "user", content: "first root" },
+        },
+        {
+          type: "assistant",
+          uuid: "detached",
+          parentUuid: "missing-parent",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "assistant", content: "still preserve me" },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n");
+
+      const parsed = yield* parseClaudeSessionContents({
+        contents,
+        nativePath: "/tmp/claude-broken-chain.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.deepEqual(
+          parsed.value.messages.map((message) => message.text),
+          ["first root", "still preserve me"],
+        );
+      }
+    }),
+  );
+
+  it.effect("stitches Claude compact boundaries through logicalParentUuid", () =>
+    Effect.gen(function* () {
+      const records = [
+        {
+          type: "user",
+          uuid: "root",
+          parentUuid: null,
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "user", content: "before compact" },
+        },
+        {
+          type: "assistant",
+          uuid: "before-boundary",
+          parentUuid: "root",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "assistant", content: "before answer" },
+        },
+        {
+          type: "system",
+          subtype: "compact_boundary",
+          uuid: "boundary",
+          parentUuid: null,
+          logicalParentUuid: "before-boundary",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+        },
+        {
+          type: "user",
+          uuid: "after-boundary",
+          parentUuid: "boundary",
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          message: { role: "user", content: "after compact" },
+        },
+      ];
+      const parsed = yield* parseClaudeSessionContents({
+        contents: records.map((record) => JSON.stringify(record)).join("\n"),
+        nativePath: "/tmp/claude-compact.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.deepEqual(
+          parsed.value.messages.map((message) => message.text),
+          ["before compact", "before answer", "after compact"],
+        );
+      }
+    }),
+  );
+
+  it.effect("preserves leading and trailing whitespace in Claude message text", () =>
+    Effect.gen(function* () {
+      const contents = `${JSON.stringify({
+        type: "user",
+        sessionId: TELEPORT_TEST_SESSION_ID,
+        cwd: "/workspace",
+        timestamp: TELEPORT_TEST_CREATED_AT,
+        message: { role: "user", content: [{ type: "text", text: "  keep indent  \n" }] },
+      })}\n`;
+      const parsed = yield* parseClaudeSessionContents({
+        contents,
+        nativePath: "/tmp/claude-whitespace.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.messages[0]?.text, "  keep indent  \n");
+      }
+    }),
+  );
+
   it.effect("skips Claude meta and slash-command caveat records", () =>
     Effect.gen(function* () {
       const contents = `${JSON.stringify({
@@ -188,6 +404,8 @@ describe("teleport Claude format", () => {
       encodeClaudeProjectPath("C:\\Users\\Foo\\proj\\"),
       encodeClaudeProjectPath("C:\\Users\\Foo\\proj"),
     );
+    const longPath = `/${"long-segment/".repeat(30)}project`;
+    assert.equal(encodeClaudeProjectPath(`${longPath}/`), encodeClaudeProjectPath(longPath));
   });
 
   it.effect("lists Claude sessions from the realpath-encoded folder", () =>

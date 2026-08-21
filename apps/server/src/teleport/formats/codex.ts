@@ -44,7 +44,10 @@ import {
 const CODEX = ProviderDriverKind.make("codex");
 
 function isForkedSessionMeta(payload: Record<string, unknown>): boolean {
-  if (typeof payload.forked_from_id === "string") {
+  if (
+    typeof payload.forked_from_id === "string" ||
+    typeof payload.parent_thread_id === "string"
+  ) {
     return true;
   }
   const source = payload.source;
@@ -119,11 +122,13 @@ export function parseCodexSessionContents(input: {
   }
 
   let sessionId: string | undefined;
-  let cwd: string | undefined;
+  let sessionCwd: string | undefined;
+  let turnCwd: string | undefined;
   let createdAt: string | undefined;
   let title: string | undefined;
   let nativeFormatVersion: number = TELEPORT_NATIVE_FORMAT_VERSION;
   let forked = false;
+  let sessionMetaSeen = false;
   const messages: NativeTextMessage[] = [];
 
   for (const line of lines) {
@@ -147,6 +152,10 @@ export function parseCodexSessionContents(input: {
     }
 
     if (event.type === "session_meta") {
+      if (sessionMetaSeen) {
+        continue;
+      }
+      sessionMetaSeen = true;
       const payload = isRecord(event.payload) ? event.payload : undefined;
       if (!payload) {
         continue;
@@ -156,7 +165,7 @@ export function parseCodexSessionContents(input: {
         continue;
       }
       sessionId = nonEmptyString(payload.id) ?? nonEmptyString(payload.session_id) ?? sessionId;
-      cwd = nonEmptyString(payload.cwd) ?? cwd;
+      sessionCwd = nonEmptyString(payload.cwd) ?? sessionCwd;
       createdAt = nonEmptyString(event.timestamp) ?? nonEmptyString(payload.timestamp) ?? createdAt;
       title = nonEmptyString(payload.title) ?? title;
       continue;
@@ -164,7 +173,7 @@ export function parseCodexSessionContents(input: {
 
     if (event.type === "turn_context") {
       const payload = isRecord(event.payload) ? event.payload : undefined;
-      cwd = nonEmptyString(payload?.cwd) ?? cwd;
+      turnCwd = nonEmptyString(payload?.cwd) ?? turnCwd;
       continue;
     }
 
@@ -179,6 +188,7 @@ export function parseCodexSessionContents(input: {
   }
 
   const externalSessionId = sessionId ?? uuidFromPath(input.nativePath);
+  const cwd = sessionCwd ?? turnCwd;
   if (!externalSessionId || !cwd) {
     return Effect.succeed(Option.none());
   }
@@ -275,7 +285,7 @@ export function allocateCodexSessionPath(input: {
   const year = String(safeDate.getUTCFullYear());
   const month = String(safeDate.getUTCMonth() + 1).padStart(2, "0");
   const day = String(safeDate.getUTCDate()).padStart(2, "0");
-  const stamp = safeDate.toISOString().replaceAll(":", "-");
+  const stamp = safeDate.toISOString().slice(0, 19).replaceAll(":", "-");
   return input.join(
     input.sessionsRoot,
     year,
@@ -344,7 +354,7 @@ const walkFiles = Effect.fn("walkFiles")(function* (
 export const codexTeleportFormat: TeleportFormatAdapter = {
   provider: "codex",
   list: Effect.fn("listCodexSessions")(function* (input) {
-    const sessions = [];
+    const sessions = new Map<string, TeleportSessionCandidate>();
     const seen = new Set<string>();
     for (const home of codexSearchRoots(input.homes)) {
       const files = yield* listCodexJsonlFiles(home.root);
@@ -369,10 +379,21 @@ export const codexTeleportFormat: TeleportFormatAdapter = {
           continue;
         }
         seen.add(nativePath);
-        sessions.push(toCodexCandidate(parsed.value, home.instanceId));
+        const candidate = toCodexCandidate(parsed.value, home.instanceId);
+        const key = `${candidate.providerInstanceId}\0${candidate.externalSessionId}`;
+        const existing = sessions.get(key);
+        const candidateAt = candidate.updatedAt ?? candidate.createdAt ?? "";
+        const existingAt = existing?.updatedAt ?? existing?.createdAt ?? "";
+        if (
+          existing === undefined ||
+          candidateAt > existingAt ||
+          (candidateAt === existingAt && candidate.nativePath > existing.nativePath)
+        ) {
+          sessions.set(key, candidate);
+        }
       }
     }
-    return sessions;
+    return [...sessions.values()];
   }),
   load: Effect.fn("loadCodexSession")(function* (input) {
     const parsed = yield* readNativeSessionFile({

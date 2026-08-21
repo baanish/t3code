@@ -47,6 +47,12 @@ import {
 
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
 
+type ClaudeSessionRecord = {
+  readonly raw: Record<string, unknown>;
+  readonly message: NativeTextMessage | undefined;
+  readonly uuid: string | undefined;
+};
+
 function isToolResultOnlyContent(content: unknown): boolean {
   if (!Array.isArray(content) || content.length === 0) {
     return false;
@@ -57,11 +63,12 @@ function isToolResultOnlyContent(content: unknown): boolean {
 }
 
 export function encodeClaudeProjectPath(cwd: string): string {
-  const encoded = normalizeProjectPathForDispatch(cwd).replace(/[^a-zA-Z0-9]/gu, "-");
+  const normalized = normalizeProjectPathForDispatch(cwd);
+  const encoded = normalized.replace(/[^a-zA-Z0-9]/gu, "-");
   if (encoded.length <= 200) {
     return encoded;
   }
-  const digest = NodeCrypto.createHash("sha256").update(cwd).digest("hex").slice(0, 16);
+  const digest = NodeCrypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16);
   return `${encoded.slice(0, 200)}${digest}`;
 }
 
@@ -101,6 +108,102 @@ function extractClaudeMessage(record: Record<string, unknown>): NativeTextMessag
   });
 }
 
+function isClaudeConversationRecord(record: Record<string, unknown>): boolean {
+  return (
+    record.isSidechain !== true &&
+    record.isMeta !== true &&
+    (record.type === "user" || record.type === "assistant")
+  );
+}
+
+function messagesOnPrimaryClaudeBranch(records: ReadonlyArray<ClaudeSessionRecord>) {
+  const allMessages = records.flatMap((record) =>
+    record.message === undefined ? [] : [record.message],
+  );
+  const conversationRecords = records.filter((record) => isClaudeConversationRecord(record.raw));
+  if (
+    conversationRecords.length === 0 ||
+    conversationRecords.some((record) => record.uuid === undefined)
+  ) {
+    return allMessages;
+  }
+
+  const recordsByUuid = new Map<string, ClaudeSessionRecord>();
+  for (const record of records) {
+    if (record.uuid === undefined) {
+      continue;
+    }
+    if (recordsByUuid.has(record.uuid)) {
+      return allMessages;
+    }
+    recordsByUuid.set(record.uuid, record);
+  }
+
+  const parentOf = (record: ClaudeSessionRecord): string | null | undefined => {
+    const parentUuid = nonEmptyString(record.raw.parentUuid);
+    if (parentUuid !== undefined && recordsByUuid.has(parentUuid)) {
+      return parentUuid;
+    }
+    const logicalParentUuid = nonEmptyString(record.raw.logicalParentUuid);
+    if (logicalParentUuid !== undefined && recordsByUuid.has(logicalParentUuid)) {
+      return logicalParentUuid;
+    }
+    if (parentUuid !== undefined || logicalParentUuid !== undefined) {
+      return undefined;
+    }
+    return null;
+  };
+
+  const primaryUuids = new Set<string>();
+  let current = conversationRecords.at(-1);
+  while (current?.uuid !== undefined) {
+    if (primaryUuids.has(current.uuid)) {
+      return allMessages;
+    }
+    primaryUuids.add(current.uuid);
+    const parentUuid = parentOf(current);
+    if (parentUuid === undefined) {
+      return allMessages;
+    }
+    current = parentUuid === null ? undefined : recordsByUuid.get(parentUuid);
+  }
+
+  for (const record of conversationRecords) {
+    if (record.uuid === undefined || primaryUuids.has(record.uuid)) {
+      continue;
+    }
+    const visited = new Set<string>();
+    let branchRecord: ClaudeSessionRecord | undefined = record;
+    let rejoinsPrimary = false;
+    while (branchRecord?.uuid !== undefined) {
+      if (primaryUuids.has(branchRecord.uuid)) {
+        rejoinsPrimary = true;
+        break;
+      }
+      if (visited.has(branchRecord.uuid)) {
+        return allMessages;
+      }
+      visited.add(branchRecord.uuid);
+      const parentUuid = parentOf(branchRecord);
+      if (parentUuid === undefined) {
+        return allMessages;
+      }
+      branchRecord = parentUuid === null ? undefined : recordsByUuid.get(parentUuid);
+    }
+    if (!rejoinsPrimary) {
+      // Multiple disconnected roots can be produced by compaction or corrupt
+      // native files. Flattening is safer than silently dropping history.
+      return allMessages;
+    }
+  }
+
+  return records.flatMap((record) =>
+    record.uuid !== undefined && primaryUuids.has(record.uuid) && record.message !== undefined
+      ? [record.message]
+      : [],
+  );
+}
+
 export function parseClaudeSessionContents(input: {
   readonly contents: string;
   readonly nativePath: string;
@@ -114,7 +217,7 @@ export function parseClaudeSessionContents(input: {
   let cwd: string | undefined;
   let createdAt: string | undefined;
   let nativeFormatVersion: number = TELEPORT_NATIVE_FORMAT_VERSION;
-  const messages: NativeTextMessage[] = [];
+  const records: ClaudeSessionRecord[] = [];
 
   for (const line of lines) {
     const record = parseJsonObject(line);
@@ -139,9 +242,7 @@ export function parseClaudeSessionContents(input: {
     cwd = nonEmptyString(record.cwd) ?? cwd;
     createdAt = createdAt ?? nonEmptyString(record.timestamp);
     const message = extractClaudeMessage(record);
-    if (message) {
-      messages.push(message);
-    }
+    records.push({ raw: record, message, uuid: nonEmptyString(record.uuid) });
   }
 
   const externalSessionId = sessionId ?? fileStem(input.nativePath);
@@ -149,6 +250,7 @@ export function parseClaudeSessionContents(input: {
     return Effect.succeed(Option.none());
   }
 
+  const messages = messagesOnPrimaryClaudeBranch(records);
   const updatedAt = messages.at(-1)?.createdAt ?? createdAt;
   return Effect.succeed(
     Option.some(

@@ -45,7 +45,7 @@ export function isSafeTeleportSessionId(value: string): boolean {
 export function parseJsonObject(raw: string): Record<string, unknown> | undefined {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(raw.startsWith("\uFEFF") ? raw.slice(1) : raw);
   } catch {
     return undefined;
   }
@@ -54,7 +54,7 @@ export function parseJsonObject(raw: string): Record<string, unknown> | undefine
 
 export function collectTextParts(content: unknown): string | undefined {
   if (typeof content === "string") {
-    return nonEmptyString(content);
+    return nativeSessionText(content);
   }
   if (!Array.isArray(content)) {
     return undefined;
@@ -64,12 +64,12 @@ export function collectTextParts(content: unknown): string | undefined {
     if (!isRecord(part)) {
       continue;
     }
-    const text = nonEmptyString(part.text);
+    const text = nativeSessionText(part.text);
     if (text) {
       parts.push(text);
     }
   }
-  return nonEmptyString(parts.join("\n"));
+  return nativeSessionText(parts.join("\n"));
 }
 
 export function truncateTitle(input: string): string {
@@ -117,5 +117,6 @@ export function firstUserTitle(
 export const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu;
 
 export function uuidFromPath(filePath: string): string | undefined {
-  return filePath.match(UUID_RE)?.[0]?.toLowerCase();
+  const fileName = filePath.replaceAll("\\", "/").split("/").at(-1) ?? filePath;
+  return fileName.match(UUID_RE)?.[0]?.toLowerCase();
 }

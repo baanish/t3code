@@ -1,6 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { isSafeTeleportSessionId, isSyntheticNativeUserText, nativeSessionText } from "./json.ts";
+import {
+  isSafeTeleportSessionId,
+  isSyntheticNativeUserText,
+  nativeSessionText,
+  parseJsonObject,
+  uuidFromPath,
+} from "./json.ts";
 import { isOversizeTeleportSession, MAX_TELEPORT_SESSION_BYTES } from "./types.ts";
 
 describe("teleport json helpers", () => {
@@ -25,6 +31,20 @@ describe("teleport json helpers", () => {
     expect(isSyntheticNativeUserText("<system-reminder>stay on task</system-reminder>")).toBe(true);
     expect(isSyntheticNativeUserText("<local-command-stdout>ok</local-command-stdout>")).toBe(true);
     expect(isSyntheticNativeUserText("Use a light theme")).toBe(false);
+  });
+
+  it("parses a BOM-prefixed first JSONL record", () => {
+    expect(parseJsonObject('\uFEFF{"type":"session_meta"}')).toEqual({
+      type: "session_meta",
+    });
+  });
+
+  it("extracts a rollout UUID from the filename, not parent directories", () => {
+    expect(
+      uuidFromPath(
+        "/tmp/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/rollout-2026-08-14T06-00-00-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jsonl",
+      ),
+    ).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
   });
 
   it("compares native session sizes as bigint", () => {

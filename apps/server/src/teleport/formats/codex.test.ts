@@ -25,7 +25,12 @@ import {
   TELEPORT_TEST_CREATED_AT,
   TELEPORT_TEST_SESSION_ID,
 } from "../testFixtures.ts";
-import { codexTeleportFormat, parseCodexSessionContents, serializeCodexSession } from "./codex.ts";
+import {
+  allocateCodexSessionPath,
+  codexTeleportFormat,
+  parseCodexSessionContents,
+  serializeCodexSession,
+} from "./codex.ts";
 
 describe("teleport Codex format", () => {
   it.effect("roundtrips Codex jsonl", () =>
@@ -75,6 +80,18 @@ describe("teleport Codex format", () => {
     assert.notEqual(event.payload?.cli_version, "");
     assert.equal(event.payload?.originator, "t3-teleport");
     assert.equal(event.payload?.source, "cli");
+  });
+
+  it("allocates a rollout filename Codex can discover", () => {
+    assert.equal(
+      allocateCodexSessionPath({
+        sessionsRoot: "/tmp/sessions",
+        sessionId: TELEPORT_TEST_SESSION_ID,
+        createdAt: TELEPORT_TEST_CREATED_AT,
+        join: (...parts) => parts.join("/"),
+      }),
+      `/tmp/sessions/2026/08/14/rollout-2026-08-14T06-00-00-${TELEPORT_TEST_SESSION_ID}.jsonl`,
+    );
   });
 
   it.effect("skips Codex environment_context user wrappers", () =>
@@ -160,6 +177,62 @@ describe("teleport Codex format", () => {
     }),
   );
 
+  it.effect("skips Codex subagent sessions with parent_thread_id", () =>
+    Effect.gen(function* () {
+      const contents = `${JSON.stringify({
+        timestamp: TELEPORT_TEST_CREATED_AT,
+        type: "session_meta",
+        payload: {
+          id: TELEPORT_TEST_SESSION_ID,
+          cwd: "/workspace",
+          parent_thread_id: "parent-session",
+        },
+      })}\n`;
+      const parsed = yield* parseCodexSessionContents({
+        contents,
+        nativePath: "/tmp/subagent.jsonl",
+      });
+      assert.equal(Option.isNone(parsed), true);
+    }),
+  );
+
+  it.effect("uses the first Codex session_meta identity and cwd", () =>
+    Effect.gen(function* () {
+      const contents = [
+        {
+          timestamp: TELEPORT_TEST_CREATED_AT,
+          type: "session_meta",
+          payload: { id: TELEPORT_TEST_SESSION_ID, cwd: "/workspace" },
+        },
+        {
+          timestamp: TELEPORT_TEST_CREATED_AT,
+          type: "turn_context",
+          payload: { cwd: "/" },
+        },
+        {
+          timestamp: TELEPORT_TEST_CREATED_AT,
+          type: "session_meta",
+          payload: {
+            id: "22222222-2222-4222-8222-222222222222",
+            cwd: "/other-project",
+            parent_thread_id: "poison",
+          },
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const parsed = yield* parseCodexSessionContents({
+        contents,
+        nativePath: "/tmp/first-meta.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.externalSessionId, TELEPORT_TEST_SESSION_ID);
+        assert.equal(parsed.value.cwd, "/workspace");
+      }
+    }),
+  );
+
   it.effect("fails closed on a newer Codex format version", () =>
     Effect.gen(function* () {
       const contents = `${JSON.stringify({
@@ -223,6 +296,62 @@ describe("teleport Codex format", () => {
       assert.equal(listed.sessions.length, 1);
       assert.equal(listed.sessions[0]?.provider, "codex");
       assert.equal(listed.sessions[0]?.externalSessionId, TELEPORT_TEST_SESSION_ID);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
+    ),
+  );
+
+  it.effect("lists only the newest immutable Codex rollout for a thread", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-codex-rollouts-" });
+      const homes: TeleportHomes = {
+        codexSessionsRoot: path.join(root, "codex", "sessions"),
+        extraCodexSessionsRoots: [],
+        claudeProjectsRoot: path.join(root, "claude", "projects"),
+        extraClaudeProjectsRoots: [],
+      };
+      const oldPath = path.join(
+        homes.codexSessionsRoot,
+        "2026",
+        "08",
+        "14",
+        `rollout-2026-08-14T06-00-00-${TELEPORT_TEST_SESSION_ID}.jsonl`,
+      );
+      const newPath = path.join(
+        homes.codexSessionsRoot,
+        "2026",
+        "08",
+        "15",
+        `rollout-2026-08-15T06-00-00-${TELEPORT_TEST_SESSION_ID}_22222222-2222-4222-8222-222222222222.jsonl`,
+      );
+      yield* fs.makeDirectory(path.dirname(oldPath), { recursive: true });
+      yield* fs.makeDirectory(path.dirname(newPath), { recursive: true });
+      yield* fs.writeFileString(oldPath, serializeCodexSession(sampleTeleportSession("codex")));
+      yield* fs.writeFileString(
+        newPath,
+        serializeCodexSession({
+          ...sampleTeleportSession("codex"),
+          createdAt: "2026-08-15T06:00:00.000Z",
+          messages: [
+            {
+              role: "user",
+              text: "new rollout",
+              createdAt: "2026-08-15T06:01:00.000Z",
+            },
+          ],
+        }),
+      );
+
+      const listed = yield* discoverTeleportSessions({
+        homes,
+        cwd: "/workspace",
+        providers: ["codex"],
+      });
+      assert.equal(listed.sessions.length, 1);
+      assert.equal(listed.sessions[0]?.nativePath, newPath);
     }).pipe(
       Effect.scoped,
       Effect.provide(Layer.merge(NodeServices.layer, TeleportFormatRegistry.layer)),
