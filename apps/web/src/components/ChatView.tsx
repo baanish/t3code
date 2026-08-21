@@ -26,6 +26,7 @@ import {
   connectionStatusTitle,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
+import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
   changeRequestAutoSettles,
   effectiveSettled,
@@ -562,8 +563,10 @@ function useLocalDispatchState(input: {
   threadError: string | null | undefined;
 }) {
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
-  const latestUserMessageId =
-    input.activeThread?.messages.findLast((message) => message.role === "user")?.id ?? null;
+  const latestUserMessage = input.activeThread?.messages.findLast(
+    (message) => message.role === "user",
+  );
+  const latestUserMessageId = latestUserMessage?.id ?? null;
 
   const resetLocalDispatch = useCallback(() => {
     setLocalDispatch(null);
@@ -613,6 +616,7 @@ function useLocalDispatchState(input: {
     beginLocalDispatch,
     resetLocalDispatch,
     localDispatchStartedAt: activeLocalDispatch?.startedAt ?? null,
+    latestUserMessageAt: latestUserMessage?.createdAt ?? null,
     isPreparingWorktree: activeLocalDispatch?.preparingWorktree ?? false,
     isSendBusy: activeLocalDispatch !== null,
   };
@@ -1200,6 +1204,20 @@ type LocalThreadErrorEntry = {
 
 function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
+}
+
+/**
+ * Drops the send-time anchored end space. That space is what holds a sent
+ * message near the top while its turn streams, and it keeps LegendList's
+ * maintainScrollAtEnd switched off for as long as it is installed — ChatView
+ * drives the streaming scrolls itself, but only in "anchoring-new-turn" mode.
+ * So every return to the live edge has to release the anchor too, otherwise the
+ * timeline settles into "following-end" with nothing following anything.
+ */
+function releaseChatTimelineAnchor<T extends { readonly messageId: MessageId | null }>(
+  current: T,
+): T {
+  return current.messageId === null ? current : { ...current, messageId: null };
 }
 
 function ChatViewContent(props: ChatViewProps) {
@@ -2326,6 +2344,7 @@ function ChatViewContent(props: ChatViewProps) {
     beginLocalDispatch,
     resetLocalDispatch,
     localDispatchStartedAt,
+    latestUserMessageAt,
     isPreparingWorktree,
     isSendBusy,
   } = useLocalDispatchState({
@@ -2341,6 +2360,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeLatestTurn,
     activeThread?.session ?? null,
     localDispatchStartedAt,
+    latestUserMessageAt,
   );
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
@@ -3828,9 +3848,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeTimelineAnchorIndexRef.current = null;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    setTimelineAnchor((current) =>
-      current.messageId === null ? current : { ...current, messageId: null },
-    );
+    setTimelineAnchor(releaseChatTimelineAnchor);
     requestAnimationFrame(() => {
       void legendListRef.current?.scrollToEnd?.({ animated });
     });
@@ -4005,6 +4023,11 @@ function ChatViewContent(props: ChatViewProps) {
       timelineScrollModeRef.current = "following-end";
       liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
       setTimelineLiveFollowEnabled(true);
+      // Reachable only once manual navigation has already broken follow, so
+      // the anchored turn framing is over: the user scrolled back to the live
+      // edge and expects the stream to stick to it again, exactly like the
+      // scroll-to-bottom pill.
+      setTimelineAnchor(releaseChatTimelineAnchor);
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
     } else {
@@ -5464,6 +5487,20 @@ function ChatViewContent(props: ChatViewProps) {
       }
       if (!isAtomCommandInterrupted(failure)) {
         const error = squashAtomCommandFailure(failure);
+        if (isLocalDraftThread && draftId && wasBootstrapThreadDeleted(error)) {
+          const failedDraftSession = getDraftSession(draftId);
+          if (failedDraftSession?.threadId === threadIdForSend) {
+            setLogicalProjectDraftThreadId(
+              failedDraftSession.logicalProjectKey,
+              scopeProjectRef(failedDraftSession.environmentId, failedDraftSession.projectId),
+              draftId,
+              {
+                threadId: newThreadId(),
+                createdAt: new Date().toISOString(),
+              },
+            );
+          }
+        }
         setThreadError(
           threadIdForSend,
           error instanceof Error ? error.message : "Failed to send message.",
@@ -6404,7 +6441,6 @@ function ChatViewContent(props: ChatViewProps) {
                 key={activeThread.id}
                 isWorking={isWorking}
                 workingStepLabel={workingStepLabel}
-                activeTurnInProgress={isWorking || !latestTurnSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
