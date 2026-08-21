@@ -20,5 +20,13 @@ export function createTeleportEnvironmentAtoms<R, E>(
       label: "environment-data:teleport:export-session",
       tag: WS_METHODS.teleportExportSession,
     }),
+    checkNativeRevision: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:teleport:check-native-revision",
+      tag: WS_METHODS.teleportCheckNativeRevision,
+    }),
+    forkNativeDivergence: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:teleport:fork-native-divergence",
+      tag: WS_METHODS.teleportForkNativeDivergence,
+    }),
   };
 }

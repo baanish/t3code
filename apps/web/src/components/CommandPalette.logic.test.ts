@@ -2,13 +2,45 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { Thread } from "../types";
 import {
+  browseInputEndPaddingClass,
   buildBrowseGroups,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
+  filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
+  selectTeleportImportProjects,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
+
+describe("browseInputEndPaddingClass", () => {
+  it("reserves the widest space for the create action", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: true,
+        hasHighlightedBrowseItem: false,
+      }),
+    ).toContain("pe-38");
+  });
+
+  it("reserves space for the wider highlighted-item shortcut", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: false,
+        hasHighlightedBrowseItem: true,
+      }),
+    ).toContain("pe-30");
+  });
+
+  it("keeps the compact reserve for the normal add action", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: false,
+        hasHighlightedBrowseItem: false,
+      }),
+    ).toContain("pe-24");
+  });
+});
 
 describe("reduceCommandPaletteUiState", () => {
   const closedState = { open: false, mode: "command", openIntent: null } as const;
@@ -28,7 +60,7 @@ describe("reduceCommandPaletteUiState", () => {
 
     expect(
       reduceCommandPaletteUiState(contentOpen, { _tag: "ToggleMode", mode: "content" }),
-    ).toEqual({ open: false, mode: "command", openIntent: null });
+    ).toEqual({ open: false, mode: "content", openIntent: null });
   });
 
   it("switches between open modes without closing", () => {
@@ -82,7 +114,7 @@ describe("reduceCommandPaletteUiState", () => {
     });
   });
 
-  it("resets to command mode for dialog-driven opens and closes", () => {
+  it("preserves the mode on close and resets it on open", () => {
     const filesOpen = reduceCommandPaletteUiState(closedState, {
       _tag: "ToggleMode",
       mode: "files",
@@ -90,7 +122,7 @@ describe("reduceCommandPaletteUiState", () => {
 
     expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: false })).toEqual({
       open: false,
-      mode: "command",
+      mode: "files",
       openIntent: null,
     });
     expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: true })).toEqual({
@@ -359,5 +391,70 @@ describe("buildBrowseGroups", () => {
     finishNavigation?.();
     await action;
     expect(actionSettled).toBe(true);
+  });
+});
+
+describe("filterPinnedBrowseEntries", () => {
+  const entries = [
+    { name: "repo", fullPath: "/projects/repo" },
+    { name: "work", fullPath: "/projects/work" },
+  ];
+
+  it("shows sibling folders without losing an existing pinned destination", () => {
+    expect(
+      filterPinnedBrowseEntries({
+        browseEntries: entries,
+        filterQuery: "repo",
+        pinnedDirectoryName: "repo",
+        caseSensitive: true,
+      }),
+    ).toEqual({ visibleEntries: entries, exactEntry: entries[0] });
+  });
+
+  it("matches an existing pinned destination without Windows casing", () => {
+    const windowsEntries = [
+      { name: "Repo", fullPath: "C:\\projects\\Repo" },
+      { name: "work", fullPath: "C:\\projects\\work" },
+    ];
+    expect(
+      filterPinnedBrowseEntries({
+        browseEntries: windowsEntries,
+        filterQuery: "repo",
+        pinnedDirectoryName: "repo",
+        caseSensitive: false,
+      }),
+    ).toEqual({
+      visibleEntries: windowsEntries,
+      exactEntry: windowsEntries[0],
+    });
+  });
+});
+
+describe("selectTeleportImportProjects", () => {
+  const local = EnvironmentId.make("local");
+  const remote = EnvironmentId.make("remote");
+
+  it("keeps every physical project whose environment supports teleport", () => {
+    expect(
+      selectTeleportImportProjects(
+        [
+          { environmentId: local, id: "alpha" },
+          { environmentId: remote, id: "alpha-remote" },
+        ],
+        (environmentId) => environmentId === local || environmentId === remote,
+      ).map((project) => project.id),
+    ).toEqual(["alpha", "alpha-remote"]);
+  });
+
+  it("omits physical projects on environments without teleport", () => {
+    expect(
+      selectTeleportImportProjects(
+        [
+          { environmentId: local, id: "alpha" },
+          { environmentId: remote, id: "alpha-remote" },
+        ],
+        (environmentId) => environmentId === local,
+      ).map((project) => project.id),
+    ).toEqual(["alpha"]);
   });
 });

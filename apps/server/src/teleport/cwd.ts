@@ -46,48 +46,28 @@ export function isTeleportCwdWithin(inner: string, outer: string): boolean {
   return innerCwd.startsWith(prefix);
 }
 
-/**
- * Home folders, temp roots, and drive roots. OpenCode often records the
- * process cwd, which can be a parent of the T3 project — but matching `/tmp`
- * or `/home/user` would pull in unrelated sessions.
- */
-export function isGenericTeleportCwd(cwd: string): boolean {
-  const posix = normalizeTeleportCwd(cwd).replaceAll("\\", "/").replace(/\/+$/u, "");
-  const lowered = posix.toLowerCase();
-  if (lowered === "" || lowered === "/") {
-    return true;
-  }
-  if (
-    lowered === "/tmp" ||
-    lowered === "/private/tmp" ||
-    lowered === "/var" ||
-    lowered === "/var/tmp" ||
-    lowered === "/home" ||
-    lowered === "/users" ||
-    lowered === "/root"
-  ) {
-    return true;
-  }
-  const parts = lowered.split("/").filter((part) => part.length > 0);
-  const first = parts[0];
-  if (first === undefined) {
-    return true;
-  }
-  if (first === "home" || first === "users" || first === "root") {
-    return parts.length <= 2;
-  }
-  if (/^[a-z]:$/u.test(first)) {
-    if (parts.length <= 1) {
-      return true;
+export function uniqueTeleportCwds(cwds: ReadonlyArray<string>): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const cwd of cwds) {
+    if (cwd.length === 0) {
+      continue;
     }
-    if (parts[1] === "users") {
-      return parts.length <= 3;
+    const key = normalizeTeleportCwd(cwd);
+    if (seen.has(key)) {
+      continue;
     }
-    if (parts[1] === "windows") {
-      return parts.length <= 2;
-    }
+    seen.add(key);
+    unique.push(cwd);
   }
-  return false;
+  return unique;
+}
+
+export function listingTeleportCwds(
+  projectCwd: string,
+  extraCwds: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> {
+  return uniqueTeleportCwds([projectCwd, ...(extraCwds ?? [])]);
 }
 
 /**
@@ -116,37 +96,35 @@ export const teleportCwdsEquivalent = Effect.fn("teleportCwdsEquivalent")(functi
   return false;
 });
 
-const FOREIGN_OPENCODE_PROJECT_FOLDERS = new Set([
-  "codex",
-  "claude",
-  "grok",
-  "claude-code",
-  "claudeagent",
-]);
-
-export function isForeignOpenCodeProjectFolder(projectCwd: string): boolean {
-  const posix = normalizeTeleportCwd(projectCwd).replaceAll("\\", "/");
-  const lastSlash = posix.lastIndexOf("/");
-  const base = (lastSlash === -1 ? posix : posix.slice(lastSlash + 1)).toLowerCase();
-  return base.length > 0 && FOREIGN_OPENCODE_PROJECT_FOLDERS.has(base);
-}
-
 /**
- * OpenCode stores the process cwd, which is often a parent of the T3 project
- * folder. Exact match still wins; otherwise the project may sit under the
- * session directory unless that directory is a generic root or a sibling
- * harness folder such as `codex` / `claude` / `grok`.
+ * Native sessions belong to a T3 project when their cwd is the project root,
+ * a subdirectory of that root, or an extra cwd such as a T3 worktree. Ancestor
+ * cwds (`/` or `$HOME`) are not accepted: those would bind a session into any
+ * project.
  */
-export const opencodeSessionMatchesProjectCwd = Effect.fn("opencodeSessionMatchesProjectCwd")(
-  function* (sessionCwd: string, projectCwd: string) {
-    if (yield* teleportCwdsEquivalent(sessionCwd, projectCwd)) {
+export const teleportSessionBelongsToProject = Effect.fn("teleportSessionBelongsToProject")(
+  function* (input: {
+    readonly sessionCwd: string;
+    readonly projectCwd: string;
+    readonly extraCwds?: ReadonlyArray<string>;
+  }) {
+    if (yield* teleportCwdsEquivalent(input.sessionCwd, input.projectCwd)) {
       return true;
     }
-    const sessionCanon = yield* canonicalizeTeleportCwd(sessionCwd);
-    const projectCanon = yield* canonicalizeTeleportCwd(projectCwd);
-    if (isGenericTeleportCwd(sessionCanon) || isForeignOpenCodeProjectFolder(projectCanon)) {
-      return false;
+    const canonicalSessionCwd = yield* resolveTeleportCwdPath(input.sessionCwd);
+    const canonicalProjectCwd = yield* resolveTeleportCwdPath(input.projectCwd);
+    if (isTeleportCwdWithin(canonicalSessionCwd, canonicalProjectCwd)) {
+      return true;
     }
-    return isTeleportCwdWithin(projectCanon, sessionCanon);
+    for (const extraCwd of input.extraCwds ?? []) {
+      if (yield* teleportCwdsEquivalent(input.sessionCwd, extraCwd)) {
+        return true;
+      }
+      const canonicalExtraCwd = yield* resolveTeleportCwdPath(extraCwd);
+      if (isTeleportCwdWithin(canonicalSessionCwd, canonicalExtraCwd)) {
+        return true;
+      }
+    }
+    return false;
   },
 );

@@ -1230,4 +1230,418 @@ describe("OrchestrationEngine", () => {
 
     await system.dispose();
   });
+
+  it("replays the accepted receipt for a genuine retry of the same command", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-retry-project-create"),
+        projectId: asProjectId("project-retry"),
+        title: "Retry Project",
+        workspaceRoot: "/tmp/project-retry",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-retry-thread-create"),
+        threadId: ThreadId.make("thread-retry"),
+        projectId: asProjectId("project-retry"),
+        title: "retry",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const turnStart = {
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-retry-turn-start"),
+      threadId: ThreadId.make("thread-retry"),
+      message: {
+        messageId: asMessageId("msg-retry"),
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt,
+    } as const;
+
+    const first = await system.run(engine.dispatch(turnStart));
+    const second = await system.run(engine.dispatch(turnStart));
+    expect(second.sequence).toBe(first.sequence);
+
+    const readModel = await system.readModel();
+    const thread = readModel.threads.find((candidate) => candidate.id === "thread-retry");
+    expect(thread?.messages.filter((message) => message.role === "user")).toHaveLength(1);
+
+    await system.dispose();
+  });
+
+  it("rejects reusing an accepted command id for a different aggregate", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-conflict-project-create"),
+        projectId: asProjectId("project-conflict"),
+        title: "Conflict Project",
+        workspaceRoot: "/tmp/project-conflict",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    for (const threadId of ["thread-conflict-a", "thread-conflict-b"]) {
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`cmd-${threadId}-create`),
+          threadId: ThreadId.make(threadId),
+          projectId: asProjectId("project-conflict"),
+          title: threadId,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+    }
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-conflict-turn-start"),
+        threadId: ThreadId.make("thread-conflict-a"),
+        message: {
+          messageId: asMessageId("msg-conflict-a"),
+          role: "user",
+          text: "hello",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-conflict-turn-start"),
+          threadId: ThreadId.make("thread-conflict-b"),
+          message: {
+            messageId: asMessageId("msg-conflict-b"),
+            role: "user",
+            text: "hello again",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("already used for thread 'thread-conflict-a'");
+
+    const readModel = await system.readModel();
+    const targetThread = readModel.threads.find(
+      (candidate) => candidate.id === "thread-conflict-b",
+    );
+    expect(targetThread?.messages.filter((message) => message.role === "user")).toHaveLength(0);
+
+    await system.dispose();
+  });
+
+  it("commits unarchive, T3 ownership, and history replacement together", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("project-teleport-import");
+    const threadId = ThreadId.make("thread-teleport-import");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-teleport-import-project"),
+        projectId,
+        title: "Teleport Import",
+        workspaceRoot: "/tmp/project-teleport-import",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-teleport-import-thread"),
+        threadId,
+        projectId,
+        title: "Old title",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.teleport.set",
+        commandId: CommandId.make("cmd-teleport-import-native"),
+        threadId,
+        teleport: {
+          presence: "native",
+          provider: "codex",
+          externalSessionId: "session-import",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.history.replace",
+        commandId: CommandId.make("cmd-teleport-import-old-history"),
+        threadId,
+        messages: [
+          {
+            id: asMessageId("old-1"),
+            role: "user",
+            text: "old",
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("cmd-teleport-import-archive"),
+        threadId,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.teleport.import",
+        commandId: CommandId.make("cmd-teleport-import-commit"),
+        threadId,
+        teleport: {
+          presence: "t3",
+          provider: "codex",
+          externalSessionId: "session-import",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncedAt: createdAt,
+        },
+        messages: [
+          {
+            id: asMessageId("imported-1"),
+            role: "user",
+            text: "imported",
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+        createdAt,
+      }),
+    );
+
+    const readModel = await system.readModel();
+    const thread = readModel.threads.find((candidate) => candidate.id === threadId);
+    expect(thread?.archivedAt).toBeNull();
+    expect(thread?.teleport?.presence).toBe("t3");
+    expect(thread?.messages.map((message) => message.text)).toEqual(["imported"]);
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.teleport.import",
+        commandId: CommandId.make("cmd-teleport-import-retry"),
+        threadId,
+        teleport: {
+          presence: "t3",
+          provider: "codex",
+          externalSessionId: "session-import",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncedAt: createdAt,
+        },
+        messages: [
+          {
+            id: asMessageId("imported-1"),
+            role: "user",
+            text: "imported",
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+        createdAt,
+      }),
+    );
+    const retried = await system.readModel();
+    const retriedThread = retried.threads.find((candidate) => candidate.id === threadId);
+    expect(retriedThread?.teleport?.presence).toBe("t3");
+    expect(retriedThread?.messages.map((message) => message.text)).toEqual(["imported"]);
+
+    await system.dispose();
+  });
+
+  it("rejects turn start against importing presence and recovers to native", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("project-teleport-importing");
+    const threadId = ThreadId.make("thread-teleport-importing");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-importing-project"),
+        projectId,
+        title: "Importing",
+        workspaceRoot: "/tmp/project-teleport-importing",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-importing-thread"),
+        threadId,
+        projectId,
+        title: "Thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.teleport.set",
+        commandId: CommandId.make("cmd-importing-fence"),
+        threadId,
+        teleport: {
+          presence: "importing",
+          provider: "codex",
+          externalSessionId: "session-importing",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncedAt: createdAt,
+          restorePresence: "native",
+        },
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-importing-turn"),
+          threadId,
+          message: {
+            messageId: asMessageId("msg-importing"),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("being imported");
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.teleport.set",
+        commandId: CommandId.make("cmd-importing-recover"),
+        threadId,
+        teleport: {
+          presence: "native",
+          provider: "codex",
+          externalSessionId: "session-importing",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    const recovered = await system.readModel();
+    const thread = recovered.threads.find((candidate) => candidate.id === threadId);
+    expect(thread?.teleport?.presence).toBe("native");
+    expect(thread?.teleport?.restorePresence).toBeUndefined();
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-importing-turn-after-recover"),
+          threadId,
+          message: {
+            messageId: asMessageId("msg-importing-after"),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("native CLI");
+
+    await system.dispose();
+  });
 });

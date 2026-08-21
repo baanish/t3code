@@ -1,4 +1,8 @@
-import type { TeleportProvider, TeleportSessionCandidate } from "@t3tools/contracts";
+import type {
+  TeleportNativeRevision,
+  TeleportProvider,
+  TeleportSessionCandidate,
+} from "@t3tools/contracts";
 
 import { definedField } from "./json.ts";
 
@@ -19,6 +23,8 @@ export interface ParsedNativeSession {
   readonly createdAt?: string;
   readonly updatedAt?: string;
   readonly messages: ReadonlyArray<NativeTextMessage>;
+  readonly providerInstanceId?: TeleportSessionCandidate["providerInstanceId"];
+  readonly nativeRevision?: TeleportNativeRevision;
 }
 
 export function nativeTextMessage(input: {
@@ -72,3 +78,8 @@ export function teleportCandidateFields(
 export const MAX_TELEPORT_MESSAGES = 2_000;
 export const MAX_TELEPORT_MESSAGE_CHARS = 100_000;
 export const MAX_TELEPORT_SESSION_BYTES = 20 * 1024 * 1024;
+
+export function isOversizeTeleportSession(size: number | bigint): boolean {
+  const bytes = typeof size === "bigint" ? size : BigInt(size);
+  return bytes > BigInt(MAX_TELEPORT_SESSION_BYTES);
+}

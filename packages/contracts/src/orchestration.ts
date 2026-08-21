@@ -145,6 +145,20 @@ export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES = [
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+] as const;
+const PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPE_SET = new Set<string>(
+  PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES,
+);
+
+/** Whether a pasted or picked image mime type can be sent on a provider turn. */
+export function isProviderSendTurnSupportedImageMimeType(mimeType: string): boolean {
+  return PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPE_SET.has(mimeType.toLowerCase());
+}
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 // Correlation id is command id by design in this model.
@@ -1047,6 +1061,15 @@ const ThreadTeleportSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTeleportImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.teleport.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  teleport: TeleportThreadState,
+  messages: Schema.Array(OrchestrationMessage),
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1058,6 +1081,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTitleRegenerationCompleteCommand,
   ThreadHistoryReplaceCommand,
   ThreadTeleportSetCommand,
+  ThreadTeleportImportCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1747,6 +1771,7 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
+    bootstrapThreadDisposition: Schema.optional(Schema.Literal("deleted")),
   },
 ) {}
 

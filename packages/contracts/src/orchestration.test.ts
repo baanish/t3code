@@ -7,6 +7,7 @@ import {
   DEFAULT_RUNTIME_MODE,
   ModelSelection,
   OrchestrationCommand,
+  OrchestrationDispatchCommandError,
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
@@ -23,6 +24,7 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  isProviderSendTurnSupportedImageMimeType,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -53,6 +55,19 @@ const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPaylo
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
+
+it.effect("decodes a dispatch error after its bootstrap thread was deleted", () =>
+  Effect.gen(function* () {
+    const error = yield* decodeDispatchCommandError({
+      _tag: "OrchestrationDispatchCommandError",
+      message: "Failed to create worktree.",
+      bootstrapThreadDisposition: "deleted",
+    });
+
+    assert.strictEqual(error.bootstrapThreadDisposition, "deleted");
+  }),
+);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
@@ -933,5 +948,41 @@ it.effect("project favicon overrides accept only supported image files", () =>
       }),
     );
     assert.strictEqual(invalid._tag, "Failure");
+  }),
+);
+
+it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects svg", () => {
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/png"), true);
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
+});
+
+it.effect("decodes thread.teleport.import commands", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.teleport.import",
+      commandId: "cmd-teleport-import",
+      threadId: "thread-1",
+      teleport: {
+        presence: "t3",
+        provider: "codex",
+        externalSessionId: "session-1",
+        nativePath: "/tmp/session.jsonl",
+        lastSyncedAt: "2026-08-14T22:00:00.000Z",
+      },
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          text: "imported",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-08-14T22:00:00.000Z",
+          updatedAt: "2026-08-14T22:00:00.000Z",
+        },
+      ],
+      createdAt: "2026-08-14T22:00:00.000Z",
+    });
+    assert.strictEqual(parsed.type, "thread.teleport.import");
   }),
 );

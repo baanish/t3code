@@ -2281,6 +2281,130 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
     }),
   );
 
+  it.effect("bounds activity hydration and preserves unresolved requests", () =>
+    Effect.gen(function* () {
+      yield* seedFanOutThread();
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`
+        WITH RECURSIVE activity_rows(sequence) AS (
+          SELECT 1
+          UNION ALL
+          SELECT sequence + 1 FROM activity_rows WHERE sequence < 501
+        )
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        )
+        SELECT
+          printf('activity-%04d', sequence),
+          'thread-w',
+          'turn-5',
+          'tool',
+          'tool.completed',
+          'ran tool',
+          printf('{"sequence":%d}', sequence),
+          sequence,
+          '2026-03-01T00:04:00.000Z'
+        FROM activity_rows
+      `;
+
+      const fullDetail = yield* snapshotQuery.getThreadDetailById(threadW);
+      assert.equal(fullDetail._tag, "Some");
+      if (fullDetail._tag === "Some") {
+        assert.equal(fullDetail.value.activities.length, 500);
+        assert.equal(fullDetail.value.activities[0]?.id, asEventId("activity-0002"));
+        assert.equal(fullDetail.value.activities.at(-1)?.id, asEventId("activity-0501"));
+      }
+
+      const windowedDetail = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {
+        turnLimit: 2,
+      });
+      assert.equal(windowedDetail._tag, "Some");
+      if (windowedDetail._tag === "Some") {
+        assert.equal(windowedDetail.value.thread.activities.length, 500);
+        assert.equal(windowedDetail.value.thread.activities[0]?.id, asEventId("activity-0002"));
+        assert.equal(windowedDetail.value.thread.activities.at(-1)?.id, asEventId("activity-0501"));
+      }
+
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        )
+        VALUES
+          (
+            'approval-old', 'thread-w', NULL, 'approval', 'approval.requested',
+            'Approve old command', '{"requestId":"approval-1"}', NULL,
+            '2026-03-01T00:00:01.000Z'
+          ),
+          (
+            'user-input-old', 'thread-w', NULL, 'approval', 'user-input.requested',
+            'Answer old question', '{"requestId":"input-1"}', NULL,
+            '2026-03-01T00:00:02.000Z'
+          ),
+          (
+            'user-input-closed', 'thread-w', NULL, 'approval', 'user-input.requested',
+            'Closed question', '{"requestId":"input-closed"}', NULL,
+            '2026-03-01T00:00:03.000Z'
+          ),
+          (
+            'user-input-closed-resolution', 'thread-w', NULL, 'info', 'user-input.resolved',
+            'Closed question', '{"requestId":"input-closed"}', NULL,
+            '2026-03-01T00:00:04.000Z'
+          ),
+          (
+            'user-input-tied-z-request', 'thread-w', NULL, 'approval', 'user-input.requested',
+            'Tied open question', '{"requestId":"input-tied-open"}', NULL,
+            '2026-03-01T00:00:05.000Z'
+          ),
+          (
+            'user-input-tied-a-resolution', 'thread-w', NULL, 'info', 'user-input.resolved',
+            'Tied open question', '{"requestId":"input-tied-open"}', NULL,
+            '2026-03-01T00:00:05.000Z'
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_pending_approvals (
+          request_id, thread_id, turn_id, status, decision, created_at, resolved_at
+        )
+        VALUES (
+          'approval-1', 'thread-w', NULL, 'pending', NULL,
+          '2026-03-01T00:00:01.000Z', NULL
+        )
+      `;
+      yield* sql`
+        UPDATE projection_threads
+        SET pending_approval_count = 1, pending_user_input_count = 1
+        WHERE thread_id = 'thread-w'
+      `;
+
+      const detailWithPinnedRequests = yield* snapshotQuery.getThreadDetailById(threadW);
+      assert.equal(detailWithPinnedRequests._tag, "Some");
+      if (detailWithPinnedRequests._tag === "Some") {
+        const ids = detailWithPinnedRequests.value.activities.map((activity) => activity.id);
+        assert.equal(detailWithPinnedRequests.value.activities.length, 503);
+        assert.equal(ids.includes(asEventId("approval-old")), true);
+        assert.equal(ids.includes(asEventId("user-input-old")), true);
+        assert.equal(ids.includes(asEventId("user-input-closed")), false);
+        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), true);
+      }
+
+      const windowWithPinnedRequests = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {
+        turnLimit: 2,
+      });
+      assert.equal(windowWithPinnedRequests._tag, "Some");
+      if (windowWithPinnedRequests._tag === "Some") {
+        const ids = windowWithPinnedRequests.value.thread.activities.map((activity) => activity.id);
+        assert.equal(windowWithPinnedRequests.value.thread.activities.length, 503);
+        assert.equal(ids.includes(asEventId("approval-old")), true);
+        assert.equal(ids.includes(asEventId("user-input-old")), true);
+        assert.equal(ids.includes(asEventId("user-input-closed")), false);
+        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), true);
+      }
+    }),
+  );
+
   it.effect("a thread with no turns returns its content unwindowed on the first page", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -2362,9 +2486,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         )
         VALUES (
           'thread-teleport', 'project-teleport', 'Native thread',
-          '{"provider":"grok","model":"grok-4"}', 'full-access', 'default',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
           0, 0, 0, '2026-08-14T00:00:00.000Z', '2026-08-14T00:00:00.000Z', NULL,
-          '{"presence":"native","provider":"grok","externalSessionId":"session-1","nativePath":"/tmp/native","lastSyncedAt":"2026-08-14T00:00:01.000Z"}'
+          '{"presence":"native","provider":"codex","externalSessionId":"session-1","nativePath":"/tmp/native","lastSyncedAt":"2026-08-14T00:00:01.000Z"}'
         )
       `;
       for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
@@ -2376,7 +2500,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
 
       const expectedTeleport = {
         presence: "native",
-        provider: "grok",
+        provider: "codex",
         externalSessionId: "session-1",
         nativePath: "/tmp/native",
         lastSyncedAt: "2026-08-14T00:00:01.000Z",
@@ -2391,6 +2515,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       if (shell._tag === "Some") {
         assert.deepEqual(shell.value.teleport, expectedTeleport);
       }
+
+      yield* sql`
+        UPDATE projection_threads
+        SET archived_at = '2026-08-14T00:00:02.000Z'
+        WHERE thread_id = 'thread-teleport'
+      `;
+      const archived = yield* snapshotQuery.getArchivedShellSnapshot();
+      assert.equal(archived.threads[0]?.id, ThreadId.make("thread-teleport"));
+      assert.deepEqual(archived.threads[0]?.teleport, expectedTeleport);
     }),
   );
 });

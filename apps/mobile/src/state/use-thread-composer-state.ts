@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import {
   CommandId,
+  isTeleportedOut,
   MessageId,
   type EnvironmentId,
   type ModelSelection,
@@ -129,10 +130,6 @@ export function useThreadComposerState() {
     );
   }, [selectedThreadDetail, selectedThreadSessionActivity, selectedThreadShell]);
 
-  const activeThreadBusy =
-    !!selectedThread &&
-    (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
-
   const onSendMessage = useCallback(async () => {
     if (!selectedThreadShell) {
       return null;
@@ -141,6 +138,9 @@ export function useThreadComposerState() {
     const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
     const draft = getComposerDraftSnapshot(threadKey);
     const thread = selectedThreadDetail ?? selectedThreadShell;
+    if (isTeleportedOut(thread.teleport)) {
+      return null;
+    }
     const text = draft.text.trim();
     const attachments = draft.attachments;
     if (text.length === 0 && attachments.length === 0) {
@@ -308,7 +308,6 @@ export function useThreadComposerState() {
     modelSelection,
     runtimeMode,
     interactionMode,
-    activeThreadBusy,
     onChangeDraftMessage,
     onPickDraftImages,
     onPasteIntoDraft,

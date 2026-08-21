@@ -1,21 +1,31 @@
 import type { TeleportProvider } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import type { TeleportFormatAdapter } from "./adapter.ts";
+import { claudeTeleportFormat } from "./claude.ts";
+import { codexTeleportFormat } from "./codex.ts";
 
-const adapters = new Map<TeleportProvider, TeleportFormatAdapter>();
+export class TeleportFormatRegistry extends Context.Service<
+  TeleportFormatRegistry,
+  {
+    readonly get: (provider: TeleportProvider) => TeleportFormatAdapter | undefined;
+    readonly providers: ReadonlyArray<TeleportProvider>;
+  }
+>()("t3/teleport/formats/registry/TeleportFormatRegistry") {}
 
-export function registerTeleportFormat(adapter: TeleportFormatAdapter): void {
-  adapters.set(adapter.provider, adapter);
+/** Exported for tests, which stand a registry up from adapters they supply themselves. */
+export function fromAdapters(
+  adapters: ReadonlyArray<TeleportFormatAdapter>,
+): TeleportFormatRegistry["Service"] {
+  const byProvider = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
+  return {
+    get: (provider) => byProvider.get(provider),
+    providers: adapters.map((adapter) => adapter.provider),
+  };
 }
 
-export function getTeleportFormat(provider: TeleportProvider): TeleportFormatAdapter | undefined {
-  return adapters.get(provider);
-}
+export const make = Effect.sync(() => fromAdapters([codexTeleportFormat, claudeTeleportFormat]));
 
-export function listRegisteredTeleportProviders(): ReadonlyArray<TeleportProvider> {
-  return [...adapters.keys()];
-}
-
-export function resetTeleportFormats(): void {
-  adapters.clear();
-}
+export const layer = Layer.effect(TeleportFormatRegistry, make);

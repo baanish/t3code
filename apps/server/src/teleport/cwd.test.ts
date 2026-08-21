@@ -7,13 +7,11 @@ import * as Path from "effect/Path";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import {
-  isForeignOpenCodeProjectFolder,
-  isGenericTeleportCwd,
   isTeleportCwdWithin,
-  opencodeSessionMatchesProjectCwd,
   resolveTeleportCwdPath,
   teleportCwdsEquivalent,
   teleportCwdsMatch,
+  teleportSessionBelongsToProject,
 } from "./cwd.ts";
 
 describe("teleport cwd matching", () => {
@@ -22,74 +20,14 @@ describe("teleport cwd matching", () => {
     assert.equal(teleportCwdsMatch("/workspace", "/other"), false);
   });
 
-  it("treats a project folder as inside its OpenCode launch cwd", () => {
+  it("treats a nested project folder as inside its parent cwd", () => {
     assert.equal(
-      isTeleportCwdWithin(
-        "/home/user/projects/native/opencode",
-        "/home/user/projects/native",
-      ),
+      isTeleportCwdWithin("/home/user/projects/native/codex", "/home/user/projects/native"),
       true,
     );
-    assert.equal(isTeleportCwdWithin("/tmp/oc-wire-test", "/tmp"), true);
+    assert.equal(isTeleportCwdWithin("/tmp/wire-test", "/tmp"), true);
     assert.equal(isTeleportCwdWithin("/foobar", "/foo"), false);
   });
-
-  it("rejects home and temp roots as OpenCode launch directories", () => {
-    assert.equal(isGenericTeleportCwd("/"), true);
-    assert.equal(isGenericTeleportCwd("/tmp"), true);
-    assert.equal(isGenericTeleportCwd("/home/user"), true);
-    assert.equal(isGenericTeleportCwd("/home/user/projects/native"), false);
-    assert.equal(isGenericTeleportCwd("C:\\Users\\Foo"), true);
-    assert.equal(isGenericTeleportCwd("C:\\Users\\Foo\\proj"), false);
-  });
-
-  it.effect("matches an OpenCode session whose cwd is a parent of the project", () =>
-    opencodeSessionMatchesProjectCwd(
-      "/home/user/projects/native",
-      "/home/user/projects/native/opencode",
-    ).pipe(
-      Effect.provideService(HostProcessPlatform, "linux"),
-      Effect.provide(NodeServices.layer),
-      Effect.map((matched) => {
-        assert.equal(matched, true);
-      }),
-    ),
-  );
-
-  it.effect("does not match an OpenCode session launched from /tmp", () =>
-    opencodeSessionMatchesProjectCwd("/tmp", "/tmp/oc-wire-test").pipe(
-      Effect.provideService(HostProcessPlatform, "linux"),
-      Effect.provide(NodeServices.layer),
-      Effect.map((matched) => {
-        assert.equal(matched, false);
-      }),
-    ),
-  );
-
-  it("does not treat sibling harness folders as OpenCode parent matches", () => {
-    assert.equal(isForeignOpenCodeProjectFolder("/home/user/projects/native/codex"), true);
-    assert.equal(
-      isForeignOpenCodeProjectFolder("/home/user/projects/native/claude"),
-      true,
-    );
-    assert.equal(
-      isForeignOpenCodeProjectFolder("/home/user/projects/native/opencode"),
-      false,
-    );
-  });
-
-  it.effect("does not list a parent OpenCode session under a Codex project folder", () =>
-    opencodeSessionMatchesProjectCwd(
-      "/home/user/projects/native",
-      "/home/user/projects/native/codex",
-    ).pipe(
-      Effect.provideService(HostProcessPlatform, "linux"),
-      Effect.provide(NodeServices.layer),
-      Effect.map((matched) => {
-        assert.equal(matched, false);
-      }),
-    ),
-  );
 
   it.effect("treats a symlink cwd as the same project", () =>
     Effect.gen(function* () {
@@ -135,5 +73,67 @@ describe("teleport cwd matching", () => {
       const resolved = yield* resolveTeleportCwdPath(`${project}/`);
       assert.equal(resolved, yield* fs.realPath(project));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("treats a T3 worktree cwd as part of the project when listed as extra", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/home/user/.t3/worktrees/repo/feature",
+      projectCwd: "/home/user/projects/repo",
+      extraCwds: ["/home/user/.t3/worktrees/repo/feature"],
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, true);
+      }),
+    ),
+  );
+
+  it.effect("treats a project subdirectory cwd as part of the project", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/home/user/projects/repo/packages/app",
+      projectCwd: "/home/user/projects/repo",
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, true);
+      }),
+    ),
+  );
+
+  it.effect("does not treat an ancestor cwd as part of the project", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/",
+      projectCwd: "/home/user/projects/repo",
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, false);
+      }),
+    ),
+  );
+
+  it.effect("does not treat a dot-dot sibling as part of the project", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/home/user/projects/repo/../other",
+      projectCwd: "/home/user/projects/repo",
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, false);
+      }),
+    ),
+  );
+
+  it.effect("does not treat an unrelated worktree as part of the project", () =>
+    teleportSessionBelongsToProject({
+      sessionCwd: "/home/user/.t3/worktrees/other/feature",
+      projectCwd: "/home/user/projects/repo",
+      extraCwds: ["/home/user/.t3/worktrees/repo/feature"],
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.map((matched) => {
+        assert.equal(matched, false);
+      }),
+    ),
   );
 });

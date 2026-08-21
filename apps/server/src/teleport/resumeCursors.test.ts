@@ -1,13 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
 
-import { resetTeleportFormats } from "./formats/registry.ts";
 import { buildTeleportResumeCursor, readTeleportExternalSessionId } from "./resumeCursors.ts";
 import { TELEPORT_TEST_SESSION_ID } from "./testFixtures.ts";
 
 describe("teleport resume cursors", () => {
   it("prefers the teleport payload over a resume cursor", () => {
-    resetTeleportFormats();
     assert.equal(
       readTeleportExternalSessionId({
         provider: ProviderDriverKind.make("grok"),
@@ -20,8 +18,7 @@ describe("teleport resume cursors", () => {
     );
   });
 
-  it("falls back to a generic session id when no format is registered", () => {
-    resetTeleportFormats();
+  it("falls back to a generic session id when no format adapter is supplied", () => {
     assert.deepStrictEqual(
       buildTeleportResumeCursor({
         provider: "codex",

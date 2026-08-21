@@ -1,7 +1,14 @@
 "use client";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
+import {
+  canCreateProjectInEnvironment,
+  getCloneDestinationBrowsePath,
+  getCloneDestinationPath,
+  getCloneDirectoryName,
+  getDefaultCloneUrl,
+  normalizePastedCloneUrl,
+} from "@t3tools/client-runtime/operations/projects";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
@@ -20,9 +27,11 @@ import {
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
+  type ProviderInstanceId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
+  type TeleportProvider,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -38,6 +47,7 @@ import {
   LoaderIcon,
   MessageSquareIcon,
   PaletteIcon,
+  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -101,6 +111,7 @@ import {
 } from "../wslPaths";
 import {
   ADDON_ICON_CLASS,
+  browseInputEndPaddingClass,
   buildBrowseGroups,
   buildProjectActionItems,
   buildRootGroups,
@@ -111,11 +122,13 @@ import {
   type CommandPaletteSubmenuItem,
   type CommandPaletteView,
   filterCommandPaletteGroups,
+  filterPinnedBrowseEntries,
   getCommandPaletteInputPlaceholder,
   getCommandPaletteMode,
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
+  selectTeleportImportProjects,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 
@@ -140,6 +153,7 @@ function importSessionsStatusItem(input: {
   readonly title: string;
   readonly description?: string;
   readonly icon: ReactNode;
+  readonly run?: () => Promise<void>;
 }): CommandPaletteActionItem {
   return {
     kind: "action",
@@ -148,8 +162,9 @@ function importSessionsStatusItem(input: {
     title: input.title,
     ...(input.description === undefined ? {} : { description: input.description }),
     icon: input.icon,
-    disabled: true,
-    run: async () => undefined,
+    disabled: input.run === undefined,
+    keepOpen: input.run !== undefined,
+    run: input.run ?? (async () => undefined),
   };
 }
 
@@ -194,9 +209,18 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
-import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
+import {
+  COMMAND_PALETTE_META_ICON_CLASS,
+  CommandPaletteMetaDot,
+  ThreadCommandSubtitle,
+} from "./ThreadCommandSubtitle";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
-import { isTeleportedOut, teleportFailureMessage, teleportProviderLabel } from "../lib/teleport";
+import {
+  environmentSupportsTeleport,
+  isTeleportedOut,
+  teleportFailureMessage,
+  teleportProviderLabel,
+} from "../lib/teleport";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
 import { teleportEnvironment } from "../state/teleport";
 import {
@@ -588,7 +612,6 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       >
         {children}
         <CommandPaletteDialog
-          open={state.open}
           mode={state.mode}
           openIntent={state.openIntent}
           setOpen={setOpen}
@@ -601,7 +624,6 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 }
 
 function CommandPaletteDialog(props: {
-  readonly open: boolean;
   readonly mode: SearchOverlayMode;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
@@ -609,10 +631,6 @@ function CommandPaletteDialog(props: {
   readonly clearOpenIntent: () => void;
 }) {
   const composerHandleRef = useComposerHandleContext();
-
-  if (!props.open) {
-    return null;
-  }
 
   return (
     <CommandDialogPopup
@@ -658,7 +676,7 @@ function OpenCommandPaletteDialog(props: {
   readonly clearOpenIntent: () => void;
 }) {
   const navigate = useNavigate();
-  const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
+  const { clearOpenIntent, openIntent, openOverlayMode, setOpen: setPaletteOpen } = props;
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
@@ -738,6 +756,15 @@ function OpenCommandPaletteDialog(props: {
   const browseNavigation = browseNavigationRef.current;
   const teleportImportPendingRef = useRef(false);
   const importListGenerationRef = useRef(0);
+  const setOpen = useCallback(
+    (open: boolean) => {
+      if (!open) {
+        importListGenerationRef.current += 1;
+      }
+      setPaletteOpen(open);
+    },
+    [setPaletteOpen],
+  );
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
@@ -754,6 +781,27 @@ function OpenCommandPaletteDialog(props: {
     () =>
       new Map(
         environments.map((environment) => [environment.environmentId, environment.label] as const),
+      ),
+    [environments],
+  );
+  const projectEnvironmentLocationById = useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => {
+          const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
+          const isLocal = isPrimary || isDesktopLocalConnectionTarget(environment.entry.target);
+          return [
+            environment.environmentId,
+            {
+              kind: isLocal ? "local" : "remote",
+              label: isPrimary
+                ? "Local"
+                : isLocal
+                  ? `${environment.label} (Local)`
+                  : environment.label,
+            },
+          ] as const;
+        }),
       ),
     [environments],
   );
@@ -913,6 +961,16 @@ function OpenCommandPaletteDialog(props: {
   );
   const isRemoteProjectCloneFlow = addProjectCloneFlow !== null;
   const isRemoteProjectRepositoryStep = addProjectCloneFlow?.step === "repository";
+  // The destination step pins the repository folder onto the browsed path, so
+  // the proposed clone target is "<chosen folder>/<repo>" instead of the bare
+  // folder. A lookup reports "owner/repo"; a pasted clone URL falls back to its
+  // own last segment, minus ".git".
+  const pinnedCloneDirectoryName =
+    addProjectCloneFlow?.step === "confirm"
+      ? getCloneDirectoryName(
+          addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.remoteUrl,
+        )
+      : "";
   const browsePath = useMemo(
     () => getFilesystemBrowsePath(query, browseEnvironmentPlatform, !isRemoteProjectRepositoryStep),
     [browseEnvironmentPlatform, isRemoteProjectRepositoryStep, query],
@@ -985,8 +1043,16 @@ function OpenCommandPaletteDialog(props: {
   const isBrowsePending = browseQuery.isPending;
   const browseEntries = browseResult?.entries ?? EMPTY_BROWSE_ENTRIES;
   const { visibleEntries: visibleBrowseEntries, exactEntry: exactBrowseEntry } = useMemo(
-    () => filterFilesystemBrowseEntries(browseEntries, browsePath.filterQuery),
-    [browseEntries, browsePath.filterQuery],
+    () =>
+      pinnedCloneDirectoryName
+        ? filterPinnedBrowseEntries({
+            browseEntries,
+            filterQuery: browsePath.filterQuery,
+            pinnedDirectoryName: pinnedCloneDirectoryName,
+            caseSensitive: !isWindowsPlatform(browseEnvironmentPlatform),
+          })
+        : filterFilesystemBrowseEntries(browseEntries, browsePath.filterQuery),
+    [browseEntries, browseEnvironmentPlatform, browsePath.filterQuery, pinnedCloneDirectoryName],
   );
 
   const prefetchBrowsePath = useCallback(
@@ -1093,8 +1159,29 @@ function OpenCommandPaletteDialog(props: {
           valuePrefix: "new-thread-in",
           searchTerms: (project) => {
             const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+            const location = projectEnvironmentLocationById.get(project.environmentId);
+            return [
+              ...(group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ??
+                []),
+              ...(location ? [location.label] : []),
+            ];
+          },
+          renderDescription: (project) => {
+            const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
+              kind: "remote",
+              label: "Remote",
+            };
             return (
-              group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  {location.kind === "remote" ? (
+                    <ServerIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
+                  ) : null}
+                  <span className="truncate">{location.label}</span>
+                </span>
+                <CommandPaletteMetaDot />
+                <span className="truncate">{project.workspaceRoot}</span>
+              </span>
             );
           },
           icon: projectFavicon,
@@ -1115,7 +1202,13 @@ function OpenCommandPaletteDialog(props: {
           },
         }),
       ),
-    [contextualProjectRef, handleNewThread, pickerProjects, projectGroupByTargetKey],
+    [
+      contextualProjectRef,
+      handleNewThread,
+      pickerProjects,
+      projectEnvironmentLocationById,
+      projectGroupByTargetKey,
+    ],
   );
 
   const allThreadItems = useMemo(
@@ -1231,6 +1324,7 @@ function OpenCommandPaletteDialog(props: {
   }
 
   function popView(): void {
+    importListGenerationRef.current += 1;
     browseNavigation.invalidate();
     setAddProjectCloneFlow(null);
     if (viewStack.length <= 1) {
@@ -1254,7 +1348,8 @@ function OpenCommandPaletteDialog(props: {
     async (
       project: Project,
       session: {
-        readonly provider: "codex" | "claudeAgent" | "opencode" | "grok";
+        readonly provider: TeleportProvider;
+        readonly providerInstanceId?: ProviderInstanceId;
         readonly externalSessionId: string;
       },
     ): Promise<void> => {
@@ -1271,6 +1366,9 @@ function OpenCommandPaletteDialog(props: {
             sessions: [
               {
                 provider: session.provider,
+                ...(session.providerInstanceId === undefined
+                  ? {}
+                  : { providerInstanceId: session.providerInstanceId }),
                 externalSessionId: session.externalSessionId,
               },
             ],
@@ -1324,6 +1422,20 @@ function OpenCommandPaletteDialog(props: {
       }
       if (result._tag !== "Success") {
         if (isAtomCommandInterrupted(result)) {
+          replaceTopPaletteView(
+            nativeSessionsPaletteView(project.title, [
+              importSessionsStatusItem({
+                value: "import-sessions-interrupted",
+                title: "Could not list native sessions",
+                description: "The request was interrupted. Try again.",
+                icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+                run: async () => {
+                  replaceTopPaletteView(importSessionsLoadingView(project.title));
+                  await loadNativeSessionsIntoView(project);
+                },
+              }),
+            ]),
+          );
           return;
         }
         replaceTopPaletteView(
@@ -1333,6 +1445,10 @@ function OpenCommandPaletteDialog(props: {
               title: "Could not list native sessions",
               description: teleportFailureMessage(squashAtomCommandFailure(result)),
               icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+              run: async () => {
+                replaceTopPaletteView(importSessionsLoadingView(project.title));
+                await loadNativeSessionsIntoView(project);
+              },
             }),
           ]),
         );
@@ -1356,7 +1472,7 @@ function OpenCommandPaletteDialog(props: {
           project.title,
           result.value.sessions.map((session) => ({
             kind: "action" as const,
-            value: `import-session:${session.provider}:${session.externalSessionId}`,
+            value: `import-session:${session.provider}:${session.providerInstanceId}:${session.externalSessionId}`,
             searchTerms: [
               session.title ?? "",
               session.externalSessionId,
@@ -1389,9 +1505,20 @@ function OpenCommandPaletteDialog(props: {
     [loadNativeSessionsIntoView, pushPaletteView],
   );
 
+  const importProjects = useMemo(
+    () =>
+      selectTeleportImportProjects(projects, (environmentId) =>
+        environmentSupportsTeleport(
+          environments.find((environment) => environment.environmentId === environmentId)
+            ?.serverConfig?.environment.capabilities,
+        ),
+      ),
+    [environments, projects],
+  );
+
   const importProjectItems = useMemo(
     () =>
-      pickerProjects.map((project) => ({
+      importProjects.map((project) => ({
         kind: "action" as const,
         value: `import-sessions:${project.environmentId}:${project.id}`,
         searchTerms: [project.title, project.workspaceRoot, "import", "teleport"],
@@ -1403,7 +1530,7 @@ function OpenCommandPaletteDialog(props: {
           openImportSessionsForProject(project);
         },
       })),
-    [openImportSessionsForProject, pickerProjects],
+    [importProjects, openImportSessionsForProject],
   );
 
   const openImportSessionsFlow = useCallback(() => {
@@ -1411,8 +1538,11 @@ function OpenCommandPaletteDialog(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "No projects available",
-          description: "Add a project before importing native sessions.",
+          title: projects.length > 0 ? "Teleport is not available" : "No projects available",
+          description:
+            projects.length > 0
+              ? "This server does not support importing native CLI sessions."
+              : "Add a project before importing native sessions.",
         }),
       );
       return;
@@ -1428,7 +1558,13 @@ function OpenCommandPaletteDialog(props: {
         ]
       : importProjectItems;
     pushPaletteView(importIntoProjectPaletteView(prioritized));
-  }, [currentProjectEnvironmentId, currentProjectId, importProjectItems, pushPaletteView]);
+  }, [
+    currentProjectEnvironmentId,
+    currentProjectId,
+    importProjectItems,
+    projects.length,
+    pushPaletteView,
+  ]);
 
   const startAddProjectBrowse = useCallback(
     async (environmentId: EnvironmentId): Promise<void> => {
@@ -1729,7 +1865,7 @@ function OpenCommandPaletteDialog(props: {
     setAddProjectCloneFlow(null);
     setQuery("");
     if (environmentId !== undefined && projectId !== undefined) {
-      const project = pickerProjects.find(
+      const project = projects.find(
         (candidate) => candidate.environmentId === environmentId && candidate.id === projectId,
       );
       if (project) {
@@ -1742,8 +1878,11 @@ function OpenCommandPaletteDialog(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "No projects available",
-          description: "Add a project before importing native sessions.",
+          title: projects.length > 0 ? "Teleport is not available" : "No projects available",
+          description:
+            projects.length > 0
+              ? "This server does not support importing native CLI sessions."
+              : "Add a project before importing native sessions.",
         }),
       );
       setOpen(false);
@@ -1771,7 +1910,7 @@ function OpenCommandPaletteDialog(props: {
     importProjectItems,
     loadNativeSessionsIntoView,
     openIntent,
-    pickerProjects,
+    projects,
     replacePaletteView,
     setOpen,
   ]);
@@ -1821,54 +1960,57 @@ function OpenCommandPaletteDialog(props: {
       : null;
     const boundImportProject =
       boundTeleport && activeThread
-        ? (pickerProjects.find(
+        ? (projects.find(
             (project) =>
               project.id === activeThread.projectId &&
               project.environmentId === activeThread.environmentId,
           ) ?? null)
         : null;
     if (boundTeleport && boundImportProject) {
+      const boundSupportsTeleport = environmentSupportsTeleport(
+        environments.find(
+          (environment) => environment.environmentId === boundImportProject.environmentId,
+        )?.serverConfig?.environment.capabilities,
+      );
+      if (boundSupportsTeleport) {
+        actionItems.push({
+          kind: "action",
+          value: "action:import-this-thread",
+          searchTerms: [
+            "import this thread",
+            "teleport in",
+            "native",
+            "cli",
+            teleportProviderLabel(boundTeleport.provider),
+          ],
+          title: "Import this thread from native CLI",
+          icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+          run: async () => {
+            await importNativeSession(boundImportProject, {
+              provider: boundTeleport.provider,
+              ...(boundTeleport.providerInstanceId === undefined
+                ? {}
+                : { providerInstanceId: boundTeleport.providerInstanceId }),
+              externalSessionId: boundTeleport.externalSessionId,
+            });
+          },
+        });
+      }
+    }
+
+    if (importProjectItems.length > 0) {
       actionItems.push({
         kind: "action",
-        value: "action:import-this-thread",
-        searchTerms: [
-          "import this thread",
-          "teleport in",
-          "native",
-          "cli",
-          teleportProviderLabel(boundTeleport.provider),
-        ],
-        title: "Import this thread from native CLI",
+        value: "action:import-sessions",
+        searchTerms: ["import sessions", "teleport", "codex", "claude", "native", "cli"],
+        title: "Import sessions...",
         icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+        keepOpen: true,
         run: async () => {
-          await importNativeSession(boundImportProject, {
-            provider: boundTeleport.provider,
-            externalSessionId: boundTeleport.externalSessionId,
-          });
+          openImportSessionsFlow();
         },
       });
     }
-
-    actionItems.push({
-      kind: "action",
-      value: "action:import-sessions",
-      searchTerms: [
-        "import sessions",
-        "teleport",
-        "codex",
-        "claude",
-        "opencode",
-        "grok",
-        "native",
-        "cli",
-      ],
-      title: "Import sessions...",
-      icon: <ImportIcon className={ITEM_ICON_CLASS} />,
-      keepOpen: true,
-      run: async () => {
-        openImportSessionsFlow();
-      },
-    });
   }
 
   actionItems.push({
@@ -2208,14 +2350,17 @@ function OpenCommandPaletteDialog(props: {
 
       const provider = remoteProjectSourceProvider(addProjectCloneFlow.source);
       if (!provider) {
-        const destinationPath = getDefaultCloneParentPath(addProjectCloneFlow.environmentId);
+        const destinationPath = getCloneDestinationPath(
+          getDefaultCloneParentPath(addProjectCloneFlow.environmentId),
+          getCloneDirectoryName(rawRepository),
+        );
         setAddProjectCloneFlow({
           step: "confirm",
           environmentId: addProjectCloneFlow.environmentId,
           source: addProjectCloneFlow.source,
           repositoryInput: rawRepository,
           repository: null,
-          remoteUrl: rawRepository,
+          remoteUrl: normalizePastedCloneUrl(rawRepository),
         });
         setHighlightedItemValue(null);
         setQuery(destinationPath);
@@ -2245,14 +2390,17 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
       const repository = lookupResult.value;
-      const destinationPath = getDefaultCloneParentPath(addProjectCloneFlow.environmentId);
+      const destinationPath = getCloneDestinationPath(
+        getDefaultCloneParentPath(addProjectCloneFlow.environmentId),
+        getCloneDirectoryName(repository.nameWithOwner),
+      );
       setAddProjectCloneFlow({
         step: "confirm",
         environmentId: addProjectCloneFlow.environmentId,
         source: addProjectCloneFlow.source,
         repositoryInput: rawRepository,
         repository,
-        remoteUrl: repository.sshUrl,
+        remoteUrl: getDefaultCloneUrl(repository),
       });
       setHighlightedItemValue(null);
       setQuery(destinationPath);
@@ -2321,7 +2469,14 @@ function OpenCommandPaletteDialog(props: {
 
   const browseTo = useCallback(
     async (name: string): Promise<void> => {
-      const nextQuery = appendBrowsePathSegment(query, name);
+      const nextQuery = pinnedCloneDirectoryName
+        ? getCloneDestinationBrowsePath({
+            browseDirectoryPath: browsePath.directoryPath,
+            selectedDirectoryName: name,
+            cloneDirectoryName: pinnedCloneDirectoryName,
+            caseSensitive: !isWindowsPlatform(browseEnvironmentPlatform),
+          })
+        : appendBrowsePathSegment(query, name);
       await browseNavigation.run(
         () => prefetchBrowsePath(getBrowseDirectoryPath(nextQuery)),
         () => {
@@ -2331,7 +2486,14 @@ function OpenCommandPaletteDialog(props: {
         },
       );
     },
-    [browseNavigation, prefetchBrowsePath, query],
+    [
+      browseNavigation,
+      browseEnvironmentPlatform,
+      browsePath.directoryPath,
+      pinnedCloneDirectoryName,
+      prefetchBrowsePath,
+      query,
+    ],
   );
 
   const browseUp = useCallback(async (): Promise<void> => {
@@ -2340,15 +2502,16 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
+    const nextQuery = getCloneDestinationPath(parentPath, pinnedCloneDirectoryName);
     await browseNavigation.run(
       () => prefetchBrowsePath(parentPath),
       () => {
         setHighlightedItemValue(null);
-        setQuery(parentPath);
+        setQuery(nextQuery);
         setBrowseGeneration((generation) => generation + 1);
       },
     );
-  }, [browseNavigation, browsePath.parentPath, prefetchBrowsePath]);
+  }, [browseNavigation, browsePath.parentPath, pinnedCloneDirectoryName, prefetchBrowsePath]);
 
   // Resolve the add-project path from browse data when available. When the
   // query has a trailing separator (e.g. "~/projects/foo/"), parentPath is the
@@ -2761,13 +2924,16 @@ function OpenCommandPaletteDialog(props: {
       footerTrailing={footerTrailing}
       inputAccessory={inputAccessory}
       inputProps={{
+        // The submit button is absolutely positioned over the field, so the
+        // inner input must reserve enough room for the full action label.
         className:
           addProjectCloneFlow?.step === "repository"
-            ? "pe-32"
+            ? "*:data-[slot=autocomplete-input]:pe-32!"
             : isBrowsing
-              ? willCreateProjectPath
-                ? "pe-36"
-                : "pe-16"
+              ? browseInputEndPaddingClass({
+                  willCreateProjectPath,
+                  hasHighlightedBrowseItem,
+                })
               : undefined,
         placeholder: inputPlaceholder,
         wrapperClassName: isSubmenu

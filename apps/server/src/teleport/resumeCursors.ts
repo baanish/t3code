@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { getTeleportFormat } from "./formats/registry.ts";
+import type { TeleportFormatAdapter } from "./formats/adapter.ts";
 import { isRecord, nonEmptyString } from "./json.ts";
 
 const decodeTeleportRuntimePayload = Schema.decodeUnknownOption(TeleportRuntimePayload);
@@ -25,7 +25,6 @@ export function toTeleportProvider(
   return Effect.fail(
     new TeleportUnsupportedProviderError({
       provider,
-      message: `Teleport does not support provider '${provider}'.`,
     }),
   );
 }
@@ -33,9 +32,10 @@ export function toTeleportProvider(
 export function buildTeleportResumeCursor(input: {
   readonly provider: TeleportProvider;
   readonly externalSessionId: string;
+  readonly adapter?: TeleportFormatAdapter | undefined;
 }): unknown {
   return (
-    getTeleportFormat(input.provider)?.resumeCursor(input.externalSessionId) ?? {
+    input.adapter?.resumeCursor(input.externalSessionId) ?? {
       sessionId: input.externalSessionId,
     }
   );
@@ -52,14 +52,25 @@ export function readTeleportRuntimePayload(
 
 export function teleportThreadStateFromPayload(input: {
   readonly provider: TeleportProvider;
+  readonly providerInstanceId?: TeleportThreadState["providerInstanceId"];
   readonly payload: TeleportRuntimePayload;
+  readonly forkedFromThreadId?: TeleportThreadState["forkedFromThreadId"];
 }): TeleportThreadState {
   return {
     presence: resolveTeleportPresence(input.payload),
     provider: input.provider,
+    ...(input.providerInstanceId === undefined
+      ? {}
+      : { providerInstanceId: input.providerInstanceId }),
     externalSessionId: input.payload.externalSessionId,
     nativePath: input.payload.nativePath,
     lastSyncedAt: input.payload.lastSyncedAt,
+    ...(input.payload.nativeRevision === undefined
+      ? {}
+      : { nativeRevision: input.payload.nativeRevision }),
+    ...(input.forkedFromThreadId === undefined
+      ? {}
+      : { forkedFromThreadId: input.forkedFromThreadId }),
   };
 }
 
@@ -67,6 +78,7 @@ export function readTeleportExternalSessionId(input: {
   readonly provider: ProviderDriverKind;
   readonly resumeCursor: unknown;
   readonly runtimePayload: unknown;
+  readonly adapter?: TeleportFormatAdapter | undefined;
 }): string | undefined {
   if (isRecord(input.runtimePayload)) {
     const teleport = input.runtimePayload.teleport;
@@ -82,8 +94,5 @@ export function readTeleportExternalSessionId(input: {
     return undefined;
   }
 
-  if (!isTeleportProvider(input.provider)) {
-    return undefined;
-  }
-  return getTeleportFormat(input.provider)?.readExternalSessionId(input.resumeCursor);
+  return input.adapter?.readExternalSessionId(input.resumeCursor);
 }

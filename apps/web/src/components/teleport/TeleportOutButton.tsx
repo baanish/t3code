@@ -3,13 +3,18 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { isTeleportProvider, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { LogOutIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { buildLoadingThreadFromShell } from "../ChatView.logic";
-import { isTeleportedOut, teleportFailureMessage } from "../../lib/teleport";
-import { useThread, useThreadShell } from "../../state/entities";
+import {
+  environmentSupportsTeleport,
+  isTeleportedOut,
+  teleportFailureMessage,
+  threadSupportsTeleportExport,
+} from "../../lib/teleport";
+import { useServerConfigs, useThread, useThreadShell } from "../../state/entities";
 import { teleportEnvironment } from "../../state/teleport";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
@@ -32,6 +37,7 @@ export function TeleportOutButton({
   const threadRef = scopeThreadRef(environmentId, threadId);
   const detail = useThread(threadRef);
   const shell = useThreadShell(threadRef);
+  const serverConfigs = useServerConfigs();
   const exportSession = useAtomCommand(teleportEnvironment.exportSession, {
     reportFailure: false,
   });
@@ -41,17 +47,22 @@ export function TeleportOutButton({
   const pendingRef = useRef(false);
   const [pending, setPending] = useState(false);
   const thread = detail ?? (shell === null ? null : buildLoadingThreadFromShell(shell));
-  if (!isServerThread || thread === null) {
+  if (
+    !isServerThread ||
+    thread === null ||
+    !environmentSupportsTeleport(serverConfigs.get(environmentId)?.environment.capabilities)
+  ) {
     return null;
   }
 
   const teleport = thread.teleport ?? null;
   const teleportedOut = isTeleportedOut(teleport);
-  const providerName = thread.session?.providerName;
-  const supported =
-    teleportedOut ||
-    (typeof providerName === "string" && isTeleportProvider(providerName)) ||
-    isTeleportProvider(thread.modelSelection.instanceId);
+  const supported = threadSupportsTeleportExport({
+    teleportedOut,
+    providerName: thread.session?.providerName ?? undefined,
+    instanceId: thread.modelSelection.instanceId,
+    providers: serverConfigs.get(environmentId)?.providers ?? [],
+  });
   if (!supported) {
     return null;
   }
@@ -66,15 +77,18 @@ export function TeleportOutButton({
         render={
           <Button
             type="button"
-            className="shrink-0"
+            className={busy ? "shrink-0 cursor-not-allowed opacity-64" : "shrink-0"}
             variant="outline"
-            size="xs"
+            size="icon-xs"
+            // The tooltip wrapper replaces data-slot="button", so themed
+            // toolbar styling needs its own hook.
+            data-toolbar-control=""
             aria-label={
               teleportedOut
                 ? "Import this thread from the native CLI"
                 : "Teleport this thread to the native CLI"
             }
-            disabled={busy}
+            aria-disabled={busy}
             onClick={() => {
               if (pendingRef.current || busy) {
                 return;
@@ -95,7 +109,11 @@ export function TeleportOutButton({
                         sessions: [
                           {
                             provider: teleport.provider,
+                            ...(teleport.providerInstanceId === undefined
+                              ? {}
+                              : { providerInstanceId: teleport.providerInstanceId }),
                             externalSessionId: teleport.externalSessionId,
+                            nativePath: teleport.nativePath,
                           },
                         ],
                       },
@@ -150,7 +168,7 @@ export function TeleportOutButton({
               })();
             }}
           >
-            <LogOutIcon className={teleportedOut ? "size-3 -scale-x-100" : "size-3"} />
+            <LogOutIcon className={teleportedOut ? "-scale-x-100" : ""} />
           </Button>
         }
       />

@@ -20,10 +20,32 @@ export function nonEmptyString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * Message text from a native session. Empty-after-trim is skipped, but
+ * leading/trailing whitespace on real content is preserved so export can
+ * round-trip the original transcript.
+ */
+export function nativeSessionText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return value.trim().length > 0 ? value : undefined;
+}
+
+export function isSafeTeleportSessionId(value: string): boolean {
+  if (value.length === 0 || value.length > 200) {
+    return false;
+  }
+  if (value.includes("\0") || value.includes("/") || value.includes("\\")) {
+    return false;
+  }
+  return value !== "." && value !== "..";
+}
+
 export function parseJsonObject(raw: string): Record<string, unknown> | undefined {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(raw.startsWith("\uFEFF") ? raw.slice(1) : raw);
   } catch {
     return undefined;
   }
@@ -32,7 +54,7 @@ export function parseJsonObject(raw: string): Record<string, unknown> | undefine
 
 export function collectTextParts(content: unknown): string | undefined {
   if (typeof content === "string") {
-    return nonEmptyString(content);
+    return nativeSessionText(content);
   }
   if (!Array.isArray(content)) {
     return undefined;
@@ -42,12 +64,12 @@ export function collectTextParts(content: unknown): string | undefined {
     if (!isRecord(part)) {
       continue;
     }
-    const text = nonEmptyString(part.text);
+    const text = nativeSessionText(part.text);
     if (text) {
       parts.push(text);
     }
   }
-  return nonEmptyString(parts.join("\n"));
+  return nativeSessionText(parts.join("\n"));
 }
 
 export function truncateTitle(input: string): string {
@@ -63,7 +85,11 @@ export function isSyntheticNativeUserText(text: string): boolean {
   return (
     trimmed.startsWith("<environment_context>") ||
     trimmed.startsWith("<skills_instructions>") ||
-    trimmed.startsWith("<permissions instructions>")
+    trimmed.startsWith("<permissions instructions>") ||
+    trimmed.startsWith("<local-command-caveat>") ||
+    trimmed.startsWith("<command-name>") ||
+    trimmed.startsWith("<system-reminder>") ||
+    trimmed.startsWith("<local-command-stdout>")
   );
 }
 
@@ -91,5 +117,6 @@ export function firstUserTitle(
 export const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu;
 
 export function uuidFromPath(filePath: string): string | undefined {
-  return filePath.match(UUID_RE)?.[0]?.toLowerCase();
+  const fileName = filePath.replaceAll("\\", "/").split("/").at(-1) ?? filePath;
+  return fileName.match(UUID_RE)?.[0]?.toLowerCase();
 }

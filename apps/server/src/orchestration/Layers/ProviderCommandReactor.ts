@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
+  type OrchestrationThread,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -39,6 +40,7 @@ import {
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
 import { forkParked, ServerActivation } from "../../serverActivation.ts";
+import { canReplaceThreadTitle, DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import {
   resolveSourceControlWriterModelSelection,
   ServerSettingsService,
@@ -91,7 +93,6 @@ const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-const DEFAULT_THREAD_TITLE = "New thread";
 const MAX_REGENERATION_ATTACHMENTS = 4;
 const MAX_THREAD_TITLE_CONTEXT_CHARS = 8_000;
 const MAX_FIRST_USER_TITLE_CONTEXT_CHARS = 2_000;
@@ -225,18 +226,6 @@ export function providerErrorLabelFromInstanceHint(input: {
   return providerErrorLabel(
     input.instanceId ?? input.modelSelectionInstanceId ?? input.sessionProvider,
   );
-}
-
-function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolean {
-  const trimmedCurrentTitle = currentTitle.trim();
-  if (trimmedCurrentTitle === DEFAULT_THREAD_TITLE) {
-    return true;
-  }
-
-  const trimmedTitleSeed = titleSeed?.trim();
-  return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
-    ? trimmedCurrentTitle === trimmedTitleSeed
-    : false;
 }
 
 function findProviderAdapterRequestError(
@@ -626,6 +615,7 @@ const make = Effect.gen(function* () {
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         providerInstanceId: desiredInstanceId,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        ...(thread.title ? { title: thread.title } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
@@ -1184,6 +1174,32 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
   });
 
+  const settleInterruptedThreadSession = (input: {
+    readonly thread: OrchestrationThread;
+    readonly createdAt: string;
+  }) => {
+    const session = input.thread.session;
+    if (!session || session.status === "stopped") {
+      return Effect.void;
+    }
+    return setThreadSession({
+      threadId: input.thread.id,
+      session: {
+        threadId: input.thread.id,
+        status: "ready",
+        providerName: session.providerName,
+        ...(session.providerInstanceId !== undefined
+          ? { providerInstanceId: session.providerInstanceId }
+          : {}),
+        runtimeMode: session.runtimeMode,
+        activeTurnId: null,
+        lastError: session.lastError,
+        updatedAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  };
+
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
@@ -1203,8 +1219,36 @@ const make = Effect.gen(function* () {
       });
     }
 
-    // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+    const liveSession = (yield* providerService.listSessions()).find(
+      (session) => session.threadId === thread.id,
+    );
+    if (!liveSession) {
+      // Projection can stay "running" after the in-memory provider session
+      // is gone (restart, earlier stop). Do not recover just to interrupt.
+      return yield* settleInterruptedThreadSession({
+        thread,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    // Orchestration turn ids are not provider turn ids, so interrupt by
+    // session. Passing the orchestration id would make Codex interrupt the
+    // wrong turn and make Grok ignore the request.
+    yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
+      Effect.catchCause((cause) =>
+        settleInterruptedThreadSession({
+          thread,
+          createdAt: event.payload.createdAt,
+        }).pipe(
+          Effect.andThen(
+            Effect.logWarning("provider turn interrupt failed; settled projected session", {
+              threadId: thread.id,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      ),
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (

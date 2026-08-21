@@ -56,6 +56,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.pullRequestsListStats]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsDetail]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsActivity]: AuthOrchestrationReadScope,
+  [WS_METHODS.pullRequestsThreadComments]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsDiffFileContents]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsRunAction]: AuthOrchestrationOperateScope,
   [WS_METHODS.pullRequestsUpdate]: AuthOrchestrationOperateScope,
@@ -126,6 +127,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.teleportListSessions]: AuthOrchestrationReadScope,
   [WS_METHODS.teleportImportSessions]: AuthOrchestrationOperateScope,
   [WS_METHODS.teleportExportSession]: AuthOrchestrationOperateScope,
+  [WS_METHODS.teleportCheckNativeRevision]: AuthOrchestrationReadScope,
+  [WS_METHODS.teleportForkNativeDivergence]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

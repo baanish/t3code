@@ -1,6 +1,7 @@
 import {
   TeleportDiscoveryError,
   TeleportFileLockedError,
+  TeleportLockProbeError,
   TeleportNativeWriteError,
   TeleportSchemaVersionError,
   type TeleportProvider,
@@ -10,6 +11,7 @@ import type * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
+import type * as ProcessRunner from "../../processRunner.ts";
 import type { TeleportHomes } from "../homes.ts";
 import type { ParsedNativeSession } from "../types.ts";
 
@@ -18,6 +20,7 @@ export interface TeleportFormatAdapter {
   readonly list: (input: {
     readonly homes: TeleportHomes;
     readonly cwd: string;
+    readonly extraCwds?: ReadonlyArray<string>;
   }) => Effect.Effect<
     ReadonlyArray<TeleportSessionCandidate>,
     TeleportSchemaVersionError | TeleportDiscoveryError,
@@ -39,13 +42,20 @@ export interface TeleportFormatAdapter {
     readonly existingNativePath?: string;
   }) => Effect.Effect<
     string,
-    TeleportNativeWriteError | TeleportFileLockedError | TeleportSchemaVersionError,
-    FileSystem.FileSystem | Path.Path
+    | TeleportNativeWriteError
+    | TeleportFileLockedError
+    | TeleportLockProbeError
+    | TeleportSchemaVersionError,
+    FileSystem.FileSystem | Path.Path | ProcessRunner.ProcessRunner
   >;
   readonly requireUnlocked: (input: {
     readonly homes: TeleportHomes;
     readonly nativePath: string;
-  }) => Effect.Effect<void, TeleportFileLockedError, FileSystem.FileSystem | Path.Path>;
+  }) => Effect.Effect<
+    void,
+    TeleportFileLockedError | TeleportLockProbeError,
+    FileSystem.FileSystem | Path.Path | ProcessRunner.ProcessRunner
+  >;
   readonly resumeCursor: (externalSessionId: string) => unknown;
   readonly readExternalSessionId: (resumeCursor: unknown) => string | undefined;
 }

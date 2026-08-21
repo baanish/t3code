@@ -99,6 +99,7 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
@@ -123,7 +124,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import { TeleportService } from "./teleport/Services/TeleportService.ts";
+import * as TeleportService from "./teleport/TeleportService.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -366,6 +367,7 @@ const makeWsRpcLayer = (
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
+      const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
@@ -422,7 +424,7 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
-      const teleport = yield* TeleportService;
+      const teleport = yield* TeleportService.TeleportService;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -779,9 +781,9 @@ const makeWsRpcLayer = (
                       threadId: command.threadId,
                     }),
                   ),
-                  Effect.ignoreCause({ log: true }),
+                  Effect.as(true),
                 )
-              : Effect.void;
+              : Effect.succeed(false);
 
           const recordSetupScriptLaunchFailure = (input: {
             readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
@@ -968,7 +970,27 @@ const makeWsRpcLayer = (
               if (Cause.hasInterruptsOnly(cause)) {
                 return Effect.fail(dispatchError);
               }
-              return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+              return Effect.uninterruptible(cleanupCreatedThread()).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cleanupCause) =>
+                    Effect.logWarning("bootstrap thread cleanup failed", {
+                      threadId: command.threadId,
+                      detail: Cause.pretty(cleanupCause),
+                    }).pipe(Effect.flatMap(() => Effect.fail(dispatchError))),
+                  onSuccess: (threadDeleted) =>
+                    Effect.fail(
+                      threadDeleted
+                        ? new OrchestrationDispatchCommandError({
+                            message: dispatchError.message,
+                            ...(dispatchError.cause !== undefined
+                              ? { cause: dispatchError.cause }
+                              : {}),
+                            bootstrapThreadDisposition: "deleted",
+                          })
+                        : dispatchError,
+                    ),
+                }),
+              );
             }),
           );
         });
@@ -976,16 +998,38 @@ const makeWsRpcLayer = (
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-        const dispatchEffect =
-          normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
-            ? dispatchBootstrapTurnStart(normalizedCommand)
-            : orchestrationEngine
-                .dispatch(normalizedCommand)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+        // User-facing turns enter only through orchestration.dispatchCommand.
+        // Fail the RPC with OrchestrationDispatchCommandError before bootstrap
+        // or engine.dispatch so a revision check error never silently admits.
+        const guardedDispatch =
+          normalizedCommand.type === "thread.turn.start"
+            ? teleport.requireNativeRevisionForTurn(normalizedCommand.threadId).pipe(
+                Effect.catchDefect((defect) =>
+                  Effect.fail(
+                    new OrchestrationDispatchCommandError({
+                      message: "Failed to verify the imported native session.",
+                      cause: defect,
+                    }),
                   ),
-                );
+                ),
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to verify the imported native session."),
+                ),
+              )
+            : Effect.void;
+        const dispatchEffect = guardedDispatch.pipe(
+          Effect.flatMap(() =>
+            normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
+              ? dispatchBootstrapTurnStart(normalizedCommand)
+              : orchestrationEngine
+                  .dispatch(normalizedCommand)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                    ),
+                  ),
+          ),
+        );
 
         return startup
           .enqueueCommand(dispatchEffect)
@@ -1015,6 +1059,11 @@ const makeWsRpcLayer = (
           providers,
           availableEditors: yield* resolveAvailableEditorsForConfig(
             externalLauncher.resolveAvailableEditors(),
+          ),
+          // Same discovery-with-timeout treatment as editors: a slow probe
+          // must not stall server.getConfig, so it degrades to no targets.
+          remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
+            remoteOpenTargets.resolveTargets(),
           ),
           observability: {
             logsDirectoryPath: config.logsDir,
@@ -1658,6 +1707,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsActivity, pullRequests.activity(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsThreadComments]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsThreadComments,
+            pullRequests.threadComments(input),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsDiffFileContents]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsDiffFileContents,
@@ -2137,23 +2194,31 @@ const makeWsRpcLayer = (
           observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {
             "rpc.aggregate": "preview",
           }),
-        [WS_METHODS.subscribeDiscoveredLocalServers]: (_input) =>
+        [WS_METHODS.subscribeDiscoveredLocalServers]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeDiscoveredLocalServers,
             Stream.callback<DiscoveredLocalServerList>((queue) =>
               Effect.gen(function* () {
+                const configuredUrls = input.configuredUrls ?? [];
                 yield* portDiscovery.retain;
-                const initial = yield* portDiscovery.scan();
+                const initial = yield* portDiscovery.scan(configuredUrls);
                 const initialScannedAt = DateTime.formatIso(yield* DateTime.now);
                 yield* Queue.offer(queue, {
                   servers: initial,
                   scannedAt: initialScannedAt,
+                  configuredUrlProbing: true,
                 });
-                yield* portDiscovery.subscribe((servers) =>
-                  Effect.gen(function* () {
-                    const scannedAt = DateTime.formatIso(yield* DateTime.now);
-                    yield* Queue.offer(queue, { servers, scannedAt });
-                  }),
+                yield* portDiscovery.subscribe(
+                  { configuredUrls, initialSnapshot: initial },
+                  (servers) =>
+                    Effect.gen(function* () {
+                      const scannedAt = DateTime.formatIso(yield* DateTime.now);
+                      yield* Queue.offer(queue, {
+                        servers,
+                        scannedAt,
+                        configuredUrlProbing: true,
+                      });
+                    }),
                 );
               }),
             ),
@@ -2289,6 +2354,22 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.teleportExportSession, teleport.exportSession(input), {
             "rpc.aggregate": "teleport",
           }),
+        [WS_METHODS.teleportCheckNativeRevision]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.teleportCheckNativeRevision,
+            teleport.checkNativeRevision(input),
+            {
+              "rpc.aggregate": "teleport",
+            },
+          ),
+        [WS_METHODS.teleportForkNativeDivergence]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.teleportForkNativeDivergence,
+            teleport.forkNativeDivergence(input),
+            {
+              "rpc.aggregate": "teleport",
+            },
+          ),
       });
     }),
   );

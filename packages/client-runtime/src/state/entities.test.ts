@@ -232,7 +232,7 @@ describe("environment entity projections", () => {
   it("fills missing detail teleport presence from the shell snapshot", () => {
     const nativeTeleport = {
       presence: "native" as const,
-      provider: "grok" as const,
+      provider: "codex" as const,
       externalSessionId: "session-1",
       nativePath: "/tmp/native",
       lastSyncedAt: "2026-08-14T23:00:00.000Z",
