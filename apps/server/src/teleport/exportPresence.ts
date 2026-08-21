@@ -14,13 +14,6 @@ export function isPendingTeleportNativePath(nativePath: string): boolean {
   return nativePath.startsWith(PENDING_TELEPORT_NATIVE_PATH_PREFIX);
 }
 
-export function realExportNativePath(nativePath: string | undefined): string | undefined {
-  if (nativePath === undefined || isPendingTeleportNativePath(nativePath)) {
-    return undefined;
-  }
-  return nativePath;
-}
-
 export function recoveredInterruptedExportState(
   teleport: TeleportThreadState,
   discoveredNativePath: string | undefined,

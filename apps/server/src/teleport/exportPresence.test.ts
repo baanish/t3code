@@ -5,7 +5,6 @@ import * as Ref from "effect/Ref";
 import {
   isPendingTeleportNativePath,
   pendingTeleportNativePath,
-  realExportNativePath,
   recoveredInterruptedExportState,
   teleportExportPresenceOnFailure,
 } from "./exportPresence.ts";
@@ -16,15 +15,6 @@ describe("teleport export presence", () => {
     assert.equal(pending, "teleport-pending:codex:11111111-1111-4111-8111-111111111111");
     assert.equal(isPendingTeleportNativePath(pending), true);
     assert.equal(isPendingTeleportNativePath("/home/user/.codex/sessions/rollout.jsonl"), false);
-  });
-
-  it("ignores pending sentinels when reusing an export path", () => {
-    assert.equal(realExportNativePath("teleport-pending:claudeAgent:abc"), undefined);
-    assert.equal(
-      realExportNativePath("/home/user/.codex/sessions/rollout.jsonl"),
-      "/home/user/.codex/sessions/rollout.jsonl",
-    );
-    assert.equal(realExportNativePath(undefined), undefined);
   });
 
   it("recovers a pending export to T3 when no native file was written", () => {

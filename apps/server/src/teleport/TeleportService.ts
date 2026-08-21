@@ -67,7 +67,6 @@ import { discoverTeleportSessions, loadTeleportSession } from "./discovery.ts";
 import {
   isPendingTeleportNativePath,
   pendingTeleportNativePath,
-  realExportNativePath,
   recoveredInterruptedExportState,
   teleportExportPresenceOnFailure,
 } from "./exportPresence.ts";
@@ -172,13 +171,6 @@ function orchestrationToNative(messages: ReadonlyArray<OrchestrationMessage>): N
       }),
     ];
   });
-}
-
-function allocateExportSessionId(
-  existingPayload: TeleportRuntimePayload | undefined,
-  nextUuid: string,
-): string {
-  return existingPayload?.externalSessionId ?? nextUuid;
 }
 
 function isBusySessionStatus(status: string | undefined): boolean {
@@ -986,8 +978,11 @@ export const make = Effect.gen(function* () {
             ),
           );
           const homes = yield* resolveTeleportHomes(settings);
-          const existingNativePath = realExportNativePath(existingPayload?.nativePath);
-          const externalSessionId = allocateExportSessionId(existingPayload, yield* nextId());
+          // Native files can contain tool calls, results, images, reasoning,
+          // and provider metadata that T3's text projection intentionally
+          // drops. Never replace an imported native file with that lossy
+          // projection; each export gets a new native identity and path.
+          const externalSessionId = yield* nextId();
           yield* claimExtraInFlight(inFlightKeys, `session:${provider}:${externalSessionId}`);
           const providerInstanceId =
             Option.getOrUndefined(binding)?.providerInstanceId ??
@@ -1017,9 +1012,13 @@ export const make = Effect.gen(function* () {
               projects: [project.value],
             }) ?? project.value.workspaceRoot;
           const cwd = yield* resolveTeleportCwdPath(cwdSource);
-          const messages = capMessages(orchestrationToNative(latest.value.messages));
-          const pendingNativePath =
-            existingNativePath ?? pendingTeleportNativePath(provider, externalSessionId);
+          const messages = orchestrationToNative(latest.value.messages);
+          if (messages.length === 0) {
+            return yield* new TeleportInvalidInputError({
+              reason: "Cannot export a thread with no user or assistant text.",
+            });
+          }
+          const pendingNativePath = pendingTeleportNativePath(provider, externalSessionId);
           const pendingPayload: TeleportRuntimePayload = {
             schemaVersion: TELEPORT_SCHEMA_VERSION,
             externalSessionId,
@@ -1162,7 +1161,6 @@ export const make = Effect.gen(function* () {
                 const nativePath = yield* adapter.write({
                   homes,
                   session: nativeSession,
-                  ...(existingNativePath !== undefined ? { existingNativePath } : {}),
                 });
                 yield* Ref.set(writtenNativePathRef, nativePath);
 
