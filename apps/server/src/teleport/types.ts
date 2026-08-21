@@ -1,4 +1,8 @@
-import type { TeleportProvider, TeleportSessionCandidate } from "@t3tools/contracts";
+import type {
+  TeleportNativeRevision,
+  TeleportProvider,
+  TeleportSessionCandidate,
+} from "@t3tools/contracts";
 
 import { definedField } from "./json.ts";
 
@@ -20,6 +24,7 @@ export interface ParsedNativeSession {
   readonly updatedAt?: string;
   readonly messages: ReadonlyArray<NativeTextMessage>;
   readonly providerInstanceId?: TeleportSessionCandidate["providerInstanceId"];
+  readonly nativeRevision?: TeleportNativeRevision;
 }
 
 export function nativeTextMessage(input: {

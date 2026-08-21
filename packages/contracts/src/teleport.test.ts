@@ -10,7 +10,15 @@ import {
   TELEPORTED_OUT_SEND_DISABLED_REASON,
   TELEPORT_IMPORTING_SEND_DISABLED_REASON,
   isTeleportSendDisabledReason,
+  isTeleportNativeRevisionSendDisabledReason,
+  isCanonicalTeleportBinding,
+  teleportNativeRevisionBlocksMutation,
+  teleportNativeRevisionSendDisabledReason,
   teleportSendDisabledReason,
+  TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON,
+  TELEPORT_NATIVE_MISSING_SEND_DISABLED_REASON,
+  TELEPORT_NATIVE_OVERSIZE_SEND_DISABLED_REASON,
+  TeleportNativeDivergenceError,
   TeleportDiscoveryError,
   TeleportExportError,
   TeleportFileLockedError,
@@ -149,6 +157,71 @@ describe("teleport presence", () => {
     expect(isTeleportSendDisabledReason(TELEPORT_IMPORTING_SEND_DISABLED_REASON)).toBe(true);
     expect(isTeleportSendDisabledReason("Messages loading")).toBe(false);
     expect(isTeleportSendDisabledReason(null)).toBe(false);
+  });
+
+  it("decodes a persisted native revision and a fork pointer", () => {
+    const parsed = decodeTeleportThreadState({
+      presence: "t3",
+      provider: "claudeAgent",
+      externalSessionId: "session-1",
+      nativePath: "/tmp/session.jsonl",
+      lastSyncedAt: "2026-08-14T22:00:00.000Z",
+      nativeRevision: {
+        algorithm: "sha256",
+        digest: "abc",
+        byteLength: 12,
+      },
+      forkedFromThreadId: "thread-source",
+    });
+    expect(parsed.nativeRevision?.digest).toBe("abc");
+    expect(parsed.forkedFromThreadId).toBe("thread-source");
+    expect(isCanonicalTeleportBinding(parsed)).toBe(false);
+  });
+
+  it("blocks send for diverged or missing native files without locking teleported-out drafts", () => {
+    expect(teleportNativeRevisionBlocksMutation("diverged")).toBe(true);
+    expect(teleportNativeRevisionBlocksMutation("missing")).toBe(true);
+    expect(teleportNativeRevisionBlocksMutation("oversize")).toBe(true);
+    expect(teleportNativeRevisionBlocksMutation("unchanged")).toBe(false);
+    expect(teleportNativeRevisionBlocksMutation("forked")).toBe(false);
+    expect(teleportNativeRevisionSendDisabledReason("diverged")).toBe(
+      TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON,
+    );
+    expect(teleportNativeRevisionSendDisabledReason("missing")).toBe(
+      TELEPORT_NATIVE_MISSING_SEND_DISABLED_REASON,
+    );
+    expect(teleportNativeRevisionSendDisabledReason("oversize")).toBe(
+      TELEPORT_NATIVE_OVERSIZE_SEND_DISABLED_REASON,
+    );
+    expect(
+      isTeleportNativeRevisionSendDisabledReason(TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON),
+    ).toBe(true);
+    expect(isTeleportSendDisabledReason(TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON)).toBe(
+      false,
+    );
+  });
+
+  it("derives TeleportNativeDivergenceError.message from the kind", () => {
+    const diverged = new TeleportNativeDivergenceError({
+      threadId: ThreadId.make("thread-1"),
+      kind: "diverged",
+      nativePath: "/tmp/session.jsonl",
+      persistedDigest: "abc",
+      observedDigest: "def",
+    });
+    expect(diverged.message).toBe(TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON);
+    const missing = new TeleportNativeDivergenceError({
+      threadId: ThreadId.make("thread-1"),
+      kind: "missing",
+      nativePath: "/tmp/session.jsonl",
+    });
+    expect(missing.message).toBe(TELEPORT_NATIVE_MISSING_SEND_DISABLED_REASON);
+    const oversize = new TeleportNativeDivergenceError({
+      threadId: ThreadId.make("thread-1"),
+      kind: "oversize",
+      nativePath: "/tmp/session.jsonl",
+    });
+    expect(oversize.message).toBe(TELEPORT_NATIVE_OVERSIZE_SEND_DISABLED_REASON);
   });
 });
 

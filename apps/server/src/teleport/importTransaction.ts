@@ -40,6 +40,10 @@ export function teleportStateWithPresence(
     externalSessionId: input.externalSessionId,
     nativePath: input.nativePath,
     lastSyncedAt: input.lastSyncedAt,
+    ...(input.nativeRevision === undefined ? {} : { nativeRevision: input.nativeRevision }),
+    ...(input.forkedFromThreadId === undefined
+      ? {}
+      : { forkedFromThreadId: input.forkedFromThreadId }),
   };
 }
 

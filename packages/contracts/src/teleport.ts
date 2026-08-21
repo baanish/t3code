@@ -1,7 +1,13 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 export const TELEPORT_SCHEMA_VERSION = 1 as const;
@@ -19,6 +25,16 @@ export type TeleportPresence = typeof TeleportPresence.Type;
 export const TeleportRestorePresence = Schema.Literals(["t3", "native"]);
 export type TeleportRestorePresence = typeof TeleportRestorePresence.Type;
 
+export const TeleportNativeRevisionAlgorithm = Schema.Literal("sha256");
+export type TeleportNativeRevisionAlgorithm = typeof TeleportNativeRevisionAlgorithm.Type;
+
+export const TeleportNativeRevision = Schema.Struct({
+  algorithm: TeleportNativeRevisionAlgorithm,
+  digest: TrimmedNonEmptyString,
+  byteLength: NonNegativeInt,
+});
+export type TeleportNativeRevision = typeof TeleportNativeRevision.Type;
+
 export const TeleportThreadState = Schema.Struct({
   presence: TeleportPresence,
   provider: TeleportProvider,
@@ -29,6 +45,12 @@ export const TeleportThreadState = Schema.Struct({
   // Set only while presence is "importing". Restart recovery restores this
   // presence so a crashed import cannot strand the thread.
   restorePresence: Schema.optional(TeleportRestorePresence),
+  // Content digest captured when T3 last imported this native file. Optional
+  // so pre-revision threads still decode; those stay untracked until re-import.
+  nativeRevision: Schema.optional(TeleportNativeRevision),
+  // Set on a T3 thread created by forking a diverged native file. Import
+  // identity lookup skips these so the source thread keeps the canonical bind.
+  forkedFromThreadId: Schema.optional(ThreadId),
 });
 export type TeleportThreadState = typeof TeleportThreadState.Type;
 
@@ -116,6 +138,54 @@ export const TeleportExportSessionResult = Schema.Struct({
 });
 export type TeleportExportSessionResult = typeof TeleportExportSessionResult.Type;
 
+export const TeleportNativeRevisionStatus = Schema.Literals([
+  "not-applicable",
+  "untracked",
+  "unchanged",
+  "diverged",
+  "missing",
+  "oversize",
+  "forked",
+]);
+export type TeleportNativeRevisionStatus = typeof TeleportNativeRevisionStatus.Type;
+
+export const TeleportCheckNativeRevisionInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type TeleportCheckNativeRevisionInput = typeof TeleportCheckNativeRevisionInput.Type;
+
+export const TeleportCheckNativeRevisionResult = Schema.Struct({
+  schemaVersion: Schema.Literal(TELEPORT_SCHEMA_VERSION).pipe(
+    Schema.withDecodingDefault(Effect.succeed(TELEPORT_SCHEMA_VERSION)),
+  ),
+  threadId: ThreadId,
+  status: TeleportNativeRevisionStatus,
+  nativePath: Schema.optional(TrimmedNonEmptyString),
+  persistedRevision: Schema.optional(TeleportNativeRevision),
+  observedRevision: Schema.optional(TeleportNativeRevision),
+  forkedThreadId: Schema.optional(ThreadId),
+});
+export type TeleportCheckNativeRevisionResult = typeof TeleportCheckNativeRevisionResult.Type;
+
+export const TeleportForkNativeDivergenceInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type TeleportForkNativeDivergenceInput = typeof TeleportForkNativeDivergenceInput.Type;
+
+export const TeleportForkNativeDivergenceResult = Schema.Struct({
+  schemaVersion: Schema.Literal(TELEPORT_SCHEMA_VERSION).pipe(
+    Schema.withDecodingDefault(Effect.succeed(TELEPORT_SCHEMA_VERSION)),
+  ),
+  sourceThreadId: ThreadId,
+  threadId: ThreadId,
+  replayed: Schema.Boolean,
+  provider: TeleportProvider,
+  providerInstanceId: ProviderInstanceId,
+  externalSessionId: TrimmedNonEmptyString,
+  nativePath: TrimmedNonEmptyString,
+});
+export type TeleportForkNativeDivergenceResult = typeof TeleportForkNativeDivergenceResult.Type;
+
 export const TeleportRuntimePayload = Schema.Struct({
   schemaVersion: Schema.Literal(TELEPORT_SCHEMA_VERSION),
   externalSessionId: TrimmedNonEmptyString,
@@ -124,6 +194,7 @@ export const TeleportRuntimePayload = Schema.Struct({
   lastSyncedAt: IsoDateTime,
   nativeFormatVersion: Schema.Int,
   presence: Schema.optional(TeleportPresence),
+  nativeRevision: Schema.optional(TeleportNativeRevision),
 });
 export type TeleportRuntimePayload = typeof TeleportRuntimePayload.Type;
 
@@ -165,6 +236,15 @@ export const TELEPORTED_OUT_SEND_DISABLED_REASON =
 export const TELEPORT_IMPORTING_SEND_DISABLED_REASON =
   "This thread is being imported from the native CLI.";
 
+export const TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON =
+  "The native CLI session changed after import. Fork those changes into a new thread to keep both.";
+
+export const TELEPORT_NATIVE_MISSING_SEND_DISABLED_REASON =
+  "The imported native session file is missing.";
+
+export const TELEPORT_NATIVE_OVERSIZE_SEND_DISABLED_REASON =
+  "The imported native session file is too large to compare or fork.";
+
 export function isTeleportSendDisabledReason(
   reason: string | null | undefined,
 ): reason is
@@ -173,6 +253,19 @@ export function isTeleportSendDisabledReason(
   return (
     reason === TELEPORTED_OUT_SEND_DISABLED_REASON ||
     reason === TELEPORT_IMPORTING_SEND_DISABLED_REASON
+  );
+}
+
+export function isTeleportNativeRevisionSendDisabledReason(
+  reason: string | null | undefined,
+): reason is
+  | typeof TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON
+  | typeof TELEPORT_NATIVE_MISSING_SEND_DISABLED_REASON
+  | typeof TELEPORT_NATIVE_OVERSIZE_SEND_DISABLED_REASON {
+  return (
+    reason === TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON ||
+    reason === TELEPORT_NATIVE_MISSING_SEND_DISABLED_REASON ||
+    reason === TELEPORT_NATIVE_OVERSIZE_SEND_DISABLED_REASON
   );
 }
 
@@ -194,6 +287,58 @@ export function teleportSendDisabledReason(
       return _exhaustive;
     }
   }
+}
+
+export function teleportNativeRevisionBlocksMutation(
+  status: TeleportNativeRevisionStatus | null | undefined,
+): boolean {
+  switch (status) {
+    case "diverged":
+    case "missing":
+    case "oversize":
+      return true;
+    case "not-applicable":
+    case "untracked":
+    case "unchanged":
+    case "forked":
+    case null:
+    case undefined:
+      return false;
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}
+
+export function teleportNativeRevisionSendDisabledReason(
+  status: TeleportNativeRevisionStatus | null | undefined,
+): string | null {
+  switch (status) {
+    case "diverged":
+      return TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON;
+    case "missing":
+      return TELEPORT_NATIVE_MISSING_SEND_DISABLED_REASON;
+    case "oversize":
+      return TELEPORT_NATIVE_OVERSIZE_SEND_DISABLED_REASON;
+    case "not-applicable":
+    case "untracked":
+    case "unchanged":
+    case "forked":
+    case null:
+    case undefined:
+      return null;
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}
+
+export function isCanonicalTeleportBinding(
+  teleport: TeleportThreadState | null | undefined,
+): boolean {
+  return teleport != null && teleport.forkedFromThreadId === undefined;
 }
 
 export class TeleportInvalidInputError extends Schema.TaggedErrorClass<TeleportInvalidInputError>()(
@@ -287,6 +432,37 @@ export class TeleportIdentityConflictError extends Schema.TaggedErrorClass<Telep
 ) {
   override get message(): string {
     return `Session '${this.externalSessionId}' is already bound to another T3 project.`;
+  }
+}
+
+export const TeleportNativeDivergenceKind = Schema.Literals(["diverged", "missing", "oversize"]);
+export type TeleportNativeDivergenceKind = typeof TeleportNativeDivergenceKind.Type;
+
+export class TeleportNativeDivergenceError extends Schema.TaggedErrorClass<TeleportNativeDivergenceError>()(
+  "TeleportNativeDivergenceError",
+  {
+    threadId: ThreadId,
+    kind: TeleportNativeDivergenceKind,
+    nativePath: TrimmedNonEmptyString,
+    persistedDigest: Schema.optional(TrimmedNonEmptyString),
+    observedDigest: Schema.optional(TrimmedNonEmptyString),
+    observedByteLength: Schema.optional(NonNegativeInt),
+    forkedThreadId: Schema.optional(ThreadId),
+  },
+) {
+  override get message(): string {
+    switch (this.kind) {
+      case "missing":
+        return TELEPORT_NATIVE_MISSING_SEND_DISABLED_REASON;
+      case "oversize":
+        return TELEPORT_NATIVE_OVERSIZE_SEND_DISABLED_REASON;
+      case "diverged":
+        return TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON;
+      default: {
+        const _exhaustive: never = this.kind;
+        return _exhaustive;
+      }
+    }
   }
 }
 
@@ -402,3 +578,23 @@ export const TeleportExportError = Schema.Union([
   TeleportNativeWriteError,
 ]);
 export type TeleportExportError = typeof TeleportExportError.Type;
+
+export const TeleportCheckNativeRevisionError = Schema.Union([
+  TeleportInvalidInputError,
+  TeleportProjectResolutionError,
+  TeleportDiscoveryError,
+]);
+export type TeleportCheckNativeRevisionError = typeof TeleportCheckNativeRevisionError.Type;
+
+export const TeleportForkNativeDivergenceError = Schema.Union([
+  TeleportInvalidInputError,
+  TeleportUnsupportedProviderError,
+  TeleportSchemaVersionError,
+  TeleportFileLockedError,
+  TeleportLockProbeError,
+  TeleportIdentityConflictError,
+  TeleportProjectResolutionError,
+  TeleportDiscoveryError,
+  TeleportNativeDivergenceError,
+]);
+export type TeleportForkNativeDivergenceError = typeof TeleportForkNativeDivergenceError.Type;

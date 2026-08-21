@@ -64,6 +64,26 @@ describe("teleport import transaction", () => {
     );
   });
 
+  it("preserves native revision and fork provenance when changing presence", () => {
+    const withRevision = importingTeleportState({
+      base: {
+        ...BASE_TELEPORT,
+        nativeRevision: {
+          algorithm: "sha256",
+          digest: "abc",
+          byteLength: 12,
+        },
+        forkedFromThreadId: ThreadId.make("thread-source"),
+      },
+      restorePresence: "t3",
+    });
+    const committed = committedTeleportImportState(withRevision);
+    assert.equal(committed.presence, "t3");
+    assert.equal(committed.nativeRevision?.digest, "abc");
+    assert.equal(committed.forkedFromThreadId, "thread-source");
+    assert.equal(committed.restorePresence, undefined);
+  });
+
   it("restores native presence after an interrupted import", () => {
     const importing = importingTeleportState({
       base: BASE_TELEPORT,

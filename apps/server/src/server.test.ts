@@ -29,7 +29,9 @@ import {
   ProviderInstanceId,
   ResolvedKeybindingRule,
   ThreadId,
+  TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON,
   TELEPORT_SCHEMA_VERSION,
+  TeleportNativeDivergenceError,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -794,6 +796,11 @@ const buildAppUnderTest = (options?: {
               }),
             exportSession: () =>
               Effect.die("TeleportService.exportSession not stubbed in this test"),
+            checkNativeRevision: () =>
+              Effect.die("TeleportService.checkNativeRevision not stubbed in this test"),
+            forkNativeDivergence: () =>
+              Effect.die("TeleportService.forkNativeDivergence not stubbed in this test"),
+            requireNativeRevisionForTurn: () => Effect.void,
             ...options?.layers?.teleportService,
           }),
         ),
@@ -7918,6 +7925,113 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         dispatchedCommands.map((command) => command.type),
         ["thread.create", "thread.delete"],
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("fails thread.turn.start with the native revision error and does not dispatch", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const threadId = ThreadId.make("thread-native-revision-gate");
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          teleportService: {
+            requireNativeRevisionForTurn: () =>
+              Effect.fail(
+                new TeleportNativeDivergenceError({
+                  threadId,
+                  kind: "diverged",
+                  nativePath: "/tmp/session.jsonl",
+                  persistedDigest: "abc",
+                  observedDigest: "def",
+                }),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-native-revision-gate"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-native-revision-gate"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+      assert.equal(result.failure.message, TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON);
+      assert.deepEqual(dispatchedCommands, []);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("does not admit thread.turn.start when the native revision check defects", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          teleportService: {
+            requireNativeRevisionForTurn: () =>
+              Effect.die(new Error("native revision hash exploded")),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-native-revision-defect"),
+            threadId: ThreadId.make("thread-native-revision-defect"),
+            message: {
+              messageId: MessageId.make("msg-native-revision-defect"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+      assert.equal(result.failure.message, "Failed to verify the imported native session.");
+      assert.deepEqual(dispatchedCommands, []);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

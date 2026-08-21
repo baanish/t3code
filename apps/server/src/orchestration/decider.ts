@@ -1561,6 +1561,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             externalSessionId: command.teleport.externalSessionId,
             nativePath: command.teleport.nativePath,
             lastSyncedAt: command.teleport.lastSyncedAt,
+            ...(command.teleport.nativeRevision === undefined
+              ? {}
+              : { nativeRevision: command.teleport.nativeRevision }),
+            ...(command.teleport.forkedFromThreadId === undefined
+              ? {}
+              : { forkedFromThreadId: command.teleport.forkedFromThreadId }),
           },
           updatedAt: command.createdAt,
         },

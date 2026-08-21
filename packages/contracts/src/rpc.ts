@@ -193,9 +193,15 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import {
+  TeleportCheckNativeRevisionError,
+  TeleportCheckNativeRevisionInput,
+  TeleportCheckNativeRevisionResult,
   TeleportExportError,
   TeleportExportSessionInput,
   TeleportExportSessionResult,
+  TeleportForkNativeDivergenceError,
+  TeleportForkNativeDivergenceInput,
+  TeleportForkNativeDivergenceResult,
   TeleportImportError,
   TeleportImportSessionsInput,
   TeleportImportSessionsResult,
@@ -317,6 +323,8 @@ export const WS_METHODS = {
   teleportListSessions: "teleport.listSessions",
   teleportImportSessions: "teleport.importSessions",
   teleportExportSession: "teleport.exportSession",
+  teleportCheckNativeRevision: "teleport.checkNativeRevision",
+  teleportForkNativeDivergence: "teleport.forkNativeDivergence",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -1016,6 +1024,18 @@ export const WsTeleportExportSessionRpc = Rpc.make(WS_METHODS.teleportExportSess
   error: Schema.Union([TeleportExportError, EnvironmentAuthorizationError]),
 });
 
+export const WsTeleportCheckNativeRevisionRpc = Rpc.make(WS_METHODS.teleportCheckNativeRevision, {
+  payload: TeleportCheckNativeRevisionInput,
+  success: TeleportCheckNativeRevisionResult,
+  error: Schema.Union([TeleportCheckNativeRevisionError, EnvironmentAuthorizationError]),
+});
+
+export const WsTeleportForkNativeDivergenceRpc = Rpc.make(WS_METHODS.teleportForkNativeDivergence, {
+  payload: TeleportForkNativeDivergenceInput,
+  success: TeleportForkNativeDivergenceResult,
+  error: Schema.Union([TeleportForkNativeDivergenceError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1111,6 +1131,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsTeleportListSessionsRpc,
   WsTeleportImportSessionsRpc,
   WsTeleportExportSessionRpc,
+  WsTeleportCheckNativeRevisionRpc,
+  WsTeleportForkNativeDivergenceRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

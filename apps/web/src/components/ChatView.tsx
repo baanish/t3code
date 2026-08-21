@@ -175,8 +175,14 @@ import {
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
-import { teleportSendDisabledReason } from "~/lib/teleport";
+import {
+  teleportNativeRevisionSendDisabledReason,
+  teleportSendDisabledReason,
+} from "~/lib/teleport";
+import { teleportNativeConflictTitle } from "~/lib/teleportNativeConflict";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { teleportNativeConflictBannerItem } from "./teleport/TeleportNativeConflictBanner";
+import { useTeleportNativeConflict } from "./teleport/useTeleportNativeConflict";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
@@ -1585,6 +1591,22 @@ function ChatViewContent(props: ChatViewProps) {
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
   const activeThreadEnvironmentId = activeThread?.environmentId ?? null;
+  const teleportNativeConflict = useTeleportNativeConflict({
+    environmentId,
+    threadId: isServerThread ? activeThreadId : null,
+    isServerThread,
+    teleport: activeThread?.teleport,
+    sessionUpdatedAt: activeThread?.session?.updatedAt,
+    onForked: (forkedThreadId) => {
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: {
+          environmentId,
+          threadId: forkedThreadId,
+        },
+      });
+    },
+  });
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: activeThread?.environmentId ?? null,
     threadId: activeThreadId,
@@ -4653,9 +4675,23 @@ function ChatViewContent(props: ChatViewProps) {
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const teleportNativeConflictItems =
+      teleportNativeConflict.visible && teleportNativeConflict.result !== null
+        ? [
+            teleportNativeConflictBannerItem({
+              result: teleportNativeConflict.result,
+              forking: teleportNativeConflict.forking,
+              forkError: teleportNativeConflict.forkError,
+              onFork: () => {
+                void teleportNativeConflict.forkNativeChanges();
+              },
+            }),
+          ]
+        : [];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
         ...urgentSystemItems,
+        ...teleportNativeConflictItems,
         ...backgroundLivenessItems,
         ...calmSystemItems,
         ...wokeThreadItems,
@@ -4664,6 +4700,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     return [
       ...urgentSystemItems,
+      ...teleportNativeConflictItems,
       ...backgroundLivenessItems,
       ...calmSystemItems,
       ...wokeThreadItems,
@@ -4717,6 +4754,11 @@ function ChatViewContent(props: ChatViewProps) {
     parkedThreadBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
+    teleportNativeConflict.forkError,
+    teleportNativeConflict.forkNativeChanges,
+    teleportNativeConflict.forking,
+    teleportNativeConflict.result,
+    teleportNativeConflict.visible,
     wokeThreadBannerItem,
   ]);
   useEffect(() => {
@@ -5049,8 +5091,8 @@ function ChatViewContent(props: ChatViewProps) {
       notifyDirectAnnotationAttached();
       return;
     }
-    const teleportSendBlockReason = teleportSendDisabledReason(activeThread.teleport);
-    if (teleportSendBlockReason !== null) {
+    const teleportPresenceBlockReason = teleportSendDisabledReason(activeThread.teleport);
+    if (teleportPresenceBlockReason !== null) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
@@ -5058,7 +5100,24 @@ function ChatViewContent(props: ChatViewProps) {
             activeThread.teleport?.presence === "importing"
               ? "Thread is being imported"
               : "Thread is in the native CLI",
-          description: teleportSendBlockReason,
+          description: teleportPresenceBlockReason,
+        }),
+      );
+      return;
+    }
+    const latestNativeRevision = await teleportNativeConflict.refresh();
+    const teleportRevisionBlockReason = teleportNativeRevisionSendDisabledReason(
+      latestNativeRevision?.status ?? teleportNativeConflict.result?.status,
+    );
+    if (teleportRevisionBlockReason !== null) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title:
+            latestNativeRevision === null
+              ? "Native CLI session changed"
+              : teleportNativeConflictTitle(latestNativeRevision.status),
+          description: teleportRevisionBlockReason,
         }),
       );
       return;
@@ -6571,7 +6630,8 @@ function ChatViewContent(props: ChatViewProps) {
                             sendDisabledReason={
                               threadDetailLoading
                                 ? "Messages loading"
-                                : teleportSendDisabledReason(activeThread?.teleport)
+                                : (teleportSendDisabledReason(activeThread?.teleport) ??
+                                  teleportNativeConflict.sendDisabledReason)
                             }
                             isPreparingWorktree={isPreparingWorktree}
                             externalDrawerAttached={externalComposerDrawerAttached}

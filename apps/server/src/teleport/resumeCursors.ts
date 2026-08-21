@@ -54,6 +54,7 @@ export function teleportThreadStateFromPayload(input: {
   readonly provider: TeleportProvider;
   readonly providerInstanceId?: TeleportThreadState["providerInstanceId"];
   readonly payload: TeleportRuntimePayload;
+  readonly forkedFromThreadId?: TeleportThreadState["forkedFromThreadId"];
 }): TeleportThreadState {
   return {
     presence: resolveTeleportPresence(input.payload),
@@ -64,6 +65,12 @@ export function teleportThreadStateFromPayload(input: {
     externalSessionId: input.payload.externalSessionId,
     nativePath: input.payload.nativePath,
     lastSyncedAt: input.payload.lastSyncedAt,
+    ...(input.payload.nativeRevision === undefined
+      ? {}
+      : { nativeRevision: input.payload.nativeRevision }),
+    ...(input.forkedFromThreadId === undefined
+      ? {}
+      : { forkedFromThreadId: input.forkedFromThreadId }),
   };
 }
 

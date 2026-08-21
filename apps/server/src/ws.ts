@@ -998,16 +998,38 @@ const makeWsRpcLayer = (
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-        const dispatchEffect =
-          normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
-            ? dispatchBootstrapTurnStart(normalizedCommand)
-            : orchestrationEngine
-                .dispatch(normalizedCommand)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+        // User-facing turns enter only through orchestration.dispatchCommand.
+        // Fail the RPC with OrchestrationDispatchCommandError before bootstrap
+        // or engine.dispatch so a revision check error never silently admits.
+        const guardedDispatch =
+          normalizedCommand.type === "thread.turn.start"
+            ? teleport.requireNativeRevisionForTurn(normalizedCommand.threadId).pipe(
+                Effect.catchDefect((defect) =>
+                  Effect.fail(
+                    new OrchestrationDispatchCommandError({
+                      message: "Failed to verify the imported native session.",
+                      cause: defect,
+                    }),
                   ),
-                );
+                ),
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to verify the imported native session."),
+                ),
+              )
+            : Effect.void;
+        const dispatchEffect = guardedDispatch.pipe(
+          Effect.flatMap(() =>
+            normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
+              ? dispatchBootstrapTurnStart(normalizedCommand)
+              : orchestrationEngine
+                  .dispatch(normalizedCommand)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                    ),
+                  ),
+          ),
+        );
 
         return startup
           .enqueueCommand(dispatchEffect)
@@ -2332,6 +2354,22 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.teleportExportSession, teleport.exportSession(input), {
             "rpc.aggregate": "teleport",
           }),
+        [WS_METHODS.teleportCheckNativeRevision]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.teleportCheckNativeRevision,
+            teleport.checkNativeRevision(input),
+            {
+              "rpc.aggregate": "teleport",
+            },
+          ),
+        [WS_METHODS.teleportForkNativeDivergence]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.teleportForkNativeDivergence,
+            teleport.forkNativeDivergence(input),
+            {
+              "rpc.aggregate": "teleport",
+            },
+          ),
       });
     }),
   );

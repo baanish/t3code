@@ -12,19 +12,28 @@ import {
   TeleportInvalidInputError,
   TeleportProjectResolutionError,
   TeleportIdentityConflictError,
+  TeleportNativeDivergenceError,
   TeleportNativeWriteError,
   TeleportUnsupportedProviderError,
+  teleportNativeRevisionBlocksMutation,
   ThreadId,
   defaultInstanceIdForDriver,
+  isCanonicalTeleportBinding,
   isTeleportProvider,
   resolveTeleportPresence,
   type ModelSelection,
   type OrchestrationMessage,
   type ProjectId,
   type ProviderInstanceId,
+  type TeleportCheckNativeRevisionError,
+  type TeleportCheckNativeRevisionInput,
+  type TeleportCheckNativeRevisionResult,
   type TeleportExportError,
   type TeleportExportSessionInput,
   type TeleportExportSessionResult,
+  type TeleportForkNativeDivergenceError,
+  type TeleportForkNativeDivergenceInput,
+  type TeleportForkNativeDivergenceResult,
   type TeleportImportedSession,
   type TeleportImportError,
   type TeleportImportSessionsInput,
@@ -97,6 +106,18 @@ import {
   runNewThreadTeleportImport,
   teleportStateWithPresence,
 } from "./importTransaction.ts";
+import {
+  classifyNativeRevision,
+  findCoveringNativeFork,
+  nativeForkThreadId,
+  nativeRevisionCheckResult,
+  nativeRevisionDivergenceError,
+  nativeRevisionsEqual,
+  observeNativeRevision,
+  resolveNativeForkPlan,
+  reuseNativeForkAfterCreateConflict,
+  shouldWatchNativeRevision,
+} from "./nativeRevision.ts";
 
 export class TeleportService extends Context.Service<
   TeleportService,
@@ -112,6 +133,18 @@ export class TeleportService extends Context.Service<
     readonly exportSession: (
       input: TeleportExportSessionInput,
     ) => Effect.Effect<TeleportExportSessionResult, TeleportExportError>;
+
+    readonly checkNativeRevision: (
+      input: TeleportCheckNativeRevisionInput,
+    ) => Effect.Effect<TeleportCheckNativeRevisionResult, TeleportCheckNativeRevisionError>;
+
+    readonly forkNativeDivergence: (
+      input: TeleportForkNativeDivergenceInput,
+    ) => Effect.Effect<TeleportForkNativeDivergenceResult, TeleportForkNativeDivergenceError>;
+
+    readonly requireNativeRevisionForTurn: (
+      threadId: ThreadId,
+    ) => Effect.Effect<void, TeleportCheckNativeRevisionError | TeleportNativeDivergenceError>;
   }
 >()("t3/teleport/TeleportService") {}
 
@@ -187,6 +220,7 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const formats = yield* TeleportFormatRegistry.TeleportFormatRegistry;
   const nativeContext = yield* Effect.context<
+    | Crypto.Crypto
     | FileSystem.FileSystem
     | Path.Path
     | TeleportFormatRegistry.TeleportFormatRegistry
@@ -196,6 +230,7 @@ export const make = Effect.gen(function* () {
     effect: Effect.Effect<
       A,
       E,
+      | Crypto.Crypto
       | FileSystem.FileSystem
       | Path.Path
       | TeleportFormatRegistry.TeleportFormatRegistry
@@ -581,6 +616,7 @@ export const make = Effect.gen(function* () {
                 const teleport = shell.teleport;
                 if (
                   teleport == null ||
+                  !isCanonicalTeleportBinding(teleport) ||
                   teleport.provider !== parsed.provider ||
                   teleport.externalSessionId !== parsed.externalSessionId
                 ) {
@@ -629,6 +665,17 @@ export const make = Effect.gen(function* () {
               existingProviderInstanceId ??
               parsed.providerInstanceId ??
               defaultInstanceIdForDriver(driver);
+            const nativeRevision = parsed.nativeRevision;
+            const revisionBeforeCommit = yield* observeNativeRevision(parsed.nativePath);
+            if (
+              nativeRevision === undefined ||
+              revisionBeforeCommit.status !== "observed" ||
+              !nativeRevisionsEqual(nativeRevision, revisionBeforeCommit.revision)
+            ) {
+              return yield* new TeleportDiscoveryError({
+                reason: `Native ${parsed.provider} session '${parsed.externalSessionId}' changed during import. Retry the import.`,
+              });
+            }
             const teleportPayload: TeleportRuntimePayload = {
               schemaVersion: TELEPORT_SCHEMA_VERSION,
               externalSessionId: parsed.externalSessionId,
@@ -637,6 +684,7 @@ export const make = Effect.gen(function* () {
               lastSyncedAt: now,
               nativeFormatVersion: parsed.nativeFormatVersion,
               presence: "t3",
+              ...(nativeRevision === undefined ? {} : { nativeRevision }),
             };
             const persistDirectoryBinding = (
               boundThreadId: ThreadId,
@@ -1255,6 +1303,493 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  const loadTeleportThreadShells = Effect.gen(function* () {
+    const [activeShell, archivedShell] = yield* Effect.all([
+      snapshotQuery.getShellSnapshot(),
+      snapshotQuery.getArchivedShellSnapshot(),
+    ]);
+    return [...activeShell.threads, ...archivedShell.threads];
+  });
+
+  const classifyWatchedNativeRevision = (input: {
+    readonly threadId: ThreadId;
+    readonly teleport: TeleportThreadState | null | undefined;
+    readonly threads: ReadonlyArray<{
+      readonly id: ThreadId;
+      readonly teleport?: TeleportThreadState | null | undefined;
+    }>;
+  }) =>
+    Effect.gen(function* () {
+      const teleport = input.teleport;
+      if (teleport == null || !shouldWatchNativeRevision(teleport)) {
+        return nativeRevisionCheckResult({
+          threadId: input.threadId,
+          classified: { status: "not-applicable" },
+          ...(teleport == null ? {} : { nativePath: teleport.nativePath }),
+        });
+      }
+      const nativePath = teleport.nativePath;
+      if (teleport.nativeRevision === undefined) {
+        return nativeRevisionCheckResult({
+          threadId: input.threadId,
+          nativePath,
+          classified: classifyNativeRevision({
+            teleport,
+            observation: null,
+          }),
+        });
+      }
+      const observation = yield* observeNativeRevision(nativePath);
+      const coveringFork =
+        observation.status === "observed"
+          ? findCoveringNativeFork({
+              sourceThreadId: input.threadId,
+              observedDigest: observation.revision.digest,
+              threads: input.threads,
+            })
+          : undefined;
+      return nativeRevisionCheckResult({
+        threadId: input.threadId,
+        nativePath,
+        classified: classifyNativeRevision({
+          teleport,
+          observation,
+          ...(coveringFork === undefined ? {} : { coveringForkThreadId: coveringFork.id }),
+        }),
+      });
+    });
+
+  const checkNativeRevision = (input: TeleportCheckNativeRevisionInput) =>
+    provideNative(
+      Effect.gen(function* () {
+        const thread = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new TeleportProjectResolutionError({
+                reason: "Failed to load the thread for a native revision check.",
+                cause,
+              }),
+          ),
+        );
+        if (Option.isNone(thread)) {
+          return yield* new TeleportInvalidInputError({
+            reason: `Thread '${input.threadId}' was not found.`,
+          });
+        }
+        const threads = yield* loadTeleportThreadShells.pipe(
+          Effect.mapError(
+            (cause) =>
+              new TeleportDiscoveryError({
+                reason: "Failed to load threads for a native revision check.",
+                cause,
+              }),
+          ),
+        );
+        return yield* classifyWatchedNativeRevision({
+          threadId: input.threadId,
+          teleport: thread.value.teleport,
+          threads: threads.map((entry) => ({
+            id: entry.id,
+            ...(entry.teleport == null ? {} : { teleport: entry.teleport }),
+          })),
+        });
+      }),
+    );
+
+  const requireNativeRevisionForTurn = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const result = yield* checkNativeRevision({ threadId });
+      if (teleportNativeRevisionBlocksMutation(result.status)) {
+        if (result.nativePath === undefined) {
+          return yield* new TeleportInvalidInputError({
+            reason: "This thread has no imported native session path.",
+          });
+        }
+        return yield* nativeRevisionDivergenceError({
+          threadId,
+          nativePath: result.nativePath,
+          classified: {
+            status: result.status,
+            ...(result.persistedRevision === undefined
+              ? {}
+              : { persistedRevision: result.persistedRevision }),
+            ...(result.observedRevision === undefined
+              ? {}
+              : { observedRevision: result.observedRevision }),
+            ...(result.forkedThreadId === undefined
+              ? {}
+              : { forkedThreadId: result.forkedThreadId }),
+          },
+        });
+      }
+      switch (result.status) {
+        case "not-applicable":
+        case "untracked":
+        case "unchanged":
+        case "forked":
+          return;
+        case "diverged":
+        case "missing":
+        case "oversize":
+          return yield* new TeleportDiscoveryError({
+            reason: "Failed to verify the imported native session.",
+          });
+        default: {
+          const _exhaustive: never = result.status;
+          return _exhaustive;
+        }
+      }
+    }).pipe(
+      Effect.catchDefect((defect) =>
+        Effect.fail(
+          new TeleportDiscoveryError({
+            reason: "Failed to verify the imported native session.",
+            cause: defect,
+          }),
+        ),
+      ),
+    );
+
+  const forkNativeDivergence = (input: TeleportForkNativeDivergenceInput) => {
+    const inFlightKeys = [`thread:${input.threadId}`, `fork:${input.threadId}`];
+    return withInFlight(
+      inFlightKeys,
+      provideNative(
+        Effect.gen(function* () {
+          const thread = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new TeleportInvalidInputError({
+                  reason: "Failed to load the thread for a native fork.",
+                  cause,
+                }),
+            ),
+          );
+          if (Option.isNone(thread)) {
+            return yield* new TeleportInvalidInputError({
+              reason: `Thread '${input.threadId}' was not found.`,
+            });
+          }
+          if (isBusySessionStatus(thread.value.session?.status)) {
+            return yield* new TeleportInvalidInputError({
+              reason: "Cannot fork native changes while this T3 session is running.",
+            });
+          }
+          const teleport = thread.value.teleport;
+          if (
+            teleport == null ||
+            !shouldWatchNativeRevision(teleport) ||
+            teleport.nativeRevision === undefined
+          ) {
+            return yield* new TeleportInvalidInputError({
+              reason: "This thread has no imported native session to fork.",
+            });
+          }
+          const threads = yield* loadTeleportThreadShells.pipe(
+            Effect.mapError(
+              (cause) =>
+                new TeleportDiscoveryError({
+                  reason: "Failed to load threads for a native fork.",
+                  cause,
+                }),
+            ),
+          );
+          const checked = yield* classifyWatchedNativeRevision({
+            threadId: input.threadId,
+            teleport,
+            threads,
+          });
+          const plan = resolveNativeForkPlan({
+            status: checked.status,
+            ...(checked.persistedRevision === undefined
+              ? {}
+              : { persistedRevision: checked.persistedRevision }),
+            ...(checked.observedRevision === undefined
+              ? {}
+              : { observedRevision: checked.observedRevision }),
+            ...(checked.forkedThreadId === undefined
+              ? {}
+              : { forkedThreadId: checked.forkedThreadId }),
+          });
+          if (plan.action === "reuse") {
+            return {
+              schemaVersion: TELEPORT_SCHEMA_VERSION,
+              sourceThreadId: input.threadId,
+              threadId: plan.threadId,
+              replayed: true,
+              provider: teleport.provider,
+              providerInstanceId:
+                teleport.providerInstanceId ??
+                defaultInstanceIdForDriver(ProviderDriverKind.make(teleport.provider)),
+              externalSessionId: teleport.externalSessionId,
+              nativePath: teleport.nativePath,
+            };
+          }
+          if (plan.action === "reject") {
+            if (plan.reason === "missing" || plan.reason === "oversize") {
+              return yield* nativeRevisionDivergenceError({
+                threadId: input.threadId,
+                nativePath: teleport.nativePath,
+                classified: {
+                  status: plan.reason,
+                  ...(checked.persistedRevision === undefined
+                    ? {}
+                    : { persistedRevision: checked.persistedRevision }),
+                },
+              });
+            }
+            return yield* new TeleportInvalidInputError({
+              reason:
+                plan.reason === "unchanged"
+                  ? "Native session has not diverged."
+                  : "This thread has no imported native session to fork.",
+            });
+          }
+          if (checked.observedRevision === undefined) {
+            return yield* new TeleportInvalidInputError({
+              reason: "Native session has not diverged.",
+            });
+          }
+
+          const project = yield* snapshotQuery.getProjectShellById(thread.value.projectId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new TeleportProjectResolutionError({
+                  reason: "Failed to load the thread's project.",
+                  cause,
+                }),
+            ),
+          );
+          if (Option.isNone(project)) {
+            return yield* new TeleportProjectResolutionError({
+              reason: "The thread's project was not found.",
+            });
+          }
+          const settings = yield* settingsService.getSettings.pipe(
+            Effect.mapError(
+              (cause) =>
+                new TeleportDiscoveryError({
+                  reason: "Server settings could not be read for teleport fork.",
+                  cause,
+                }),
+            ),
+          );
+          const homes = yield* resolveTeleportHomes(settings);
+          const extraCwds = yield* loadProjectWorktreeCwds(thread.value.projectId);
+          const cwd = yield* resolveTeleportCwdPath(project.value.workspaceRoot);
+          const parsed = yield* loadTeleportSession({
+            homes,
+            provider: teleport.provider,
+            externalSessionId: teleport.externalSessionId,
+            cwd,
+            ...definedField("extraCwds", extraCwds.length > 0 ? extraCwds : undefined),
+            ...(teleport.providerInstanceId === undefined
+              ? {}
+              : { providerInstanceId: teleport.providerInstanceId }),
+            nativePath: teleport.nativePath,
+          });
+          yield* requireParsedSessionUnlocked(parsed, homes);
+          if (
+            parsed.nativeRevision === undefined ||
+            !nativeRevisionsEqual(checked.observedRevision, parsed.nativeRevision)
+          ) {
+            return yield* new TeleportDiscoveryError({
+              reason: "Native session changed while preparing the fork. Retry the fork.",
+            });
+          }
+          const capped = capMessages(parsed.messages);
+          const now = yield* nowIso;
+          const messageIds = yield* Effect.forEach(capped, () => nextId(), { concurrency: 1 });
+          const messages = nativeMessagesToOrchestration(capped, messageIds, now);
+          const title =
+            truncateTitle(parsed.title ?? firstUserTitle(capped) ?? "Forked native session") ||
+            "Forked native session";
+          const driver = ProviderDriverKind.make(parsed.provider);
+          const providerInstanceId =
+            teleport.providerInstanceId ??
+            parsed.providerInstanceId ??
+            defaultInstanceIdForDriver(driver);
+          const observedAfterLoad = yield* observeNativeRevision(parsed.nativePath);
+          if (
+            observedAfterLoad.status !== "observed" ||
+            !nativeRevisionsEqual(parsed.nativeRevision, observedAfterLoad.revision)
+          ) {
+            return yield* new TeleportDiscoveryError({
+              reason: "Native session changed while preparing the fork. Retry the fork.",
+            });
+          }
+          const forkedRevision = parsed.nativeRevision;
+          const replayedAfterLoad = findCoveringNativeFork({
+            sourceThreadId: input.threadId,
+            observedDigest: forkedRevision.digest,
+            threads: yield* loadTeleportThreadShells.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TeleportDiscoveryError({
+                    reason: "Failed to re-load threads before creating a native fork.",
+                    cause,
+                  }),
+              ),
+            ),
+          });
+          if (replayedAfterLoad !== undefined) {
+            return {
+              schemaVersion: TELEPORT_SCHEMA_VERSION,
+              sourceThreadId: input.threadId,
+              threadId: replayedAfterLoad.id,
+              replayed: true,
+              provider: parsed.provider,
+              providerInstanceId,
+              externalSessionId: parsed.externalSessionId,
+              nativePath: parsed.nativePath,
+            };
+          }
+
+          const teleportPayload: TeleportRuntimePayload = {
+            schemaVersion: TELEPORT_SCHEMA_VERSION,
+            externalSessionId: parsed.externalSessionId,
+            nativePath: parsed.nativePath,
+            lastSyncDirection: "import",
+            lastSyncedAt: now,
+            nativeFormatVersion: parsed.nativeFormatVersion,
+            presence: "t3",
+            nativeRevision: forkedRevision,
+          };
+          const committedTeleport = {
+            ...committedTeleportImportState(
+              teleportThreadStateFromPayload({
+                provider: parsed.provider,
+                providerInstanceId,
+                payload: teleportPayload,
+                forkedFromThreadId: input.threadId,
+              }),
+            ),
+            forkedFromThreadId: input.threadId,
+          };
+          const createdThreadId = nativeForkThreadId(input.threadId, forkedRevision.digest);
+          const cleanupCommandId = CommandId.make(yield* nextId());
+          const importingTeleport = importingTeleportState({
+            base: committedTeleport,
+            restorePresence: "t3",
+          });
+          type ImportMutationError = TeleportInvalidInputError | TeleportDiscoveryError;
+          const createdOrReused = yield* engine
+            .dispatch({
+              type: "thread.create",
+              commandId: CommandId.make(yield* nextId()),
+              threadId: createdThreadId,
+              projectId: thread.value.projectId,
+              title,
+              modelSelection: modelSelectionForProvider(parsed.provider, providerInstanceId),
+              runtimeMode: DEFAULT_RUNTIME_MODE,
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              branch: thread.value.branch,
+              worktreePath: thread.value.worktreePath,
+              createdAt: now,
+            })
+            .pipe(
+              Effect.matchEffect({
+                onSuccess: () => Effect.succeed({ replayed: false as const }),
+                onFailure: (cause) =>
+                  Effect.gen(function* () {
+                    const existing = yield* snapshotQuery.getThreadDetailById(createdThreadId).pipe(
+                      Effect.mapError(
+                        (loadCause) =>
+                          new TeleportDiscoveryError({
+                            reason: "Failed to reload a forked thread after a create conflict.",
+                            cause: loadCause,
+                          }),
+                      ),
+                    );
+                    const reused = reuseNativeForkAfterCreateConflict({
+                      sourceThreadId: input.threadId,
+                      observedDigest: forkedRevision.digest,
+                      ...(Option.isSome(existing) ? { existing: existing.value } : {}),
+                    });
+                    if (reused === undefined) {
+                      return yield* new TeleportInvalidInputError({
+                        reason: "Failed to create a forked thread.",
+                        cause,
+                      });
+                    }
+                    return { replayed: true as const };
+                  }),
+              }),
+            );
+          if (createdOrReused.replayed) {
+            return {
+              schemaVersion: TELEPORT_SCHEMA_VERSION,
+              sourceThreadId: input.threadId,
+              threadId: createdThreadId,
+              replayed: true,
+              provider: parsed.provider,
+              providerInstanceId,
+              externalSessionId: parsed.externalSessionId,
+              nativePath: parsed.nativePath,
+            };
+          }
+          yield* Effect.acquireUseRelease(
+            Effect.void,
+            () =>
+              runNewThreadTeleportImport<ImportMutationError>({
+                beginImporting: dispatchTeleportSet({
+                  threadId: createdThreadId,
+                  teleport: importingTeleport,
+                  createdAt: now,
+                  reason: "Failed to persist teleport import presence.",
+                }),
+                commitOrchestration: dispatchTeleportImport({
+                  threadId: createdThreadId,
+                  teleport: committedTeleport,
+                  messages,
+                  createdAt: now,
+                  reason: "Failed to write forked thread history.",
+                }),
+                finalizeDirectory: Effect.void,
+              }),
+            (_acquired, exit) => {
+              if (Exit.isSuccess(exit)) {
+                return Effect.void;
+              }
+              return engine
+                .dispatch({
+                  type: "thread.delete",
+                  commandId: cleanupCommandId,
+                  threadId: createdThreadId,
+                })
+                .pipe(
+                  Effect.catch(() =>
+                    Effect.logWarning("teleport.fork.created-thread-cleanup-skipped", {
+                      threadId: createdThreadId,
+                    }),
+                  ),
+                );
+            },
+          );
+
+          return {
+            schemaVersion: TELEPORT_SCHEMA_VERSION,
+            sourceThreadId: input.threadId,
+            threadId: createdThreadId,
+            replayed: false,
+            provider: parsed.provider,
+            providerInstanceId,
+            externalSessionId: parsed.externalSessionId,
+            nativePath: parsed.nativePath,
+          };
+        }),
+      ).pipe(
+        Effect.catchTags({
+          PlatformError: (cause: PlatformError.PlatformError) =>
+            new TeleportDiscoveryError({
+              reason: "Native filesystem error during teleport fork.",
+              cause,
+            }),
+        }),
+      ),
+    );
+  };
+
   const recoverInterruptedTeleports = Effect.gen(function* () {
     const now = yield* nowIso;
     const [activeShell, archivedShell] = yield* Effect.all([
@@ -1371,6 +1906,9 @@ export const make = Effect.gen(function* () {
     listSessions,
     importSessions,
     exportSession,
+    checkNativeRevision,
+    forkNativeDivergence,
+    requireNativeRevisionForTurn,
   });
 });
 

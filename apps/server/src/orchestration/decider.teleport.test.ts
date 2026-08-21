@@ -396,6 +396,39 @@ it.layer(NodeServices.layer)("teleport thread decider", (it) => {
     }),
   );
 
+  it.effect("keeps the persisted native revision on import commit", () =>
+    Effect.gen(function* () {
+      const nativeRevision = {
+        algorithm: "sha256" as const,
+        digest: "abc",
+        byteLength: 12,
+      };
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.teleport.import",
+          commandId: CommandId.make("cmd-teleport-import-revision"),
+          threadId: ThreadId.make("thread-1"),
+          teleport: {
+            ...NATIVE_TELEPORT,
+            presence: "t3",
+            nativeRevision,
+            forkedFromThreadId: ThreadId.make("thread-source"),
+          },
+          messages: [],
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({ teleport: NATIVE_TELEPORT }),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      const teleported = events.find((event) => event.type === "thread.teleported");
+      expect(teleported?.type).toBe("thread.teleported");
+      if (teleported?.type === "thread.teleported") {
+        expect(teleported.payload.teleport.nativeRevision).toEqual(nativeRevision);
+        expect(teleported.payload.teleport.forkedFromThreadId).toBe("thread-source");
+      }
+    }),
+  );
+
   it.effect("rejects native history import while the T3 session is running", () =>
     Effect.gen(function* () {
       const error = yield* decideOrchestrationCommand({
