@@ -287,6 +287,38 @@ describe("environment entity projections", () => {
     expect(mergeEnvironmentThread(detail, shell)?.teleport).toEqual(t3Teleport);
   });
 
+  it("prefers a newer shell teleport snapshot over cached detail", () => {
+    const t3Teleport = {
+      presence: "t3" as const,
+      provider: "codex" as const,
+      externalSessionId: "session-1",
+      nativePath: "/tmp/native",
+      lastSyncedAt: "2026-08-14T23:00:00.000Z",
+    };
+    const nativeTeleport = {
+      ...t3Teleport,
+      presence: "native" as const,
+      lastSyncedAt: "2026-08-14T23:05:00.000Z",
+    };
+    const detail = {
+      ...THREAD_SHELL,
+      environmentId: ENVIRONMENT_ID,
+      deletedAt: null,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      teleport: t3Teleport,
+    } satisfies OrchestrationThread & { readonly environmentId: EnvironmentId };
+    const shell = {
+      ...THREAD_SHELL,
+      environmentId: ENVIRONMENT_ID,
+      teleport: nativeTeleport,
+    };
+
+    expect(mergeEnvironmentThread(detail, shell)?.teleport).toEqual(nativeTeleport);
+  });
+
   it("preserves untouched project and thread identities across unrelated shell updates", () => {
     const harness = makeHarness();
     const projectRefsAtom = harness.projects.environmentProjectRefsAtom(ENVIRONMENT_ID);
