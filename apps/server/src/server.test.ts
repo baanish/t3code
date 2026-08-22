@@ -29,6 +29,7 @@ import {
   ProviderInstanceId,
   ResolvedKeybindingRule,
   ThreadId,
+  TELEPORT_SCHEMA_VERSION,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -120,6 +121,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import { TeleportService } from "./teleport/Services/TeleportService.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
@@ -420,6 +422,7 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    teleportService?: Partial<TeleportService["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -770,13 +773,30 @@ const buildAppUnderTest = (options?: {
         ),
       ),
       Layer.provide(
-        Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          latestSequence: Effect.succeed(0),
-          ...options?.layers?.orchestrationEngine,
-        }),
+        Layer.mergeAll(
+          Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+            readEvents: () => Stream.empty,
+            dispatch: () => Effect.succeed({ sequence: 0 }),
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+            ...options?.layers?.orchestrationEngine,
+          }),
+          Layer.mock(TeleportService)({
+            listSessions: () =>
+              Effect.succeed({
+                schemaVersion: TELEPORT_SCHEMA_VERSION,
+                sessions: [],
+              }),
+            importSessions: () =>
+              Effect.succeed({
+                schemaVersion: TELEPORT_SCHEMA_VERSION,
+                imported: [],
+              }),
+            exportSession: () =>
+              Effect.die("TeleportService.exportSession not stubbed in this test"),
+            ...options?.layers?.teleportService,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({

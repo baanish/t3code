@@ -64,6 +64,10 @@ export function mergeEnvironmentThread(
     pinnedAt: shell.pinnedAt,
     pinOrderKey: shell.pinOrderKey,
     session: shell.session,
+    // Detail can resume from a cached snapshot and skip HTTP, so a backfilled
+    // `teleport_json` never arrives as `thread.teleported`. The shell snapshot
+    // is refetched per session; use it when detail has no presence yet.
+    teleport: detail.teleport ?? shell.teleport ?? null,
   };
 }
 
