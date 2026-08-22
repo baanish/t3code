@@ -1347,6 +1347,7 @@ function OpenCommandPaletteDialog(props: {
         readonly provider: TeleportProvider;
         readonly providerInstanceId?: ProviderInstanceId;
         readonly externalSessionId: string;
+        readonly nativePath?: string;
       },
     ): Promise<void> => {
       if (teleportImportPendingRef.current) {
@@ -1366,6 +1367,7 @@ function OpenCommandPaletteDialog(props: {
                   ? {}
                   : { providerInstanceId: session.providerInstanceId }),
                 externalSessionId: session.externalSessionId,
+                ...(session.nativePath === undefined ? {} : { nativePath: session.nativePath }),
               },
             ],
           },
@@ -1468,7 +1470,7 @@ function OpenCommandPaletteDialog(props: {
           project.title,
           result.value.sessions.map((session) => ({
             kind: "action" as const,
-            value: `import-session:${session.provider}:${session.providerInstanceId}:${session.externalSessionId}`,
+            value: `import-session:${session.provider}:${session.providerInstanceId}:${session.externalSessionId}:${session.nativePath}`,
             searchTerms: [
               session.title ?? "",
               session.externalSessionId,
@@ -1988,6 +1990,7 @@ function OpenCommandPaletteDialog(props: {
                 ? {}
                 : { providerInstanceId: boundTeleport.providerInstanceId }),
               externalSessionId: boundTeleport.externalSessionId,
+              nativePath: boundTeleport.nativePath,
             });
           },
         });
