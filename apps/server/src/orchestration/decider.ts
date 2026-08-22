@@ -930,7 +930,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.start": {
-      const targetThread = yield* requireThread({
+      const targetThread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,

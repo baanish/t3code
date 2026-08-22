@@ -85,6 +85,32 @@ it.layer(NodeServices.layer)("teleport thread decider", (it) => {
     }),
   );
 
+  it.effect("rejects turn start on an archived thread", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-archived"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make("message-1"),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({ archivedAt: NOW }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      if (error._tag === "OrchestrationCommandInvariantError") {
+        expect(error.detail).toContain("archived");
+      }
+    }),
+  );
+
   it.effect("rejects turn start while the thread is in the native CLI", () =>
     Effect.gen(function* () {
       const error = yield* decideOrchestrationCommand({
