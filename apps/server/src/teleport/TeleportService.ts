@@ -761,11 +761,14 @@ export const make = Effect.gen(function* () {
                 });
               }
               updatedInPlace = true;
+              const previousBinding = yield* directory
+                .getBinding(threadId)
+                .pipe(Effect.catch(() => Effect.succeed(Option.none())));
               const importingTeleport = importingTeleportState({
                 base: committedTeleport,
                 restorePresence: restorePresenceForImport(latest.value.teleport),
               });
-              const revertImporting =
+              const revertPresence =
                 latest.value.teleport === undefined || latest.value.teleport === null
                   ? dispatchTeleportSet({
                       threadId,
@@ -782,6 +785,17 @@ export const make = Effect.gen(function* () {
                       createdAt: now,
                       reason: "Failed to revert teleport import presence.",
                     }).pipe(Effect.catch(() => Effect.void));
+              const revertImporting = Effect.uninterruptible(
+                revertPresence.pipe(
+                  Effect.flatMap(() =>
+                    Option.match(previousBinding, {
+                      onNone: () => Effect.void,
+                      onSome: (binding) =>
+                        directory.upsert(binding).pipe(Effect.catch(() => Effect.void)),
+                    }),
+                  ),
+                ),
+              );
               yield* runInPlaceTeleportImport<ImportMutationError>({
                 beginImporting: dispatchTeleportSet({
                   threadId,
