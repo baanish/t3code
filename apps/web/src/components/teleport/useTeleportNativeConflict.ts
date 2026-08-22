@@ -18,6 +18,7 @@ import {
 import {
   canForkTeleportNativeConflict,
   shouldShowTeleportNativeConflict,
+  teleportNativeConflictResultForThread,
 } from "../../lib/teleportNativeConflict";
 import { useServerConfigs } from "../../state/entities";
 import { teleportEnvironment } from "../../state/teleport";
@@ -99,11 +100,17 @@ export function useTeleportNativeConflict(input: {
     };
   }, [refresh]);
 
+  const currentResult = teleportNativeConflictResultForThread({
+    threadId: input.threadId,
+    watching: watchKey !== null,
+    result,
+  });
+
   const forkNativeChanges = useCallback(async () => {
     if (forkingRef.current || input.threadId === null || watchKey === null) {
       return;
     }
-    if (result !== null && !canForkTeleportNativeConflict(result)) {
+    if (currentResult !== null && !canForkTeleportNativeConflict(currentResult)) {
       return;
     }
     forkingRef.current = true;
@@ -135,13 +142,13 @@ export function useTeleportNativeConflict(input: {
       forkingRef.current = false;
       setForking(false);
     }
-  }, [forkNativeDivergence, input.environmentId, input.threadId, result, watchKey]);
+  }, [currentResult, forkNativeDivergence, input.environmentId, input.threadId, watchKey]);
 
-  const sendDisabledReason = teleportNativeRevisionSendDisabledReason(result?.status);
-  const visible = shouldShowTeleportNativeConflict(result?.status);
+  const sendDisabledReason = teleportNativeRevisionSendDisabledReason(currentResult?.status);
+  const visible = shouldShowTeleportNativeConflict(currentResult?.status);
 
   return {
-    result,
+    result: currentResult,
     checkError,
     forking,
     forkError,

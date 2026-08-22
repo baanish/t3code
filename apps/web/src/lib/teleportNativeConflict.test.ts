@@ -1,9 +1,11 @@
+import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   canForkTeleportNativeConflict,
   shouldShowTeleportNativeConflict,
   teleportNativeConflictDescription,
+  teleportNativeConflictResultForThread,
   teleportNativeConflictTitle,
 } from "./teleportNativeConflict";
 
@@ -42,5 +44,38 @@ describe("teleport native conflict copy", () => {
     expect(shouldShowTeleportNativeConflict("unchanged")).toBe(false);
     expect(shouldShowTeleportNativeConflict("forked")).toBe(false);
     expect(shouldShowTeleportNativeConflict("untracked")).toBe(false);
+  });
+
+  it("ignores a previous thread's native conflict after navigation", () => {
+    const matching = {
+      schemaVersion: 1 as const,
+      threadId: ThreadId.make("thread-b"),
+      status: "diverged" as const,
+    };
+    expect(
+      teleportNativeConflictResultForThread({
+        threadId: ThreadId.make("thread-b"),
+        watching: true,
+        result: {
+          schemaVersion: 1,
+          threadId: ThreadId.make("thread-a"),
+          status: "diverged",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      teleportNativeConflictResultForThread({
+        threadId: ThreadId.make("thread-b"),
+        watching: false,
+        result: matching,
+      }),
+    ).toBeNull();
+    expect(
+      teleportNativeConflictResultForThread({
+        threadId: ThreadId.make("thread-b"),
+        watching: true,
+        result: matching,
+      }),
+    ).toEqual(matching);
   });
 });

@@ -1,6 +1,7 @@
 import type {
   TeleportCheckNativeRevisionResult,
   TeleportNativeRevisionStatus,
+  ThreadId,
 } from "@t3tools/contracts";
 
 export function teleportNativeConflictTitle(status: TeleportNativeRevisionStatus): string {
@@ -43,6 +44,17 @@ export function teleportNativeConflictDescription(
       return _exhaustive;
     }
   }
+}
+
+export function teleportNativeConflictResultForThread(input: {
+  readonly threadId: ThreadId | null;
+  readonly watching: boolean;
+  readonly result: TeleportCheckNativeRevisionResult | null;
+}): TeleportCheckNativeRevisionResult | null {
+  if (!input.watching || input.threadId === null || input.result === null) {
+    return null;
+  }
+  return input.result.threadId === input.threadId ? input.result : null;
 }
 
 export function shouldShowTeleportNativeConflict(
