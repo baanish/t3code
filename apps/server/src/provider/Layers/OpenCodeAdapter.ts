@@ -1437,10 +1437,13 @@ export function makeOpenCodeAdapter(
     );
 
     const sendTurn: OpenCodeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-      const context = yield* ensureSessionContext(sessions, input.threadId);
+      let context = yield* ensureSessionContext(sessions, input.threadId);
       const pendingAbort = yield* Ref.get(context.abortGate);
       if (pendingAbort !== null) {
         yield* Deferred.await(pendingAbort);
+        // Abort timeout/error closes and deletes the session after settling
+        // the gate. Re-resolve so a waiter cannot prompt a stale context.
+        context = yield* ensureSessionContext(sessions, input.threadId);
       }
       // A sendTurn while a turn is active is a steer: OpenCode queues the
       // prompt into the busy session and the work continues as one turn, so

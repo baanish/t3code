@@ -185,11 +185,11 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         abort: async ({ sessionID }: { sessionID: string }) => {
           runtimeMock.state.abortCalls.push(sessionID);
           runtimeMock.state.abortStarted?.();
-          if (runtimeMock.state.abortError) {
-            throw runtimeMock.state.abortError;
-          }
           if (runtimeMock.state.abortHold) {
             await runtimeMock.state.abortHold;
+          }
+          if (runtimeMock.state.abortError) {
+            throw runtimeMock.state.abortError;
           }
         },
         promptAsync: async (input: unknown) => {
@@ -953,6 +953,59 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         })
         .pipe(Effect.flip);
       NodeAssert.equal(error._tag, "ProviderAdapterSessionNotFoundError");
+    }),
+  );
+
+  it.effect("rejects an in-flight sendTurn when session.abort fails during the wait", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-abort-failed-inflight");
+      let releaseAbort: () => void = () => {};
+      const abortStarted = new Promise<void>((resolve) => {
+        runtimeMock.state.abortStarted = resolve;
+      });
+      runtimeMock.state.abortHold = new Promise<void>((resolve) => {
+        releaseAbort = resolve;
+      });
+      runtimeMock.state.abortError = new Error("abort failed");
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const firstTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "keep going",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("opencode"),
+          model: "openai/gpt-5",
+        },
+      });
+      NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
+
+      const interruptFiber = yield* adapter
+        .interruptTurn(threadId, firstTurn.turnId)
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => abortStarted);
+
+      const sendFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "next prompt",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("opencode"),
+            model: "openai/gpt-5",
+          },
+        })
+        .pipe(Effect.forkChild);
+      NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
+
+      releaseAbort();
+      yield* Fiber.join(interruptFiber);
+      const error = yield* Fiber.join(sendFiber).pipe(Effect.flip);
+      NodeAssert.equal(error._tag, "ProviderAdapterSessionNotFoundError");
+      NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
     }),
   );
 
