@@ -499,6 +499,7 @@ export const TeleportNativeWriteStage = Schema.Literals([
   "verify",
   "unsafe-session-id",
   "unsafe-native-path",
+  "unknown-instance",
   "bind",
   "read-settings",
   "filesystem",
@@ -535,6 +536,10 @@ export class TeleportNativeWriteError extends Schema.TaggedErrorClass<TeleportNa
           : `Refusing to write a native session with an unsafe id '${this.sessionId}'.`;
       case "unsafe-native-path":
         return `Refusing to write outside the configured native session directory: ${nativePath}`;
+      case "unknown-instance":
+        return this.sessionId === undefined
+          ? "Provider instance is no longer configured; cannot write a native session for it."
+          : `Provider instance '${this.sessionId}' is no longer configured; cannot write a native session for it.`;
       case "bind":
         return "Failed to bind the exported native session.";
       case "read-settings":

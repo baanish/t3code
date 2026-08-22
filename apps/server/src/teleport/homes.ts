@@ -57,21 +57,15 @@ export function codexSearchRoots(homes: TeleportHomes): ReadonlyArray<TeleportIn
 export function resolveCodexSessionsRoot(
   homes: TeleportHomes,
   instanceId: ProviderInstanceId,
-): string {
-  return (
-    homes.extraCodexSessionsRoots.find((root) => root.instanceId === instanceId)?.root ??
-    homes.codexSessionsRoot
-  );
+): string | undefined {
+  return configuredTeleportNativeRootFor(homes, "codex", instanceId);
 }
 
 export function resolveClaudeProjectsRootForInstance(
   homes: TeleportHomes,
   instanceId: ProviderInstanceId,
-): string {
-  return (
-    homes.extraClaudeProjectsRoots.find((root) => root.instanceId === instanceId)?.root ??
-    homes.claudeProjectsRoot
-  );
+): string | undefined {
+  return configuredTeleportNativeRootFor(homes, "claudeAgent", instanceId);
 }
 
 export function teleportNativeRootFor(

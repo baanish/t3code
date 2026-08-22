@@ -621,6 +621,33 @@ describe("teleport Claude format", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("skips the global Claude projects walk when the caller already did it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-claude-once-" });
+      const encodedDir = path.join(root, encodeClaudeProjectPath("/workspace"));
+      const customDir = path.join(root, "pinned-project");
+      yield* fs.makeDirectory(encodedDir, { recursive: true });
+      yield* fs.makeDirectory(customDir, { recursive: true });
+      const encodedPath = path.join(encodedDir, `${TELEPORT_TEST_SESSION_ID}.jsonl`);
+      const customPath = path.join(customDir, `${TELEPORT_TEST_SESSION_ID}.jsonl`);
+      yield* fs.writeFileString(
+        encodedPath,
+        serializeClaudeSession(sampleTeleportSession("claudeAgent")),
+      );
+      yield* fs.writeFileString(
+        customPath,
+        serializeClaudeSession(sampleTeleportSession("claudeAgent")),
+      );
+      const files = yield* listClaudeJsonlFiles(root, "/workspace", {
+        includeGlobalFallback: false,
+      });
+      assert.equal(files.includes(encodedPath), true);
+      assert.equal(files.includes(customPath), false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("lists Claude sessions from a project worktree cwd", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -298,6 +298,14 @@ describe("teleport tagged errors", () => {
       stage: "verify",
     });
     expect(error.message).toBe("Exported session failed verification: /tmp/session.jsonl");
+    expect(
+      new TeleportNativeWriteError({
+        stage: "unknown-instance",
+        sessionId: "codex_work",
+      }).message,
+    ).toBe(
+      "Provider instance 'codex_work' is no longer configured; cannot write a native session for it.",
+    );
     const parsed = decodeTeleportExportError({
       _tag: "TeleportNativeWriteError",
       stage: "filesystem",

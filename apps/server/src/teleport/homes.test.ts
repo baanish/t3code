@@ -50,6 +50,10 @@ describe("resolveTeleportHomes", () => {
         resolveCodexSessionsRoot(homes, ProviderInstanceId.make("codex")),
         path.join(defaultHome, "sessions"),
       );
+      assert.equal(
+        resolveCodexSessionsRoot(homes, ProviderInstanceId.make("codex_missing")),
+        undefined,
+      );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -117,6 +121,10 @@ describe("resolveTeleportHomes", () => {
       assert.equal(
         resolveClaudeProjectsRootForInstance(homes, ProviderInstanceId.make("claudeAgent")),
         path.join(defaultHome, "projects"),
+      );
+      assert.equal(
+        resolveClaudeProjectsRootForInstance(homes, ProviderInstanceId.make("claude_missing")),
+        undefined,
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

@@ -428,10 +428,14 @@ export const codexTeleportFormat: TeleportFormatAdapter = {
   }),
   write: Effect.fn("writeCodexSession")(function* (input) {
     const path = yield* Path.Path;
-    const sessionsRoot = resolveCodexSessionsRoot(
-      input.homes,
-      input.session.providerInstanceId ?? defaultInstanceIdForDriver(CODEX),
-    );
+    const instanceId = input.session.providerInstanceId ?? defaultInstanceIdForDriver(CODEX);
+    const sessionsRoot = resolveCodexSessionsRoot(input.homes, instanceId);
+    if (sessionsRoot === undefined) {
+      return yield* new TeleportNativeWriteError({
+        stage: "unknown-instance",
+        sessionId: instanceId,
+      });
+    }
     if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
       return yield* new TeleportNativeWriteError({
         nativePath: sessionsRoot,

@@ -357,6 +357,7 @@ export function allocateClaudeSessionPath(input: {
 export const listClaudeJsonlFiles = Effect.fn("listClaudeJsonlFiles")(function* (
   projectsRoot: string,
   cwd: string,
+  options?: { readonly includeGlobalFallback?: boolean },
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -372,9 +373,9 @@ export const listClaudeJsonlFiles = Effect.fn("listClaudeJsonlFiles")(function* 
     }
   }
   // Claude can pin a custom project directory name, and long-path hashing
-  // has changed across releases. Search sibling directories too; callers
-  // still filter every parsed session by its persisted cwd.
-  if (!roots.includes(projectsRoot)) {
+  // has changed across releases. Search sibling directories too unless the
+  // caller already walks `projectsRoot` once for every cwd.
+  if ((options?.includeGlobalFallback ?? true) && !roots.includes(projectsRoot)) {
     roots.push(projectsRoot);
   }
   const files = new Set<string>();
@@ -452,8 +453,13 @@ export const claudeTeleportFormat: TeleportFormatAdapter = {
     for (const home of claudeSearchRoots(input.homes)) {
       const files: string[] = [];
       for (const cwd of listingTeleportCwds(input.cwd, input.extraCwds)) {
-        files.push(...(yield* listClaudeJsonlFiles(home.root, cwd)));
+        files.push(
+          ...(yield* listClaudeJsonlFiles(home.root, cwd, { includeGlobalFallback: false })),
+        );
       }
+      // Hash-mismatched and custom project folders live as siblings under
+      // `projectsRoot`. Walk that tree once per home, not once per worktree.
+      files.push(...(yield* walkJsonl(home.root)));
       for (const nativePath of files) {
         if (seen.has(nativePath)) {
           continue;
@@ -516,10 +522,14 @@ export const claudeTeleportFormat: TeleportFormatAdapter = {
   }),
   write: Effect.fn("writeClaudeSession")(function* (input) {
     const path = yield* Path.Path;
-    const projectsRoot = resolveClaudeProjectsRootForInstance(
-      input.homes,
-      input.session.providerInstanceId ?? defaultInstanceIdForDriver(CLAUDE),
-    );
+    const instanceId = input.session.providerInstanceId ?? defaultInstanceIdForDriver(CLAUDE);
+    const projectsRoot = resolveClaudeProjectsRootForInstance(input.homes, instanceId);
+    if (projectsRoot === undefined) {
+      return yield* new TeleportNativeWriteError({
+        stage: "unknown-instance",
+        sessionId: instanceId,
+      });
+    }
     if (!isSafeTeleportSessionId(input.session.externalSessionId)) {
       return yield* new TeleportNativeWriteError({
         nativePath: projectsRoot,
