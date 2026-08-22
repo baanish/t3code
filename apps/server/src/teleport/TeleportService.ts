@@ -1876,6 +1876,10 @@ export const make = Effect.gen(function* () {
           reason: "Failed to recover an interrupted teleport export.",
         });
 
+        if (discovered === undefined) {
+          return;
+        }
+
         const adapter = formats.get(pending.provider);
         if (!adapter) {
           return;

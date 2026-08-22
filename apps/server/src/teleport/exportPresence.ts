@@ -21,6 +21,9 @@ export function recoveredInterruptedExportState(
   if (teleport.presence !== "native" || !isPendingTeleportNativePath(teleport.nativePath)) {
     return null;
   }
+  // `nativePath` is required on TeleportThreadState. When no file was written,
+  // keep the sentinel and flip presence to t3 so the UI can send again. Callers
+  // must not persist that sentinel into the provider-directory binding.
   return {
     ...teleport,
     presence: discoveredNativePath === undefined ? "t3" : "native",
