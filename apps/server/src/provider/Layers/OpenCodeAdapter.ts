@@ -1610,7 +1610,33 @@ export function makeOpenCodeAdapter(
               }
               yield* runOpenCodeSdk("session.abort", () =>
                 context.client.session.abort({ sessionID: context.openCodeSessionId }),
-              ).pipe(Effect.timeout("2 seconds"), Effect.ignore({ log: true }));
+              ).pipe(
+                Effect.timeout("2 seconds"),
+                Effect.catch((error) =>
+                  Effect.gen(function* () {
+                    yield* Effect.logWarning("opencode.session.abort.unconfirmed").pipe(
+                      Effect.annotateLogs({
+                        threadId,
+                        cause: String(error),
+                      }),
+                    );
+                    if (yield* Ref.getAndSet(context.stopped, true)) {
+                      return;
+                    }
+                    sessions.delete(threadId);
+                    yield* Scope.close(context.sessionScope, Exit.void);
+                    yield* emit({
+                      ...(yield* buildEventBase({ threadId })),
+                      type: "session.exited",
+                      payload: {
+                        reason: "OpenCode abort did not complete; the session was closed.",
+                        recoverable: false,
+                        exitKind: "error",
+                      },
+                    }).pipe(Effect.ignore);
+                  }),
+                ),
+              );
             }),
             Effect.gen(function* () {
               yield* Deferred.succeed(abortInFlight, undefined);

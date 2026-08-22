@@ -65,6 +65,7 @@ const runtimeMock = {
     abortCalls: [] as string[],
     abortHold: null as Promise<void> | null,
     abortStarted: null as (() => void) | null,
+    abortError: null as Error | null,
     closeCalls: [] as string[],
     revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
     promptCalls: [] as Array<unknown>,
@@ -87,6 +88,7 @@ const runtimeMock = {
     this.state.abortCalls.length = 0;
     this.state.abortHold = null;
     this.state.abortStarted = null;
+    this.state.abortError = null;
     this.state.closeCalls.length = 0;
     this.state.revertCalls.length = 0;
     this.state.promptCalls.length = 0;
@@ -183,6 +185,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         abort: async ({ sessionID }: { sessionID: string }) => {
           runtimeMock.state.abortCalls.push(sessionID);
           runtimeMock.state.abortStarted?.();
+          if (runtimeMock.state.abortError) {
+            throw runtimeMock.state.abortError;
+          }
           if (runtimeMock.state.abortHold) {
             await runtimeMock.state.abortHold;
           }
@@ -908,6 +913,46 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const secondTurn = yield* Fiber.join(sendFiber);
       NodeAssert.equal(runtimeMock.state.promptCalls.length, 2);
       NodeAssert.notEqual(String(secondTurn.turnId), String(firstTurn.turnId));
+    }),
+  );
+
+  it.effect("closes the session when session.abort fails so a later send cannot overlap", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-abort-failed");
+      runtimeMock.state.abortError = new Error("abort failed");
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "keep going",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("opencode"),
+          model: "openai/gpt-5",
+        },
+      });
+
+      yield* adapter.interruptTurn(threadId, turn.turnId);
+      const sessions = yield* adapter.listSessions();
+      NodeAssert.equal(
+        sessions.some((entry) => entry.threadId === threadId),
+        false,
+      );
+      const error = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "next prompt",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("opencode"),
+            model: "openai/gpt-5",
+          },
+        })
+        .pipe(Effect.flip);
+      NodeAssert.equal(error._tag, "ProviderAdapterSessionNotFoundError");
     }),
   );
 
