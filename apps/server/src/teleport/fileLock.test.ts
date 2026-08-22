@@ -19,11 +19,17 @@ const lockProbeLayer = Layer.merge(
 );
 
 describe("teleport file locks", () => {
-  it.effect("treats a missing lock probe as TeleportLockProbeError, not a lock", () =>
+  it.effect("falls back to an open probe when lsof cannot be spawned", () =>
     Effect.gen(function* () {
-      const error = yield* isNativePathLocked("/tmp/teleport-lock-probe-missing").pipe(Effect.flip);
-      assert.equal(error._tag, "TeleportLockProbeError");
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-lock-nolsof-" });
+      const filePath = path.join(root, "session.jsonl");
+      yield* fs.writeFileString(filePath, "ok\n");
+      assert.equal(yield* isNativePathLocked(filePath), false);
+      yield* requireNativePathUnlocked(filePath);
     }).pipe(
+      Effect.scoped,
       Effect.provideService(HostProcessPlatform, "linux"),
       Effect.provide(
         Layer.merge(

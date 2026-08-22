@@ -46,7 +46,7 @@ function isLockedOpenError(cause: unknown): boolean {
   return code === "EBUSY" || code === "EPERM" || code === "EACCES";
 }
 
-const isWindowsPathInUse = Effect.fn("isWindowsPathInUse")(function* (nativePath: string) {
+const isPathInUseByOpen = Effect.fn("isPathInUseByOpen")(function* (nativePath: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* Effect.scoped(fs.open(nativePath, { flag: "r+" })).pipe(
     Effect.as(false),
@@ -74,13 +74,19 @@ const isUnixPathInUse = Effect.fn("isUnixPathInUse")(function* (nativePath: stri
     })
     .pipe(
       Effect.catchTags({
-        ProcessSpawnError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
+        // `lsof` is optional. Linux/server installs often omit it; fall back
+        // to the exclusive-open probe used on Windows instead of failing every
+        // import/export.
+        ProcessSpawnError: () => Effect.succeed(null),
         ProcessStdinError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
         ProcessOutputLimitError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
         ProcessReadError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
         ProcessTimeoutError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
       }),
     );
+  if (result === null) {
+    return yield* isPathInUseByOpen(nativePath);
+  }
   if (result.code === 0 || result.code === 1) {
     return result.stdout.trim().length > 0;
   }
@@ -92,7 +98,7 @@ export const isNativePathLocked = Effect.fn("isNativePathLocked")(function* (nat
   if (platform === "win32") {
     // `lsof` is not a Windows tool. Exclusive locks from a native CLI show up
     // as EBUSY/EPERM/EACCES on a write-open instead.
-    return yield* isWindowsPathInUse(nativePath);
+    return yield* isPathInUseByOpen(nativePath);
   }
   return yield* isUnixPathInUse(nativePath);
 });
