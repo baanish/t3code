@@ -2524,6 +2524,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       const archived = yield* snapshotQuery.getArchivedShellSnapshot();
       assert.equal(archived.threads[0]?.id, ThreadId.make("thread-teleport"));
       assert.deepEqual(archived.threads[0]?.teleport, expectedTeleport);
+      const archivedDetail = yield* snapshotQuery.getThreadDetailById(
+        ThreadId.make("thread-teleport"),
+      );
+      assert.equal(archivedDetail._tag, "Some");
+      if (archivedDetail._tag === "Some") {
+        assert.deepEqual(archivedDetail.value.teleport, expectedTeleport);
+        assert.equal(archivedDetail.value.archivedAt, "2026-08-14T00:00:02.000Z");
+      }
     }),
   );
 });

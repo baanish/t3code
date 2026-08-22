@@ -931,6 +931,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // By-id lookups include archived threads so in-place teleport import can
+  // unarchive a canonical native thread. List queries still exclude archived.
   const getActiveThreadRowById = SqlSchema.findOneOption({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadDbRowSchema,
@@ -966,7 +968,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_threads
         WHERE thread_id = ${threadId}
           AND deleted_at IS NULL
-          AND archived_at IS NULL
         LIMIT 1
       `,
   });
