@@ -38,6 +38,7 @@ import {
   scheduleEnvironmentReconnectWarning,
   startNewThreadForProject,
   shouldDockDraftHeroForSubmission,
+  shouldReleaseTimelineAnchorForToolActivity,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
@@ -78,6 +79,114 @@ describe("draft hero submission transition", () => {
         backgroundSubmissionPending: true,
       }),
     ).toBeNull();
+  });
+});
+
+describe("shouldReleaseTimelineAnchorForToolActivity", () => {
+  const activeTurnId = TurnId.make("active-turn");
+  const anchorMessageId = MessageId.make("anchored-message");
+  const activeToolEntry = {
+    id: "tool-entry",
+    kind: "work" as const,
+    createdAt: now,
+    entry: {
+      id: "active-tool",
+      createdAt: now,
+      turnId: activeTurnId,
+      label: "Run command",
+      tone: "tool" as const,
+      command: "git status",
+    },
+  };
+
+  it("releases the send anchor for tool activity in the active turn", () => {
+    expect(
+      shouldReleaseTimelineAnchorForToolActivity({
+        anchorMessageId,
+        liveFollowEnabled: true,
+        runningTurnId: activeTurnId,
+        timelineEntries: [activeToolEntry],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the anchor while the user reads history", () => {
+    expect(
+      shouldReleaseTimelineAnchorForToolActivity({
+        anchorMessageId,
+        liveFollowEnabled: false,
+        runningTurnId: activeTurnId,
+        timelineEntries: [activeToolEntry],
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores tool activity from earlier turns", () => {
+    expect(
+      shouldReleaseTimelineAnchorForToolActivity({
+        anchorMessageId,
+        liveFollowEnabled: true,
+        runningTurnId: activeTurnId,
+        timelineEntries: [
+          {
+            ...activeToolEntry,
+            entry: {
+              ...activeToolEntry.entry,
+              turnId: TurnId.make("previous-turn"),
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores thinking and error rows without tool activity", () => {
+    expect(
+      shouldReleaseTimelineAnchorForToolActivity({
+        anchorMessageId,
+        liveFollowEnabled: true,
+        runningTurnId: activeTurnId,
+        timelineEntries: [
+          {
+            ...activeToolEntry,
+            entry: {
+              id: "thinking-entry",
+              createdAt: now,
+              turnId: activeTurnId,
+              label: "Thinking",
+              tone: "thinking",
+            },
+          },
+          {
+            ...activeToolEntry,
+            id: "error-entry",
+            entry: {
+              id: "error-entry",
+              createdAt: now,
+              turnId: activeTurnId,
+              label: "Provider error",
+              tone: "error",
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("does nothing without an anchor or running turn", () => {
+    const input = {
+      anchorMessageId,
+      liveFollowEnabled: true,
+      runningTurnId: activeTurnId,
+      timelineEntries: [activeToolEntry],
+    };
+
+    expect(shouldReleaseTimelineAnchorForToolActivity({ ...input, anchorMessageId: null })).toBe(
+      false,
+    );
+    expect(shouldReleaseTimelineAnchorForToolActivity({ ...input, runningTurnId: null })).toBe(
+      false,
+    );
   });
 });
 
@@ -270,6 +379,7 @@ describe("composerSendDisabledReason", () => {
       teleport: nativeTeleport,
       threadDetailLoading: true,
       nativeConflictReason: null,
+      feedbackUploading: false,
     });
     expect(reason).toBe(TELEPORTED_OUT_SEND_DISABLED_REASON);
     expect(isTeleportSendDisabledReason(reason)).toBe(true);
@@ -280,6 +390,7 @@ describe("composerSendDisabledReason", () => {
       teleport: importingTeleport,
       threadDetailLoading: true,
       nativeConflictReason: null,
+      feedbackUploading: false,
     });
     expect(reason).toBe(TELEPORT_IMPORTING_SEND_DISABLED_REASON);
     expect(isTeleportSendDisabledReason(reason)).toBe(true);
@@ -292,8 +403,32 @@ describe("composerSendDisabledReason", () => {
         threadDetailLoading: true,
         nativeConflictReason:
           "The native CLI session changed after import. Fork those changes into a new thread to keep both.",
+        feedbackUploading: false,
       }),
     ).toBe("Messages loading");
+  });
+
+  it("keeps the native teleport lock while feedback is uploading", () => {
+    const reason = composerSendDisabledReason({
+      teleport: nativeTeleport,
+      threadDetailLoading: true,
+      nativeConflictReason: null,
+      feedbackUploading: true,
+    });
+    expect(reason).toBe(TELEPORTED_OUT_SEND_DISABLED_REASON);
+    expect(isTeleportSendDisabledReason(reason)).toBe(true);
+  });
+
+  it("uses the feedback reason when teleport does not lock the composer", () => {
+    expect(
+      composerSendDisabledReason({
+        teleport: undefined,
+        threadDetailLoading: true,
+        nativeConflictReason:
+          "The native CLI session changed after import. Fork those changes into a new thread to keep both.",
+        feedbackUploading: true,
+      }),
+    ).toBe("Sending feedback");
   });
 });
 
@@ -720,6 +855,29 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         latestTurn: completedTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
         session: readySession,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a follow-up active while its provider session is starting", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestTurn: completedTurn, session: readySession }),
+    );
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "connecting",
+        latestTurn: completedTurn,
+        latestUserMessageId: MessageId.make("message-followup"),
+        session: {
+          ...readySession,
+          status: "starting",
+          updatedAt: "2026-03-29T00:01:00.000Z",
+        },
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,

@@ -117,6 +117,7 @@ const unusedProviderService: ProviderService["Service"] = {
   getCapabilities: () => Effect.die("ProviderService.getCapabilities unused"),
   getInstanceInfo: () => Effect.die("ProviderService.getInstanceInfo unused"),
   rollbackConversation: () => Effect.die("ProviderService.rollbackConversation unused"),
+  uploadFeedback: () => Effect.die("ProviderService.uploadFeedback unused"),
   streamEvents: Stream.empty,
 };
 
