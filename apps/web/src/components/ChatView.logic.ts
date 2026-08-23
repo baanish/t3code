@@ -7,8 +7,10 @@ import {
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
+  type TeleportThreadState,
   type ThreadId,
   type TurnId,
+  teleportSendDisabledReason,
 } from "@t3tools/contracts";
 import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
@@ -159,6 +161,17 @@ export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
     checkpoints: [],
     deletedAt: null,
   };
+}
+
+export function composerSendDisabledReason(input: {
+  teleport: TeleportThreadState | null | undefined;
+  threadDetailLoading: boolean;
+  nativeConflictReason: string | null;
+}): string | null {
+  return (
+    teleportSendDisabledReason(input.teleport) ??
+    (input.threadDetailLoading ? "Messages loading" : input.nativeConflictReason)
+  );
 }
 
 export function shouldWriteThreadErrorToCurrentServerThread(input: {

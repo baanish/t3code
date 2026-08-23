@@ -318,6 +318,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   buildLoadingThreadFromShell,
+  composerSendDisabledReason,
   buildThreadTurnInterruptInput,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
@@ -6730,12 +6731,11 @@ function ChatViewContent(props: ChatViewProps) {
                             phase={phase}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}
-                            sendDisabledReason={
-                              threadDetailLoading
-                                ? "Messages loading"
-                                : (teleportSendDisabledReason(activeThread?.teleport) ??
-                                  teleportNativeConflict.sendDisabledReason)
-                            }
+                            sendDisabledReason={composerSendDisabledReason({
+                              teleport: activeThread?.teleport,
+                              threadDetailLoading,
+                              nativeConflictReason: teleportNativeConflict.sendDisabledReason,
+                            })}
                             isPreparingWorktree={isPreparingWorktree}
                             externalDrawerAttached={externalComposerDrawerAttached}
                             environmentUnavailable={activeEnvironmentUnavailableState}
