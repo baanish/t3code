@@ -22,6 +22,7 @@ import {
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  OrchestrationDispatchCommandError,
   ORCHESTRATION_WS_METHODS,
   type PreviewEvent,
   ProjectId,
@@ -32,6 +33,7 @@ import {
   TELEPORT_NATIVE_DIVERGENCE_SEND_DISABLED_REASON,
   TELEPORT_SCHEMA_VERSION,
   TeleportNativeDivergenceError,
+  TeleportInvalidInputError,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -8129,6 +8131,193 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(result.failure.message, "Failed to verify the imported native session.");
       assert.deepEqual(dispatchedCommands, []);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "does not require a native revision for bootstrap.createThread on a missing thread",
+    () =>
+      Effect.gen(function* () {
+        const dispatchedCommands: Array<OrchestrationCommand> = [];
+        const missingThreadId = ThreadId.make("thread-bootstrap-create-missing");
+        let revisionChecks = 0;
+
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: {
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  dispatchedCommands.push(command);
+                  return { sequence: dispatchedCommands.length };
+                }),
+              readEvents: () => Stream.empty,
+            },
+            teleportService: {
+              requireNativeRevisionForTurn: (threadId) => {
+                revisionChecks += 1;
+                return Effect.fail(
+                  new TeleportInvalidInputError({
+                    reason: `Thread '${threadId}' was not found.`,
+                  }),
+                );
+              },
+            },
+          },
+        });
+
+        const createdAt = "2026-01-01T00:00:00.000Z";
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const response = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+              type: "thread.turn.start",
+              commandId: CommandId.make("cmd-bootstrap-create-missing"),
+              threadId: missingThreadId,
+              message: {
+                messageId: MessageId.make("msg-bootstrap-create-missing"),
+                role: "user",
+                text: "hello",
+                attachments: [],
+              },
+              modelSelection: defaultModelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              bootstrap: {
+                createThread: {
+                  projectId: defaultProjectId,
+                  title: "Bootstrap Thread",
+                  modelSelection: defaultModelSelection,
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  branch: "main",
+                  worktreePath: null,
+                  createdAt,
+                },
+              },
+              createdAt,
+            }),
+          ),
+        );
+
+        assert.equal(revisionChecks, 0);
+        assert.equal(response.sequence, 2);
+        assert.deepEqual(
+          dispatchedCommands.map((command) => command.type),
+          ["thread.create", "thread.turn.start"],
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects HTTP thread.turn.start when the native revision has diverged", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const threadId = ThreadId.make("thread-http-native-revision-gate");
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          teleportService: {
+            requireNativeRevisionForTurn: () =>
+              Effect.fail(
+                new TeleportNativeDivergenceError({
+                  threadId,
+                  kind: "diverged",
+                  nativePath: "/tmp/session.jsonl",
+                  persistedDigest: "abc",
+                  observedDigest: "def",
+                }),
+              ),
+          },
+        },
+      });
+
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const response = yield* HttpClient.post("/api/orchestration/dispatch", {
+        headers: {
+          cookie,
+        },
+        body: yield* HttpBody.json({
+          type: "thread.turn.start",
+          commandId: "cmd-http-native-revision-gate",
+          threadId,
+          message: {
+            messageId: "msg-http-native-revision-gate",
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          modelSelection: defaultModelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      });
+
+      assert.equal(response.status, 500);
+      assert.deepEqual(dispatchedCommands, []);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "still dispatches HTTP thread.turn.start so the decider can reject native presence",
+    () =>
+      Effect.gen(function* () {
+        const dispatchedCommands: Array<OrchestrationCommand> = [];
+
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: {
+              dispatch: (command) => {
+                dispatchedCommands.push(command);
+                if (command.type === "thread.turn.start") {
+                  return Effect.fail(
+                    new OrchestrationListenerCallbackError({
+                      listener: "domain-event",
+                      detail: "Cannot start a turn while the thread is in the native CLI.",
+                    }),
+                  );
+                }
+                return Effect.succeed({ sequence: dispatchedCommands.length });
+              },
+              readEvents: () => Stream.empty,
+            },
+          },
+        });
+
+        const cookie = yield* getAuthenticatedSessionCookieHeader();
+        const response = yield* HttpClient.post("/api/orchestration/dispatch", {
+          headers: {
+            cookie,
+          },
+          body: yield* HttpBody.json({
+            type: "thread.turn.start",
+            commandId: "cmd-http-native-presence",
+            threadId: "thread-http-native-presence",
+            message: {
+              messageId: "msg-http-native-presence",
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        });
+
+        assert.equal(response.status, 500);
+        assert.deepEqual(
+          dispatchedCommands.map((command) => command.type),
+          ["thread.turn.start"],
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("does not report a deleted bootstrap thread when cleanup fails", () =>

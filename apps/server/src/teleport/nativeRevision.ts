@@ -63,6 +63,18 @@ export function shouldWatchNativeRevision(
   );
 }
 
+export function turnStartRequiresNativeRevisionCheck(command: {
+  readonly type: string;
+  readonly bootstrap?:
+    | {
+        readonly createThread?: unknown;
+        readonly prepareWorktree?: unknown;
+      }
+    | undefined;
+}): boolean {
+  return command.type === "thread.turn.start" && command.bootstrap?.createThread === undefined;
+}
+
 export function findCoveringNativeFork<T extends { readonly id: ThreadId }>(input: {
   readonly sourceThreadId: ThreadId;
   readonly observedDigest: string;

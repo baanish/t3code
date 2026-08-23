@@ -128,6 +128,7 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import * as TeleportService from "./teleport/TeleportService.ts";
+import { turnStartRequiresNativeRevisionCheck } from "./teleport/nativeRevision.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1063,7 +1064,8 @@ const makeWsRpcLayer = (
         // Fail the RPC with OrchestrationDispatchCommandError before bootstrap
         // or engine.dispatch so a revision check error never silently admits.
         const guardedDispatch =
-          normalizedCommand.type === "thread.turn.start"
+          normalizedCommand.type === "thread.turn.start" &&
+          turnStartRequiresNativeRevisionCheck(normalizedCommand)
             ? teleport.requireNativeRevisionForTurn(normalizedCommand.threadId).pipe(
                 Effect.catchDefect((defect) =>
                   Effect.fail(

@@ -23,6 +23,7 @@ import {
   resolveNativeForkPlan,
   reuseNativeForkAfterCreateConflict,
   shouldWatchNativeRevision,
+  turnStartRequiresNativeRevisionCheck,
 } from "./nativeRevision.ts";
 import { readNativeSessionFile } from "./sessionFile.ts";
 import { sampleTeleportSession } from "./testFixtures.ts";
@@ -88,6 +89,39 @@ describe("native revision classification", () => {
           forkedFromThreadId: SOURCE_THREAD,
         }),
       ),
+      false,
+    );
+  });
+
+  it("skips the turn-start revision check only when bootstrap creates the thread", () => {
+    assert.equal(
+      turnStartRequiresNativeRevisionCheck({
+        type: "thread.turn.start",
+      }),
+      true,
+    );
+    assert.equal(
+      turnStartRequiresNativeRevisionCheck({
+        type: "thread.turn.start",
+        bootstrap: {
+          prepareWorktree: {},
+        },
+      }),
+      true,
+    );
+    assert.equal(
+      turnStartRequiresNativeRevisionCheck({
+        type: "thread.turn.start",
+        bootstrap: {
+          createThread: {},
+        },
+      }),
+      false,
+    );
+    assert.equal(
+      turnStartRequiresNativeRevisionCheck({
+        type: "thread.meta.update",
+      }),
       false,
     );
   });

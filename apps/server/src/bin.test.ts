@@ -31,6 +31,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import * as TeleportService from "./teleport/TeleportService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import {
@@ -119,6 +120,18 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
     const routesLayer = HttpApiBuilder.layer(ProjectCliHttpApi).pipe(
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
+      Layer.provide(
+        Layer.mock(TeleportService.TeleportService)({
+          listSessions: () => Effect.die("TeleportService.listSessions unused in CLI tests"),
+          importSessions: () => Effect.die("TeleportService.importSessions unused in CLI tests"),
+          exportSession: () => Effect.die("TeleportService.exportSession unused in CLI tests"),
+          checkNativeRevision: () =>
+            Effect.die("TeleportService.checkNativeRevision unused in CLI tests"),
+          forkNativeDivergence: () =>
+            Effect.die("TeleportService.forkNativeDivergence unused in CLI tests"),
+          requireNativeRevisionForTurn: () => Effect.void,
+        }),
+      ),
     );
     const appLayer = HttpRouter.serve(routesLayer, {
       disableListenLog: true,
