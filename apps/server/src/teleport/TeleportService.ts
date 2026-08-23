@@ -99,8 +99,10 @@ import {
 import {
   committedTeleportImportState,
   importingTeleportState,
+  inPlaceImportPathIsCompatible,
   nativeTranscriptWouldWipeExistingHistory,
   recoverInterruptedImportTeleports,
+  restoreDirectoryBindingAfterFailedImport,
   restorePresenceForImport,
   revertTeleportAfterFailedInPlaceImport,
   runInPlaceTeleportImport,
@@ -536,6 +538,7 @@ export const make = Effect.gen(function* () {
           );
 
           const parsedSessions: ParsedNativeSession[] = [];
+          const requestedNativePaths: Array<string | undefined> = [];
           for (const ref of input.sessions) {
             const parsed = yield* loadTeleportSession({
               homes,
@@ -553,6 +556,7 @@ export const make = Effect.gen(function* () {
               ...parsed,
               messages: capMessages(parsed.messages),
             });
+            requestedNativePaths.push(ref.nativePath);
           }
 
           const imported: TeleportImportedSession[] = [];
@@ -579,7 +583,8 @@ export const make = Effect.gen(function* () {
           ]);
           const importThreadShells = [...activeShell.threads, ...archivedShell.threads];
 
-          for (const parsed of parsedSessions) {
+          for (const [sessionIndex, parsed] of parsedSessions.entries()) {
+            const requestedNativePath = requestedNativePaths[sessionIndex];
             const driver = ProviderDriverKind.make(parsed.provider);
             let existingThreadId: ThreadId | undefined;
             let existingProjectId = input.projectId;
@@ -602,6 +607,16 @@ export const make = Effect.gen(function* () {
               const expectedInstanceId =
                 parsed.providerInstanceId ?? defaultInstanceIdForDriver(driver);
               if (binding.providerInstanceId !== expectedInstanceId) {
+                continue;
+              }
+              if (
+                !inPlaceImportPathIsCompatible({
+                  requestedNativePath,
+                  parsedNativePath: parsed.nativePath,
+                  existingNativePath: readTeleportRuntimePayload(binding.runtimePayload)
+                    ?.nativePath,
+                })
+              ) {
                 continue;
               }
               const shell = yield* snapshotQuery.getThreadShellById(binding.threadId).pipe(
@@ -651,6 +666,15 @@ export const make = Effect.gen(function* () {
                 if (
                   teleport.providerInstanceId !== undefined &&
                   teleport.providerInstanceId !== expectedInstanceId
+                ) {
+                  continue;
+                }
+                if (
+                  !inPlaceImportPathIsCompatible({
+                    requestedNativePath,
+                    parsedNativePath: parsed.nativePath,
+                    existingNativePath: teleport.nativePath,
+                  })
                 ) {
                   continue;
                 }
@@ -822,7 +846,9 @@ export const make = Effect.gen(function* () {
                     Option.match(previousBinding, {
                       onNone: () => Effect.void,
                       onSome: (binding) =>
-                        directory.upsert(binding).pipe(Effect.catch(() => Effect.void)),
+                        directory
+                          .upsert(restoreDirectoryBindingAfterFailedImport(binding))
+                          .pipe(Effect.catch(() => Effect.void)),
                     }),
                   ),
                 ),

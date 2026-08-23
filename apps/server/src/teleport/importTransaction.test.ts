@@ -7,18 +7,22 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 
+import { pendingTeleportNativePath } from "./exportPresence.ts";
 import {
   committedTeleportImportState,
   importSessionBatch,
   importingTeleportState,
+  inPlaceImportPathIsCompatible,
   nativeTranscriptWouldWipeExistingHistory,
   recoverInterruptedImportTeleports,
+  restoreDirectoryBindingAfterFailedImport,
   restorePresenceForImport,
   restoredTeleportStateAfterInterruptedImport,
   revertTeleportAfterFailedInPlaceImport,
   runInPlaceTeleportImport,
   runNewThreadTeleportImport,
 } from "./importTransaction.ts";
+import { readTeleportRuntimePayload } from "./resumeCursors.ts";
 
 const BASE_TELEPORT = {
   provider: "codex" as const,
@@ -63,6 +67,95 @@ describe("teleport import transaction", () => {
       }),
       false,
     );
+  });
+
+  it("does not in-place-match a different nativePath when the client requested a path", () => {
+    assert.equal(
+      inPlaceImportPathIsCompatible({
+        requestedNativePath: "/tmp/b.jsonl",
+        parsedNativePath: "/tmp/b.jsonl",
+        existingNativePath: "/tmp/a.jsonl",
+      }),
+      false,
+    );
+    assert.equal(
+      inPlaceImportPathIsCompatible({
+        requestedNativePath: "/tmp/a.jsonl",
+        parsedNativePath: "/tmp/a.jsonl",
+        existingNativePath: "/tmp/a.jsonl",
+      }),
+      true,
+    );
+    assert.equal(
+      inPlaceImportPathIsCompatible({
+        requestedNativePath: undefined,
+        parsedNativePath: "/tmp/b.jsonl",
+        existingNativePath: "/tmp/a.jsonl",
+      }),
+      true,
+    );
+    assert.equal(
+      inPlaceImportPathIsCompatible({
+        requestedNativePath: "/tmp/b.jsonl",
+        parsedNativePath: "/tmp/b.jsonl",
+        existingNativePath: undefined,
+      }),
+      true,
+    );
+    assert.equal(
+      inPlaceImportPathIsCompatible({
+        requestedNativePath: "/tmp/b.jsonl",
+        parsedNativePath: "/tmp/b.jsonl",
+        existingNativePath: pendingTeleportNativePath("codex", "session-1"),
+      }),
+      true,
+    );
+  });
+
+  it("restores identity without a running status or pending native path", () => {
+    const pending = pendingTeleportNativePath("codex", "session-1");
+    const restored = restoreDirectoryBindingAfterFailedImport({
+      threadId: ThreadId.make("thread-1"),
+      provider: "codex",
+      status: "running" as const,
+      resumeCursor: { threadId: "session-1" },
+      runtimePayload: {
+        teleport: {
+          schemaVersion: 1,
+          externalSessionId: "session-1",
+          nativePath: pending,
+          lastSyncDirection: "export",
+          lastSyncedAt: "2026-08-14T22:00:00.000Z",
+          nativeFormatVersion: 1,
+          presence: "native",
+        },
+      },
+    });
+    assert.equal(restored.status, "stopped");
+    assert.deepEqual(restored.resumeCursor, { threadId: "session-1" });
+    assert.equal(readTeleportRuntimePayload(restored.runtimePayload), undefined);
+    assert.equal(
+      restoreDirectoryBindingAfterFailedImport({
+        status: "starting" as const,
+      }).status,
+      "stopped",
+    );
+    const kept = restoreDirectoryBindingAfterFailedImport({
+      status: "error" as const,
+      runtimePayload: {
+        teleport: {
+          schemaVersion: 1,
+          externalSessionId: "session-1",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncDirection: "import",
+          lastSyncedAt: "2026-08-14T22:00:00.000Z",
+          nativeFormatVersion: 1,
+          presence: "t3",
+        },
+      },
+    });
+    assert.equal(kept.status, "error");
+    assert.equal(readTeleportRuntimePayload(kept.runtimePayload)?.nativePath, "/tmp/session.jsonl");
   });
 
   it("preserves native revision and fork provenance when changing presence", () => {

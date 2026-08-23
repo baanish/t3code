@@ -7,6 +7,10 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+import { teleportCwdsMatch } from "./cwd.ts";
+import { isPendingTeleportNativePath } from "./exportPresence.ts";
+import { isRecord } from "./json.ts";
+
 export { TELEPORT_IMPORT_BATCH_SEMANTICS };
 
 export function nativeTranscriptWouldWipeExistingHistory(input: {
@@ -14,6 +18,94 @@ export function nativeTranscriptWouldWipeExistingHistory(input: {
   readonly existingNativeMessageCount: number;
 }): boolean {
   return input.nativeMessageCount === 0 && input.existingNativeMessageCount > 0;
+}
+
+/**
+ * In-place import matches provider + externalSessionId + instance. When the
+ * client also passed `nativePath`, do not rewrite a thread bound to a
+ * different real file. Directory-only bindings and `teleport-pending:`
+ * sentinels are not a durable file identity.
+ */
+export function inPlaceImportPathIsCompatible(options: {
+  readonly requestedNativePath: string | undefined;
+  readonly parsedNativePath: string;
+  readonly existingNativePath: string | undefined;
+}): boolean {
+  if (options.requestedNativePath === undefined) {
+    return true;
+  }
+  const existingNativePath =
+    options.existingNativePath === undefined ||
+    isPendingTeleportNativePath(options.existingNativePath)
+      ? undefined
+      : options.existingNativePath;
+  if (existingNativePath === undefined) {
+    return true;
+  }
+  return teleportCwdsMatch(existingNativePath, options.parsedNativePath);
+}
+
+type RestorableDirectoryStatus = "starting" | "running" | "stopped" | "error";
+
+function restoredDirectoryStatusAfterFailedImport(
+  status: RestorableDirectoryStatus | undefined,
+): RestorableDirectoryStatus | undefined {
+  if (status === undefined) {
+    return undefined;
+  }
+  switch (status) {
+    case "running":
+    case "starting":
+      return "stopped";
+    case "stopped":
+    case "error":
+      return status;
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}
+
+function omitPendingTeleportRuntimePayload(
+  runtimePayload: unknown | null | undefined,
+): unknown | null | undefined {
+  if (runtimePayload == null || !isRecord(runtimePayload)) {
+    return runtimePayload;
+  }
+  const teleport = runtimePayload.teleport;
+  if (
+    !isRecord(teleport) ||
+    typeof teleport.nativePath !== "string" ||
+    !isPendingTeleportNativePath(teleport.nativePath)
+  ) {
+    return runtimePayload;
+  }
+  const { teleport: _pending, ...rest } = runtimePayload;
+  void _pending;
+  return rest;
+}
+
+/**
+ * Revert must restore identity, not a pre-stop `running`/`starting` binding or
+ * a `teleport-pending:` native path snapshot taken before stop.
+ */
+export function restoreDirectoryBindingAfterFailedImport<
+  T extends {
+    readonly status?: RestorableDirectoryStatus;
+    readonly runtimePayload?: unknown | null;
+  },
+>(binding: T): T {
+  const status = restoredDirectoryStatusAfterFailedImport(binding.status);
+  const runtimePayload = omitPendingTeleportRuntimePayload(binding.runtimePayload);
+  if (status === binding.status && runtimePayload === binding.runtimePayload) {
+    return binding;
+  }
+  return {
+    ...binding,
+    ...(status === undefined ? {} : { status }),
+    ...(runtimePayload === binding.runtimePayload ? {} : { runtimePayload }),
+  };
 }
 
 export function importingTeleportState(input: {
