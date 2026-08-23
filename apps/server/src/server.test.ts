@@ -22,7 +22,6 @@ import {
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
-  OrchestrationDispatchCommandError,
   ORCHESTRATION_WS_METHODS,
   type PreviewEvent,
   ProjectId,
