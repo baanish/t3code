@@ -7,6 +7,7 @@ import {
   DEFAULT_RUNTIME_MODE,
   ModelSelection,
   OrchestrationCommand,
+  ClientOrchestrationCommand,
   OrchestrationDispatchCommandError,
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
@@ -53,6 +54,7 @@ function getOptionValue(
 }
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
+const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
@@ -984,5 +986,20 @@ it.effect("decodes thread.teleport.import commands", () =>
       createdAt: "2026-08-14T22:00:00.000Z",
     });
     assert.strictEqual(parsed.type, "thread.teleport.import");
+  }),
+);
+
+it.effect("decodes internal thread.teleport.clear commands and rejects them from clients", () =>
+  Effect.gen(function* () {
+    const command = {
+      type: "thread.teleport.clear",
+      commandId: "cmd-teleport-clear",
+      threadId: "thread-1",
+      createdAt: "2026-08-14T22:00:00.000Z",
+    };
+    const parsed = yield* decodeOrchestrationCommand(command);
+    assert.strictEqual(parsed.type, "thread.teleport.clear");
+    const clientRejected = yield* Effect.exit(decodeClientOrchestrationCommand(command));
+    assert.strictEqual(clientRejected._tag, "Failure");
   }),
 );

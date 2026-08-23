@@ -15,6 +15,7 @@ import {
   recoverInterruptedImportTeleports,
   restorePresenceForImport,
   restoredTeleportStateAfterInterruptedImport,
+  revertTeleportAfterFailedInPlaceImport,
   runInPlaceTeleportImport,
   runNewThreadTeleportImport,
 } from "./importTransaction.ts";
@@ -92,12 +93,63 @@ describe("teleport import transaction", () => {
     assert.equal(importing.presence, "importing");
     assert.equal(restorePresenceForImport(importing), "native");
     assert.deepEqual(restoredTeleportStateAfterInterruptedImport(importing), {
-      ...BASE_TELEPORT,
-      presence: "native",
+      action: "set",
+      teleport: {
+        ...BASE_TELEPORT,
+        presence: "native",
+      },
     });
-    assert.equal(
+    assert.deepEqual(
       restoredTeleportStateAfterInterruptedImport(committedTeleportImportState(importing)),
-      null,
+      { action: "none" },
+    );
+  });
+
+  it("clears teleport after an interrupted first-time import", () => {
+    const firstTimeImporting = importingTeleportState({
+      base: {
+        ...BASE_TELEPORT,
+        nativeRevision: {
+          algorithm: "sha256",
+          digest: "imported-but-uncommitted",
+          byteLength: 42,
+        },
+      },
+    });
+    assert.equal(restorePresenceForImport(undefined), undefined);
+    assert.equal(restorePresenceForImport(null), undefined);
+    assert.deepEqual(restoredTeleportStateAfterInterruptedImport(firstTimeImporting), {
+      action: "clear",
+    });
+    assert.deepEqual(
+      restoredTeleportStateAfterInterruptedImport(
+        importingTeleportState({
+          base: {
+            ...BASE_TELEPORT,
+            nativeRevision: {
+              algorithm: "sha256",
+              digest: "imported-but-uncommitted",
+              byteLength: 42,
+            },
+          },
+          restorePresence: "t3",
+        }),
+      ),
+      { action: "clear" },
+    );
+    assert.deepEqual(revertTeleportAfterFailedInPlaceImport(undefined), { action: "clear" });
+    assert.deepEqual(
+      revertTeleportAfterFailedInPlaceImport({
+        ...BASE_TELEPORT,
+        presence: "native",
+      }),
+      {
+        action: "set",
+        teleport: {
+          ...BASE_TELEPORT,
+          presence: "native",
+        },
+      },
     );
   });
 
@@ -375,8 +427,36 @@ describe("teleport import transaction", () => {
         ],
         nextCommandId: Effect.succeed(CommandId.make("cmd-recover")),
         setTeleport: (threadId, teleport) => Ref.set(restored, `${threadId}:${teleport.presence}`),
+        clearTeleport: (threadId) => Ref.set(restored, `${threadId}:cleared`),
       });
       assert.equal(yield* Ref.get(restored), "thread-1:native");
+    }),
+  );
+
+  it.effect("clears leftover first-time importing presence on recovery", () =>
+    Effect.gen(function* () {
+      const restored = yield* Ref.make<string | null>(null);
+      yield* recoverInterruptedImportTeleports({
+        threads: [
+          {
+            id: ThreadId.make("thread-first"),
+            teleport: importingTeleportState({
+              base: {
+                ...BASE_TELEPORT,
+                nativeRevision: {
+                  algorithm: "sha256",
+                  digest: "uncommitted",
+                  byteLength: 12,
+                },
+              },
+            }),
+          },
+        ],
+        nextCommandId: Effect.succeed(CommandId.make("cmd-recover-clear")),
+        setTeleport: (threadId, teleport) => Ref.set(restored, `${threadId}:${teleport.presence}`),
+        clearTeleport: (threadId) => Ref.set(restored, `${threadId}:cleared`),
+      });
+      assert.equal(yield* Ref.get(restored), "thread-first:cleared");
     }),
   );
 });

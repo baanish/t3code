@@ -18,7 +18,7 @@ export function nativeTranscriptWouldWipeExistingHistory(input: {
 
 export function importingTeleportState(input: {
   readonly base: Omit<TeleportThreadState, "presence" | "restorePresence">;
-  readonly restorePresence?: TeleportRestorePresence;
+  readonly restorePresence?: TeleportRestorePresence | undefined;
 }): TeleportThreadState {
   return {
     ...input.base,
@@ -53,20 +53,75 @@ export function committedTeleportImportState(input: TeleportThreadState): Telepo
 
 export function restorePresenceForImport(
   teleport: TeleportThreadState | null | undefined,
-): TeleportRestorePresence {
-  if (teleport?.presence === "importing") {
-    return teleport.restorePresence ?? "t3";
+): TeleportRestorePresence | undefined {
+  if (teleport == null) {
+    return undefined;
   }
-  return teleport?.presence === "native" ? "native" : "t3";
+  switch (teleport.presence) {
+    case "importing":
+      return teleport.restorePresence;
+    case "native":
+      return "native";
+    case "t3":
+      return "t3";
+    default: {
+      const _exhaustive: never = teleport.presence;
+      return _exhaustive;
+    }
+  }
 }
 
+export type InterruptedImportTeleportRestore =
+  | { readonly action: "none" }
+  | { readonly action: "clear" }
+  | { readonly action: "set"; readonly teleport: TeleportThreadState };
+
+/**
+ * Crash recovery for a leftover `presence: "importing"` fence.
+ *
+ * Native restore keeps the importing payload's identity and relocks the
+ * composer. First-time import (no restorePresence) and restorePresence `t3`
+ * clear teleport instead of flipping to `t3` with the importing
+ * `nativeRevision`, which would look like a successful import without a
+ * history replace.
+ */
 export function restoredTeleportStateAfterInterruptedImport(
   teleport: TeleportThreadState | null | undefined,
-): TeleportThreadState | null {
+): InterruptedImportTeleportRestore {
   if (teleport == null || teleport.presence !== "importing") {
-    return null;
+    return { action: "none" };
   }
-  return teleportStateWithPresence(teleport, teleport.restorePresence ?? "t3");
+  if (teleport.restorePresence === "native") {
+    return {
+      action: "set",
+      teleport: teleportStateWithPresence(teleport, "native"),
+    };
+  }
+  return { action: "clear" };
+}
+
+/**
+ * Live revert after an in-place import fails or is interrupted.
+ *
+ * When a prior teleport document existed, restore that object (native→importing
+ * →native keeps the pre-import native identity). When there was no teleport
+ * field, clear rather than persisting the uncommitted import as `t3`.
+ */
+export function revertTeleportAfterFailedInPlaceImport(
+  prior: TeleportThreadState | null | undefined,
+): Exclude<InterruptedImportTeleportRestore, { action: "none" }> {
+  if (prior == null) {
+    return { action: "clear" };
+  }
+  if (prior.presence === "importing") {
+    const restored = restoredTeleportStateAfterInterruptedImport(prior);
+    return restored.action === "set" ? restored : { action: "clear" };
+  }
+  const presence = restorePresenceForImport(prior);
+  if (presence === undefined) {
+    return { action: "clear" };
+  }
+  return { action: "set", teleport: teleportStateWithPresence(prior, presence) };
 }
 
 export type InPlaceTeleportImportPorts<E, R = never> = {
@@ -177,22 +232,33 @@ export const recoverInterruptedImportTeleports = <E, R = never>(input: {
     teleport: TeleportThreadState,
     commandId: CommandId,
   ) => Effect.Effect<void, E, R>;
+  readonly clearTeleport: (threadId: ThreadId, commandId: CommandId) => Effect.Effect<void, E, R>;
 }): Effect.Effect<void, never, R> =>
   Effect.gen(function* () {
     for (const thread of input.threads) {
       const restored = restoredTeleportStateAfterInterruptedImport(thread.teleport);
-      if (restored === null) {
+      if (restored.action === "none") {
         continue;
       }
       const commandId = yield* input.nextCommandId;
-      yield* input
-        .setTeleport(thread.id, restored, commandId)
-        .pipe(
-          Effect.catchCause(() =>
-            Effect.logWarning("teleport.import.recovery-skipped").pipe(
-              Effect.annotateLogs({ threadId: thread.id }),
-            ),
+      const recover = (() => {
+        switch (restored.action) {
+          case "clear":
+            return input.clearTeleport(thread.id, commandId);
+          case "set":
+            return input.setTeleport(thread.id, restored.teleport, commandId);
+          default: {
+            const _exhaustive: never = restored;
+            return _exhaustive;
+          }
+        }
+      })();
+      yield* recover.pipe(
+        Effect.catchCause(() =>
+          Effect.logWarning("teleport.import.recovery-skipped").pipe(
+            Effect.annotateLogs({ threadId: thread.id }),
           ),
-        );
+        ),
+      );
     }
   });

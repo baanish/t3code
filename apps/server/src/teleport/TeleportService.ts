@@ -102,9 +102,9 @@ import {
   nativeTranscriptWouldWipeExistingHistory,
   recoverInterruptedImportTeleports,
   restorePresenceForImport,
+  revertTeleportAfterFailedInPlaceImport,
   runInPlaceTeleportImport,
   runNewThreadTeleportImport,
-  teleportStateWithPresence,
 } from "./importTransaction.ts";
 import {
   classifyNativeRevision,
@@ -369,6 +369,30 @@ export const make = Effect.gen(function* () {
             cause,
           }),
       ),
+    );
+
+  const dispatchTeleportClear = (input: {
+    readonly threadId: ThreadId;
+    readonly createdAt: string;
+    readonly reason: string;
+  }) =>
+    nextId().pipe(
+      Effect.flatMap((id) =>
+        engine.dispatch({
+          type: "thread.teleport.clear",
+          commandId: CommandId.make(id),
+          threadId: input.threadId,
+          createdAt: input.createdAt,
+        }),
+      ),
+      Effect.mapError(
+        (cause) =>
+          new TeleportInvalidInputError({
+            reason: input.reason,
+            cause,
+          }),
+      ),
+      Effect.asVoid,
     );
 
   const dispatchTeleportSet = (input: {
@@ -768,23 +792,30 @@ export const make = Effect.gen(function* () {
                 base: committedTeleport,
                 restorePresence: restorePresenceForImport(latest.value.teleport),
               });
-              const revertPresence =
-                latest.value.teleport === undefined || latest.value.teleport === null
-                  ? dispatchTeleportSet({
+              const revertedTeleport = revertTeleportAfterFailedInPlaceImport(
+                latest.value.teleport,
+              );
+              const revertPresence = (() => {
+                switch (revertedTeleport.action) {
+                  case "clear":
+                    return dispatchTeleportClear({
                       threadId,
-                      teleport: committedTeleport,
-                      createdAt: now,
-                      reason: "Failed to revert teleport import presence.",
-                    }).pipe(Effect.catch(() => Effect.void))
-                  : dispatchTeleportSet({
-                      threadId,
-                      teleport: teleportStateWithPresence(
-                        latest.value.teleport,
-                        restorePresenceForImport(latest.value.teleport),
-                      ),
                       createdAt: now,
                       reason: "Failed to revert teleport import presence.",
                     }).pipe(Effect.catch(() => Effect.void));
+                  case "set":
+                    return dispatchTeleportSet({
+                      threadId,
+                      teleport: revertedTeleport.teleport,
+                      createdAt: now,
+                      reason: "Failed to revert teleport import presence.",
+                    }).pipe(Effect.catch(() => Effect.void));
+                  default: {
+                    const _exhaustive: never = revertedTeleport;
+                    return _exhaustive;
+                  }
+                }
+              })();
               const revertImporting = Effect.uninterruptible(
                 revertPresence.pipe(
                   Effect.flatMap(() =>
@@ -1821,6 +1852,12 @@ export const make = Effect.gen(function* () {
         dispatchTeleportSet({
           threadId,
           teleport,
+          createdAt: now,
+          reason: "Failed to recover an interrupted teleport import.",
+        }),
+      clearTeleport: (threadId) =>
+        dispatchTeleportClear({
+          threadId,
           createdAt: now,
           reason: "Failed to recover an interrupted teleport import.",
         }),

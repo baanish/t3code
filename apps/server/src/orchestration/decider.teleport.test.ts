@@ -411,8 +411,8 @@ it.layer(NodeServices.layer)("teleport thread decider", (it) => {
       const replaced = events[2];
       expect(teleported?.type).toBe("thread.teleported");
       if (teleported?.type === "thread.teleported") {
-        expect(teleported.payload.teleport.presence).toBe("t3");
-        expect(teleported.payload.teleport.restorePresence).toBeUndefined();
+        expect(teleported.payload.teleport?.presence).toBe("t3");
+        expect(teleported.payload.teleport?.restorePresence).toBeUndefined();
       }
       expect(replaced?.type).toBe("thread.history-replaced");
       if (replaced?.type === "thread.history-replaced") {
@@ -449,8 +449,8 @@ it.layer(NodeServices.layer)("teleport thread decider", (it) => {
       const teleported = events.find((event) => event.type === "thread.teleported");
       expect(teleported?.type).toBe("thread.teleported");
       if (teleported?.type === "thread.teleported") {
-        expect(teleported.payload.teleport.nativeRevision).toEqual(nativeRevision);
-        expect(teleported.payload.teleport.forkedFromThreadId).toBe("thread-source");
+        expect(teleported.payload.teleport?.nativeRevision).toEqual(nativeRevision);
+        expect(teleported.payload.teleport?.forkedFromThreadId).toBe("thread-source");
       }
     }),
   );
@@ -485,6 +485,48 @@ it.layer(NodeServices.layer)("teleport thread decider", (it) => {
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
       if (error._tag === "OrchestrationCommandInvariantError") {
         expect(error.detail).toContain("starting or running");
+      }
+    }),
+  );
+
+  it.effect("clears teleport without replacing history", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.teleport.clear",
+          commandId: CommandId.make("cmd-teleport-clear"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({
+          teleport: {
+            ...NATIVE_TELEPORT,
+            presence: "importing",
+            restorePresence: "t3",
+            nativeRevision: {
+              algorithm: "sha256",
+              digest: "uncommitted",
+              byteLength: 12,
+            },
+          },
+          messages: [
+            {
+              id: MessageId.make("original"),
+              role: "user",
+              text: "original t3 history",
+              turnId: null,
+              streaming: false,
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+        }),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events).toHaveLength(1);
+      expect(events[0]?.type).toBe("thread.teleported");
+      if (events[0]?.type === "thread.teleported") {
+        expect(events[0].payload.teleport).toBeNull();
       }
     }),
   );

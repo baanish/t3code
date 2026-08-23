@@ -1071,6 +1071,13 @@ const ThreadTeleportImportCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTeleportClearCommand = Schema.Struct({
+  type: Schema.Literal("thread.teleport.clear"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1083,6 +1090,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadHistoryReplaceCommand,
   ThreadTeleportSetCommand,
   ThreadTeleportImportCommand,
+  ThreadTeleportClearCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1366,7 +1374,9 @@ export const ThreadHistoryReplacedPayload = Schema.Struct({
 
 export const ThreadTeleportedPayload = Schema.Struct({
   threadId: ThreadId,
-  teleport: TeleportThreadState,
+  // `null` clears teleport state. `thread.teleport.set` cannot represent
+  // "no teleport" because `TeleportThreadState.nativePath` is required.
+  teleport: Schema.NullOr(TeleportThreadState),
   updatedAt: IsoDateTime,
 });
 

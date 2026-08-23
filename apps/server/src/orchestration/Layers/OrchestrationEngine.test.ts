@@ -1695,4 +1695,99 @@ describe("OrchestrationEngine", () => {
 
     await system.dispose();
   });
+
+  it("clears teleport without replacing history", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("project-teleport-clear");
+    const threadId = ThreadId.make("thread-teleport-clear");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-teleport-clear-project"),
+        projectId,
+        title: "Teleport Clear",
+        workspaceRoot: "/tmp/project-teleport-clear",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-teleport-clear-thread"),
+        threadId,
+        projectId,
+        title: "Thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.history.replace",
+        commandId: CommandId.make("cmd-teleport-clear-history"),
+        threadId,
+        messages: [
+          {
+            id: asMessageId("original-1"),
+            role: "user",
+            text: "original t3 history",
+            turnId: null,
+            streaming: false,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ],
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.teleport.set",
+        commandId: CommandId.make("cmd-teleport-clear-importing"),
+        threadId,
+        teleport: {
+          presence: "t3",
+          provider: "codex",
+          externalSessionId: "session-clear",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncedAt: createdAt,
+          nativeRevision: {
+            algorithm: "sha256",
+            digest: "uncommitted",
+            byteLength: 12,
+          },
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.teleport.clear",
+        commandId: CommandId.make("cmd-teleport-clear"),
+        threadId,
+        createdAt,
+      }),
+    );
+
+    const readModel = await system.readModel();
+    const thread = readModel.threads.find((candidate) => candidate.id === threadId);
+    expect(thread?.teleport ?? null).toBeNull();
+    expect(thread?.messages.map((message) => message.text)).toEqual(["original t3 history"]);
+
+    await system.dispose();
+  });
 });

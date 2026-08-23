@@ -3,7 +3,9 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -29,6 +31,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { ProviderSessionDirectoryPersistenceError } from "../provider/Errors.ts";
 import {
   ProviderSessionDirectory,
   type ProviderRuntimeBinding,
@@ -42,19 +45,31 @@ import {
   observeNativeRevision,
   shouldWatchNativeRevision,
 } from "./nativeRevision.ts";
+import { readTeleportRuntimePayload } from "./resumeCursors.ts";
 import { sampleTeleportSession, TELEPORT_TEST_SESSION_ID } from "./testFixtures.ts";
 import { TeleportService, make as makeTeleportService } from "./TeleportService.ts";
 
 const PROJECT_ID = ProjectId.make("project-teleport-fork");
 const NOW = "2026-08-14T06:00:00.000Z";
 
-function memoryDirectory() {
+function memoryDirectory(options?: {
+  readonly failUpsert?: (binding: ProviderRuntimeBinding) => boolean;
+}) {
   const bindings = new Map<string, ProviderRuntimeBinding>();
   return {
-    upsert: (binding: ProviderRuntimeBinding) =>
-      Effect.sync(() => {
+    upsert: (binding: ProviderRuntimeBinding) => {
+      if (options?.failUpsert?.(binding) === true) {
+        return Effect.fail(
+          new ProviderSessionDirectoryPersistenceError({
+            operation: "upsert",
+            detail: "import fence persist failed",
+          }),
+        );
+      }
+      return Effect.sync(() => {
         bindings.set(binding.threadId, binding);
-      }),
+      });
+    },
     getProvider: (threadId: ThreadId) => {
       const binding = bindings.get(threadId);
       return binding === undefined
@@ -552,6 +567,243 @@ describe("TeleportService.requireNativeRevisionForTurn", () => {
           return;
         }
         assert.equal(result.failure._tag, "TeleportInvalidInputError");
+      }).pipe(Effect.provide(teleportServiceLayer({ workspaceRoot, codexHome, directory })));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("TeleportService in-place import revert", () => {
+  it.effect("clears teleport when a first-time directory import fails after the fence", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-import-clear-" });
+      const workspaceRoot = path.join(root, "workspace");
+      const codexHome = path.join(root, "codex");
+      const nativePath = allocateCodexSessionPath({
+        sessionsRoot: path.join(codexHome, "sessions"),
+        sessionId: TELEPORT_TEST_SESSION_ID,
+        createdAt: NOW,
+        join: path.join,
+      });
+      yield* fs.makeDirectory(workspaceRoot, { recursive: true });
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(
+        nativePath,
+        serializeCodexSession(sampleTeleportSession("codex", workspaceRoot)),
+      );
+      const threadId = ThreadId.make("thread-directory-bound");
+      const directory = memoryDirectory({
+        failUpsert: (binding) =>
+          readTeleportRuntimePayload(binding.runtimePayload)?.presence === "importing",
+      });
+      yield* directory.upsert({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        status: "stopped",
+        resumeCursor: { threadId: TELEPORT_TEST_SESSION_ID },
+      });
+
+      yield* Effect.gen(function* () {
+        const service = yield* TeleportService;
+        const engine = yield* OrchestrationEngineService;
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-import-clear-project"),
+          projectId: PROJECT_ID,
+          title: "Teleport Import Clear",
+          workspaceRoot,
+          defaultModelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          createdAt: NOW,
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd-import-clear-thread"),
+          threadId,
+          projectId: PROJECT_ID,
+          title: "Directory bound",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: NOW,
+        });
+        yield* engine.dispatch({
+          type: "thread.history.replace",
+          commandId: CommandId.make("cmd-import-clear-history"),
+          threadId,
+          messages: [
+            {
+              id: MessageId.make("original-t3"),
+              role: "user",
+              text: "original t3 history",
+              turnId: null,
+              streaming: false,
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+          createdAt: NOW,
+        });
+
+        const failed = yield* service
+          .importSessions({
+            projectId: PROJECT_ID,
+            cwd: workspaceRoot,
+            sessions: [
+              {
+                provider: "codex",
+                externalSessionId: TELEPORT_TEST_SESSION_ID,
+                nativePath,
+              },
+            ],
+          })
+          .pipe(Effect.result);
+        assert.equal(failed._tag, "Failure");
+
+        const thread = yield* snapshotQuery.getThreadDetailById(threadId);
+        assert.equal(Option.isSome(thread), true);
+        if (Option.isNone(thread)) {
+          return;
+        }
+        assert.equal(thread.value.teleport ?? null, null);
+        assert.deepEqual(
+          thread.value.messages.map((message) => message.text),
+          ["original t3 history"],
+        );
+
+        yield* service.requireNativeRevisionForTurn(threadId);
+        const revision = yield* service.checkNativeRevision({ threadId });
+        assert.equal(revision.status, "not-applicable");
+        assert.notEqual(revision.status, "unchanged");
+      }).pipe(Effect.provide(teleportServiceLayer({ workspaceRoot, codexHome, directory })));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("restores a prior native teleport when in-place import fails after the fence", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-import-native-" });
+      const workspaceRoot = path.join(root, "workspace");
+      const codexHome = path.join(root, "codex");
+      const nativePath = allocateCodexSessionPath({
+        sessionsRoot: path.join(codexHome, "sessions"),
+        sessionId: TELEPORT_TEST_SESSION_ID,
+        createdAt: NOW,
+        join: path.join,
+      });
+      yield* fs.makeDirectory(workspaceRoot, { recursive: true });
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(
+        nativePath,
+        serializeCodexSession(sampleTeleportSession("codex", workspaceRoot)),
+      );
+      const threadId = ThreadId.make("thread-native-bound");
+      const priorNative = {
+        presence: "native" as const,
+        provider: "codex" as const,
+        externalSessionId: TELEPORT_TEST_SESSION_ID,
+        nativePath,
+        lastSyncedAt: NOW,
+      };
+      const directory = memoryDirectory({
+        failUpsert: (binding) =>
+          readTeleportRuntimePayload(binding.runtimePayload)?.presence === "importing",
+      });
+      yield* directory.upsert({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        status: "stopped",
+        resumeCursor: { threadId: TELEPORT_TEST_SESSION_ID },
+        runtimePayload: {
+          teleport: {
+            schemaVersion: 1,
+            externalSessionId: TELEPORT_TEST_SESSION_ID,
+            nativePath,
+            lastSyncDirection: "export",
+            lastSyncedAt: NOW,
+            nativeFormatVersion: 1,
+            presence: "native",
+          },
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const service = yield* TeleportService;
+        const engine = yield* OrchestrationEngineService;
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-import-native-project"),
+          projectId: PROJECT_ID,
+          title: "Teleport Import Native",
+          workspaceRoot,
+          defaultModelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          createdAt: NOW,
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd-import-native-thread"),
+          threadId,
+          projectId: PROJECT_ID,
+          title: "Native bound",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: NOW,
+        });
+        yield* engine.dispatch({
+          type: "thread.teleport.set",
+          commandId: CommandId.make("cmd-import-native-prior"),
+          threadId,
+          teleport: priorNative,
+          createdAt: NOW,
+        });
+
+        const failed = yield* service
+          .importSessions({
+            projectId: PROJECT_ID,
+            cwd: workspaceRoot,
+            sessions: [
+              {
+                provider: "codex",
+                externalSessionId: TELEPORT_TEST_SESSION_ID,
+                nativePath,
+              },
+            ],
+          })
+          .pipe(Effect.result);
+        assert.equal(failed._tag, "Failure");
+
+        const thread = yield* snapshotQuery.getThreadDetailById(threadId);
+        assert.equal(Option.isSome(thread), true);
+        if (Option.isNone(thread)) {
+          return;
+        }
+        assert.equal(thread.value.teleport?.presence, "native");
+        assert.equal(thread.value.teleport?.nativePath, nativePath);
+        assert.equal(thread.value.teleport?.nativeRevision, undefined);
       }).pipe(Effect.provide(teleportServiceLayer({ workspaceRoot, codexHome, directory })));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

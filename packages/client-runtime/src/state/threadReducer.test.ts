@@ -1012,6 +1012,50 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.updatedAt).toBe("2026-08-14T22:00:00.000Z");
       }
     });
+
+    it("clears teleport when the payload is null", () => {
+      const teleported = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 14,
+        occurredAt: "2026-08-14T22:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.teleported",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          teleport: {
+            presence: "importing",
+            provider: "codex",
+            externalSessionId: "session-1",
+            nativePath: "/tmp/session.jsonl",
+            lastSyncedAt: "2026-08-14T22:00:00.000Z",
+          },
+          updatedAt: "2026-08-14T22:00:00.000Z",
+        },
+      });
+      expect(teleported.kind).toBe("updated");
+      if (teleported.kind !== "updated") {
+        return;
+      }
+      const cleared = applyThreadDetailEvent(teleported.thread, {
+        ...baseEventFields,
+        sequence: 15,
+        occurredAt: "2026-08-14T22:00:01.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.teleported",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          teleport: null,
+          updatedAt: "2026-08-14T22:00:01.000Z",
+        },
+      });
+      expect(cleared.kind).toBe("updated");
+      if (cleared.kind === "updated") {
+        expect(cleared.thread.teleport).toBeNull();
+        expect(cleared.thread.messages).toEqual(teleported.thread.messages);
+      }
+    });
   });
 
   describe("no-op events", () => {
