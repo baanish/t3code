@@ -94,6 +94,51 @@ describe("teleport Codex format", () => {
     );
   });
 
+  it.effect("keeps assistant text that starts with a synthetic user wrapper", () =>
+    Effect.gen(function* () {
+      const contents = `${JSON.stringify({
+        timestamp: TELEPORT_TEST_CREATED_AT,
+        type: "session_meta",
+        payload: { id: TELEPORT_TEST_SESSION_ID, cwd: "/workspace" },
+      })}\n${JSON.stringify({
+        timestamp: TELEPORT_TEST_CREATED_AT,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "KEEP_NAT_CODEX_U1_CEDAR: add a --json flag" }],
+        },
+      })}\n${JSON.stringify({
+        timestamp: TELEPORT_TEST_CREATED_AT,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "<environment_context>\nThis is a real assistant reply about wrappers.",
+            },
+          ],
+        },
+      })}\n`;
+      const parsed = yield* parseCodexSessionContents({
+        contents,
+        nativePath: "/tmp/codex-assistant-env.jsonl",
+      });
+      assert.equal(Option.isSome(parsed), true);
+      if (Option.isSome(parsed)) {
+        assert.equal(parsed.value.messages.length, 2);
+        assert.equal(parsed.value.messages[0]?.role, "user");
+        assert.equal(parsed.value.messages[1]?.role, "assistant");
+        assert.equal(
+          parsed.value.messages[1]?.text,
+          "<environment_context>\nThis is a real assistant reply about wrappers.",
+        );
+      }
+    }),
+  );
+
   it.effect("skips Codex environment_context user wrappers", () =>
     Effect.gen(function* () {
       const contents = `${JSON.stringify({

@@ -84,7 +84,7 @@ function extractMessage(event: Record<string, unknown>): NativeTextMessage | und
   if (!text) {
     return undefined;
   }
-  if (isSyntheticNativeUserText(text)) {
+  if (role === "user" && isSyntheticNativeUserText(text)) {
     return undefined;
   }
   return nativeTextMessage({
