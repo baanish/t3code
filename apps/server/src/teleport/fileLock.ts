@@ -74,9 +74,8 @@ const isUnixPathInUse = Effect.fn("isUnixPathInUse")(function* (nativePath: stri
     })
     .pipe(
       Effect.catchTags({
-        // `lsof` is optional. Linux/server installs often omit it; fall back
-        // to the exclusive-open probe used on Windows instead of failing every
-        // import/export.
+        // `lsof` is the Unix lock source of truth. Advisory `open(r+)` is not
+        // a substitute: it often succeeds while a CLI still has the file.
         ProcessSpawnError: () => Effect.succeed(null),
         ProcessStdinError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
         ProcessOutputLimitError: (cause) => new TeleportLockProbeError({ nativePath, cause }),
@@ -85,7 +84,18 @@ const isUnixPathInUse = Effect.fn("isUnixPathInUse")(function* (nativePath: stri
       }),
     );
   if (result === null) {
-    return yield* isPathInUseByOpen(nativePath);
+    const fs = yield* FileSystem.FileSystem;
+    const exists = yield* fs.exists(nativePath).pipe(
+      Effect.mapError((cause) => new TeleportLockProbeError({ nativePath, cause })),
+    );
+    if (!exists) {
+      // First export create: the target file is not there yet.
+      return false;
+    }
+    return yield* new TeleportLockProbeError({
+      nativePath,
+      cause: new Error("lsof is unavailable; cannot prove the native file is unlocked"),
+    });
   }
   if (result.code === 0 || result.code === 1) {
     return result.stdout.trim().length > 0;

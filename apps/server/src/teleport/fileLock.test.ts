@@ -11,6 +11,8 @@ import * as Path from "effect/Path";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { TeleportLockProbeError } from "@t3tools/contracts";
+
 import { isNativePathLocked, requireNativePathUnlocked } from "./fileLock.ts";
 
 const lockProbeLayer = Layer.merge(
@@ -19,31 +21,48 @@ const lockProbeLayer = Layer.merge(
 );
 
 describe("teleport file locks", () => {
-  it.effect("falls back to an open probe when lsof cannot be spawned", () =>
+  const noLsofLayer = Layer.merge(
+    NodeServices.layer,
+    Layer.succeed(ProcessRunner.ProcessRunner, {
+      run: () =>
+        new ProcessRunner.ProcessSpawnError({
+          command: "lsof",
+          argumentCount: 2,
+          cause: new Error("ENOENT"),
+        }),
+    }),
+  );
+
+  it.effect("fails closed when lsof cannot be spawned and the file exists", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-lock-nolsof-" });
       const filePath = path.join(root, "session.jsonl");
       yield* fs.writeFileString(filePath, "ok\n");
+      const locked = yield* isNativePathLocked(filePath).pipe(Effect.flip);
+      assert.equal(locked._tag, "TeleportLockProbeError");
+      const required = yield* requireNativePathUnlocked(filePath).pipe(Effect.flip);
+      assert.equal(required._tag, "TeleportLockProbeError");
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(noLsofLayer),
+    ),
+  );
+
+  it.effect("treats a missing file as unlocked when lsof cannot be spawned", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-lock-nolsof-missing-" });
+      const filePath = path.join(root, "session.jsonl");
       assert.equal(yield* isNativePathLocked(filePath), false);
       yield* requireNativePathUnlocked(filePath);
     }).pipe(
       Effect.scoped,
       Effect.provideService(HostProcessPlatform, "linux"),
-      Effect.provide(
-        Layer.merge(
-          NodeServices.layer,
-          Layer.succeed(ProcessRunner.ProcessRunner, {
-            run: () =>
-              new ProcessRunner.ProcessSpawnError({
-                command: "lsof",
-                argumentCount: 2,
-                cause: new Error("ENOENT"),
-              }),
-          }),
-        ),
-      ),
+      Effect.provide(noLsofLayer),
     ),
   );
 
