@@ -2800,7 +2800,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ): boolean => {
     if (
       text.length === 0 ||
-      isSendDisabled ||
+      isTeleportComposerLocked ||
       isConnecting ||
       isComposerApprovalState ||
       pendingUserInputs.length > 0 ||
@@ -3334,6 +3334,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         }
                       : {})}
                     onRemove={removeComposerPreviewAnnotationFromDraft}
+                    removeDisabled={isTeleportComposerLocked}
                     onExpandImage={(imageId) => {
                       const preview = buildExpandedImagePreview(composerImages, imageId);
                       if (preview) onExpandImage(preview);
@@ -3349,6 +3350,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <ComposerPendingReviewComments
                     comments={composerReviewComments}
                     onRemove={removeComposerReviewCommentFromDraft}
+                    removeDisabled={isTeleportComposerLocked}
                     className="mb-3"
                   />
                 )}
@@ -3360,6 +3362,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <ComposerPendingElementContexts
                     contexts={composerElementContexts}
                     onRemove={removeComposerElementContextFromDraft}
+                    removeDisabled={isTeleportComposerLocked}
                     className="mb-3"
                   />
                 )}
@@ -3471,6 +3474,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               className="absolute right-1 top-1 bg-background/80 hover:bg-background/90"
                               onClick={() => removeComposerImage(image.id)}
                               aria-label={`Remove ${image.name}`}
+                              disabled={isTeleportComposerLocked}
                             >
                               <XIcon />
                             </Button>
