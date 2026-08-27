@@ -101,6 +101,7 @@ import {
   importingTeleportState,
   inPlaceImportPathIsCompatible,
   nativeTranscriptWouldWipeExistingHistory,
+  importHistoryIsEmptyOrFenceOnly,
   recoverInterruptedImportTeleports,
   restorePresenceForImport,
   revertDirectoryAfterFailedInPlaceImport,
@@ -1878,11 +1879,36 @@ export const make = Effect.gen(function* () {
       snapshotQuery.getArchivedShellSnapshot(),
     ]);
     const threads = [...activeShell.threads, ...archivedShell.threads];
+    const recoveryThreads = yield* Effect.forEach(
+      threads,
+      (thread) => {
+        if (thread.teleport?.presence !== "importing") {
+          return Effect.succeed({
+            id: thread.id,
+            ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
+          });
+        }
+        return snapshotQuery.getThreadDetailById(thread.id).pipe(
+          Effect.map((detail) => ({
+            id: thread.id,
+            ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
+            historyIsEmptyOrFenceOnly: Option.match(detail, {
+              onNone: () => false,
+              onSome: (value) => importHistoryIsEmptyOrFenceOnly(value.messages),
+            }),
+          })),
+          Effect.catchCause(() =>
+            Effect.succeed({
+              id: thread.id,
+              ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
+            }),
+          ),
+        );
+      },
+      { concurrency: 1 },
+    );
     yield* recoverInterruptedImportTeleports({
-      threads: threads.map((thread) => ({
-        id: thread.id,
-        ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
-      })),
+      threads: recoveryThreads,
       nextCommandId: nextId().pipe(Effect.map(CommandId.make), Effect.orDie),
       setTeleport: (threadId, teleport) =>
         dispatchTeleportSet({
@@ -1897,6 +1923,17 @@ export const make = Effect.gen(function* () {
           createdAt: now,
           reason: "Failed to recover an interrupted teleport import.",
         }),
+      deleteThread: (threadId, commandId) =>
+        engine
+          .dispatch({
+            type: "thread.delete",
+            commandId,
+            threadId,
+          })
+          .pipe(
+            Effect.flatMap(() => directory.deleteByThreadId(threadId).pipe(Effect.catch(() => Effect.void))),
+            Effect.asVoid,
+          ),
     });
 
     const pendingExports = threads.filter(

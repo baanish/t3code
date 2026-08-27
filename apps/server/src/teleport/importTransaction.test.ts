@@ -14,6 +14,7 @@ import {
   importingTeleportState,
   inPlaceImportPathIsCompatible,
   nativeTranscriptWouldWipeExistingHistory,
+  importHistoryIsEmptyOrFenceOnly,
   recoverInterruptedImportTeleports,
   restoreDirectoryBindingAfterFailedImport,
   restorePresenceForImport,
@@ -620,6 +621,7 @@ describe("teleport import transaction", () => {
         nextCommandId: Effect.succeed(CommandId.make("cmd-recover")),
         setTeleport: (threadId, teleport) => Ref.set(restored, `${threadId}:${teleport.presence}`),
         clearTeleport: (threadId) => Ref.set(restored, `${threadId}:cleared`),
+        deleteThread: (threadId) => Ref.set(restored, `${threadId}:deleted`),
       });
       assert.equal(yield* Ref.get(restored), "thread-1:native");
     }),
@@ -642,13 +644,63 @@ describe("teleport import transaction", () => {
                 },
               },
             }),
+            historyIsEmptyOrFenceOnly: true,
           },
         ],
         nextCommandId: Effect.succeed(CommandId.make("cmd-recover-clear")),
         setTeleport: (threadId, teleport) => Ref.set(restored, `${threadId}:${teleport.presence}`),
         clearTeleport: (threadId) => Ref.set(restored, `${threadId}:cleared`),
+        deleteThread: (threadId) => Ref.set(restored, `${threadId}:deleted`),
       });
       assert.equal(yield* Ref.get(restored), "thread-first:cleared");
+    }),
+  );
+
+  it.effect("deletes a leftover new-thread import with empty history", () =>
+    Effect.gen(function* () {
+      const restored = yield* Ref.make<string | null>(null);
+      assert.equal(importHistoryIsEmptyOrFenceOnly([]), true);
+      assert.equal(importHistoryIsEmptyOrFenceOnly([{ role: "user" }]), false);
+      yield* recoverInterruptedImportTeleports({
+        threads: [
+          {
+            id: ThreadId.make("thread-new"),
+            teleport: importingTeleportState({
+              base: BASE_TELEPORT,
+              restorePresence: "t3",
+            }),
+            historyIsEmptyOrFenceOnly: true,
+          },
+        ],
+        nextCommandId: Effect.succeed(CommandId.make("cmd-recover-delete")),
+        setTeleport: (threadId, teleport) => Ref.set(restored, `${threadId}:${teleport.presence}`),
+        clearTeleport: (threadId) => Ref.set(restored, `${threadId}:cleared`),
+        deleteThread: (threadId) => Ref.set(restored, `${threadId}:deleted`),
+      });
+      assert.equal(yield* Ref.get(restored), "thread-new:deleted");
+    }),
+  );
+
+  it.effect("does not delete an in-place import of an existing thread", () =>
+    Effect.gen(function* () {
+      const restored = yield* Ref.make<string | null>(null);
+      yield* recoverInterruptedImportTeleports({
+        threads: [
+          {
+            id: ThreadId.make("thread-inplace"),
+            teleport: importingTeleportState({
+              base: BASE_TELEPORT,
+              restorePresence: "t3",
+            }),
+            historyIsEmptyOrFenceOnly: false,
+          },
+        ],
+        nextCommandId: Effect.succeed(CommandId.make("cmd-recover-inplace")),
+        setTeleport: (threadId, teleport) => Ref.set(restored, `${threadId}:${teleport.presence}`),
+        clearTeleport: (threadId) => Ref.set(restored, `${threadId}:cleared`),
+        deleteThread: (threadId) => Ref.set(restored, `${threadId}:deleted`),
+      });
+      assert.equal(yield* Ref.get(restored), "thread-inplace:cleared");
     }),
   );
 });
