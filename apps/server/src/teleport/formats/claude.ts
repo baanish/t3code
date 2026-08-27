@@ -30,6 +30,7 @@ import {
 import { requireNativePathUnlocked } from "../fileLock.ts";
 import { writeNativeSessionAtomically } from "../nativeWrite.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
+import { walkTeleportFiles } from "../walk.ts";
 import type { TeleportFormatAdapter } from "./adapter.ts";
 import {
   collectTextParts,
@@ -407,43 +408,13 @@ function fileStem(filePath: string): string | undefined {
   return nonEmptyString(base.replace(/\.jsonl$/u, ""));
 }
 
-const walkJsonl = Effect.fn("walkClaudeJsonl")(function* (root: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const exists = yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false));
-  if (!exists) {
-    return [] as string[];
-  }
-  const files: string[] = [];
-  const stack = [root];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    const entries = yield* fs.readDirectory(current).pipe(Effect.orElseSucceed(() => []));
-    for (const name of entries) {
-      const entryPath = path.join(current, name);
-      const stat = yield* fs.stat(entryPath).pipe(Effect.orElseSucceed(() => null));
-      if (stat === null) {
-        continue;
-      }
-      if (stat.type === "Directory") {
-        if (name === "subagents" || name === "tool-results" || name === "workflows") {
-          continue;
-        }
-        stack.push(entryPath);
-      } else if (
-        stat.type === "File" &&
-        entryPath.endsWith(".jsonl") &&
-        !name.startsWith("agent-")
-      ) {
-        files.push(entryPath);
-      }
-    }
-  }
-  return files;
-});
+const walkJsonl = (root: string) =>
+  walkTeleportFiles(root, {
+    shouldEnterDirectory: (name) =>
+      name !== "subagents" && name !== "tool-results" && name !== "workflows",
+    shouldCollectFile: (name, entryPath) =>
+      entryPath.endsWith(".jsonl") && !name.startsWith("agent-"),
+  });
 
 export const claudeTeleportFormat: TeleportFormatAdapter = {
   provider: "claudeAgent",

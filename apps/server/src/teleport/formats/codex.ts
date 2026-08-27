@@ -12,7 +12,6 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
@@ -26,6 +25,7 @@ import {
 } from "../homes.ts";
 import { readNativeSessionFile } from "../sessionFile.ts";
 import { requireNativePathUnlocked } from "../fileLock.ts";
+import { walkTeleportFiles } from "../walk.ts";
 import {
   definedField,
   firstUserTitle,
@@ -319,40 +319,10 @@ export function toCodexCandidate(
   };
 }
 
-const walkFiles = Effect.fn("walkFiles")(function* (
-  root: string,
-  predicate: (filePath: string) => boolean,
-): Effect.fn.Return<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const exists = yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false));
-  if (!exists) {
-    return [];
-  }
-
-  const files: string[] = [];
-  const stack = [root];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    const entries = yield* fs.readDirectory(current).pipe(Effect.orElseSucceed(() => []));
-    for (const name of entries) {
-      const entryPath = path.join(current, name);
-      const stat = yield* fs.stat(entryPath).pipe(Effect.orElseSucceed(() => null));
-      if (stat === null) {
-        continue;
-      }
-      if (stat.type === "Directory") {
-        stack.push(entryPath);
-      } else if (stat.type === "File" && predicate(entryPath)) {
-        files.push(entryPath);
-      }
-    }
-  }
-  return files;
-});
+const walkFiles = (root: string, predicate: (filePath: string) => boolean) =>
+  walkTeleportFiles(root, {
+    shouldCollectFile: (_name, entryPath) => predicate(entryPath),
+  });
 
 export const codexTeleportFormat: TeleportFormatAdapter = {
   provider: "codex",
