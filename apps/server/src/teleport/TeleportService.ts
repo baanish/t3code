@@ -490,8 +490,10 @@ export const make = Effect.gen(function* () {
     );
 
   const importSessions = (input: TeleportImportSessionsInput) => {
-    // Atomic per session, not all-or-nothing for the batch. A later session
-    // failure retains earlier imported threads and still fails the RPC.
+    // Load and unlock every session before any thread is committed so a
+    // missing file, parse error, unsupported provider, or CLI lock aborts
+    // the batch with zero imports. Sequential commit still retains earlier
+    // sessions if a later identity or persist step fails.
     const inFlightKeys = input.sessions.map(
       (session) => `session:${session.provider}:${session.externalSessionId}`,
     );
@@ -554,6 +556,26 @@ export const make = Effect.gen(function* () {
             ),
           );
 
+          const parsedSessions: ParsedNativeSession[] = [];
+          for (const ref of input.sessions) {
+            const loaded = yield* loadTeleportSession({
+              homes,
+              provider: ref.provider,
+              externalSessionId: ref.externalSessionId,
+              cwd,
+              ...definedField("extraCwds", extraCwds.length > 0 ? extraCwds : undefined),
+              ...(ref.providerInstanceId === undefined
+                ? {}
+                : { providerInstanceId: ref.providerInstanceId }),
+              ...(ref.nativePath === undefined ? {} : { nativePath: ref.nativePath }),
+            });
+            yield* requireParsedSessionUnlocked(loaded, homes);
+            parsedSessions.push({
+              ...loaded,
+              messages: capMessages(loaded.messages),
+            });
+          }
+
           const imported: TeleportImportedSession[] = [];
           const now = yield* nowIso;
           const [activeShell, archivedShell] = yield* Effect.all([
@@ -578,23 +600,7 @@ export const make = Effect.gen(function* () {
           ]);
           const importThreadShells = [...activeShell.threads, ...archivedShell.threads];
 
-          for (const ref of input.sessions) {
-            const loaded = yield* loadTeleportSession({
-              homes,
-              provider: ref.provider,
-              externalSessionId: ref.externalSessionId,
-              cwd,
-              ...definedField("extraCwds", extraCwds.length > 0 ? extraCwds : undefined),
-              ...(ref.providerInstanceId === undefined
-                ? {}
-                : { providerInstanceId: ref.providerInstanceId }),
-              ...(ref.nativePath === undefined ? {} : { nativePath: ref.nativePath }),
-            });
-            yield* requireParsedSessionUnlocked(loaded, homes);
-            const parsed = {
-              ...loaded,
-              messages: capMessages(loaded.messages),
-            };
+          for (const parsed of parsedSessions) {
             const driver = ProviderDriverKind.make(parsed.provider);
             let existingThreadId: ThreadId | undefined;
             let existingProjectId = input.projectId;

@@ -90,9 +90,10 @@ export const TeleportListSessionsResult = Schema.Struct({
 export type TeleportListSessionsResult = typeof TeleportListSessionsResult.Type;
 
 /**
- * Import is atomic per listed session, not all-or-nothing for the batch.
- * If a later session fails, earlier successful imports are retained and the
- * RPC still fails.
+ * Load and unlock every listed session before any thread is committed, so
+ * environmental failures abort the batch with zero imports. After that,
+ * import is atomic per listed session: if a later identity or persist step
+ * fails, earlier successful imports are retained and the RPC still fails.
  */
 export const TELEPORT_IMPORT_BATCH_SEMANTICS = "per-session" as const;
 

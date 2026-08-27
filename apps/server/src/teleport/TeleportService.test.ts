@@ -1181,3 +1181,79 @@ describe("TeleportService in-place import revert", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
+
+const MISSING_TELEPORT_SESSION_ID = "22222222-2222-4222-8222-222222222222";
+
+describe("TeleportService import batch load validation", () => {
+  it.effect("leaves zero imports when a later session fails to load", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-batch-load-" });
+      const workspaceRoot = path.join(root, "workspace");
+      const codexHome = path.join(root, "codex");
+      const nativePath = allocateCodexSessionPath({
+        sessionsRoot: path.join(codexHome, "sessions"),
+        sessionId: TELEPORT_TEST_SESSION_ID,
+        createdAt: NOW,
+        join: path.join,
+      });
+      yield* fs.makeDirectory(workspaceRoot, { recursive: true });
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(
+        nativePath,
+        serializeCodexSession(sampleTeleportSession("codex", workspaceRoot)),
+      );
+      const directory = memoryDirectory();
+
+      yield* Effect.gen(function* () {
+        const service = yield* TeleportService;
+        const engine = yield* OrchestrationEngineService;
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-batch-load-project"),
+          projectId: PROJECT_ID,
+          title: "Teleport Batch Load",
+          workspaceRoot,
+          defaultModelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          createdAt: NOW,
+        });
+
+        const failed = yield* service
+          .importSessions({
+            projectId: PROJECT_ID,
+            cwd: workspaceRoot,
+            sessions: [
+              {
+                provider: "codex",
+                externalSessionId: TELEPORT_TEST_SESSION_ID,
+                nativePath,
+              },
+              {
+                provider: "codex",
+                externalSessionId: MISSING_TELEPORT_SESSION_ID,
+              },
+            ],
+          })
+          .pipe(Effect.result);
+        assert.equal(failed._tag, "Failure");
+        if (failed._tag === "Failure") {
+          assert.equal(failed.failure._tag, "TeleportDiscoveryError");
+        }
+
+        const [active, archived] = yield* Effect.all([
+          snapshotQuery.getShellSnapshot(),
+          snapshotQuery.getArchivedShellSnapshot(),
+        ]);
+        assert.deepEqual(active.threads, []);
+        assert.deepEqual(archived.threads, []);
+        assert.deepEqual(yield* directory.listBindings(), []);
+      }).pipe(Effect.provide(teleportServiceLayer({ workspaceRoot, codexHome, directory })));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});

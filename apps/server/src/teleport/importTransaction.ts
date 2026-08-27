@@ -332,8 +332,9 @@ export const runNewThreadTeleportImport = <E, R = never>(
   });
 
 /**
- * Sequential per-session import. A later failure does not undo earlier
- * successes; the caller still sees the failure.
+ * Sequential per-session commit. A later identity or persist failure does
+ * not undo earlier successes; the caller still sees the failure. Load and
+ * unlock must already have succeeded for every session.
  */
 export const importSessionBatch = <A, E, R = never>(
   sessions: ReadonlyArray<A>,
