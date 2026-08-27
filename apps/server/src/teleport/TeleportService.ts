@@ -244,6 +244,9 @@ export const make = Effect.gen(function* () {
 
   const nextId = () => crypto.randomUUIDv4;
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+  // Process-local only. This Set is not visible to other server processes
+  // or cluster replicas. Cross-process exclusion needs a shared store; do
+  // not treat withInFlight as a distributed lock.
   const inFlight = new Set<string>();
   const alreadyInFlightError = () =>
     new TeleportInvalidInputError({
