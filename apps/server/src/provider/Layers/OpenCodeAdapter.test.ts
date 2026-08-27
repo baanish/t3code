@@ -9,7 +9,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -21,7 +20,6 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
-  TurnId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
@@ -63,9 +61,6 @@ const runtimeMock = {
     sessionCreateInputs: [] as Array<Record<string, unknown>>,
     authHeaders: [] as Array<string | null>,
     abortCalls: [] as string[],
-    abortHold: null as Promise<void> | null,
-    abortStarted: null as (() => void) | null,
-    abortError: null as Error | null,
     closeCalls: [] as string[],
     revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
     promptCalls: [] as Array<unknown>,
@@ -86,9 +81,6 @@ const runtimeMock = {
     this.state.sessionCreateInputs.length = 0;
     this.state.authHeaders.length = 0;
     this.state.abortCalls.length = 0;
-    this.state.abortHold = null;
-    this.state.abortStarted = null;
-    this.state.abortError = null;
     this.state.closeCalls.length = 0;
     this.state.revertCalls.length = 0;
     this.state.promptCalls.length = 0;
@@ -184,13 +176,6 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         },
         abort: async ({ sessionID }: { sessionID: string }) => {
           runtimeMock.state.abortCalls.push(sessionID);
-          runtimeMock.state.abortStarted?.();
-          if (runtimeMock.state.abortHold) {
-            await runtimeMock.state.abortHold;
-          }
-          if (runtimeMock.state.abortError) {
-            throw runtimeMock.state.abortError;
-          }
         },
         promptAsync: async (input: unknown) => {
           runtimeMock.state.promptCalls.push(input);
@@ -822,267 +807,6 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.equal(session?.status, "running");
       NodeAssert.equal(String(session?.activeTurnId), String(turn.turnId));
     }),
-  );
-
-  it.effect("emits turn.aborted and returns the session to ready on interrupt", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-interrupt");
-      const eventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.threadId === threadId && event.type === "turn.aborted"),
-        Stream.take(1),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-      const turn = yield* adapter.sendTurn({
-        threadId,
-        input: "keep going",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("opencode"),
-          model: "openai/gpt-5",
-        },
-      });
-
-      yield* adapter.interruptTurn(threadId, turn.turnId);
-
-      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
-      NodeAssert.equal(events[0]?.type, "turn.aborted");
-      const sessions = yield* adapter.listSessions();
-      const session = sessions.find((entry) => entry.threadId === threadId);
-      NodeAssert.equal(session?.status, "ready");
-      NodeAssert.equal(session?.activeTurnId, undefined);
-      NodeAssert.equal(
-        runtimeMock.state.abortCalls.includes("http://127.0.0.1:9999/session"),
-        true,
-      );
-    }),
-  );
-
-  it.effect("does not start a new turn until a pending session.abort finishes", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-interrupt-serialize");
-      let releaseAbort: () => void = () => {};
-      const abortStarted = new Promise<void>((resolve) => {
-        runtimeMock.state.abortStarted = resolve;
-      });
-      runtimeMock.state.abortHold = new Promise<void>((resolve) => {
-        releaseAbort = resolve;
-      });
-
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-      const firstTurn = yield* adapter.sendTurn({
-        threadId,
-        input: "keep going",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("opencode"),
-          model: "openai/gpt-5",
-        },
-      });
-      NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
-
-      const interruptFiber = yield* adapter
-        .interruptTurn(threadId, firstTurn.turnId)
-        .pipe(Effect.forkChild);
-      yield* Effect.promise(() => abortStarted);
-
-      const sendFiber = yield* adapter
-        .sendTurn({
-          threadId,
-          input: "next prompt",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("opencode"),
-            model: "openai/gpt-5",
-          },
-        })
-        .pipe(Effect.forkChild);
-      NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
-
-      releaseAbort();
-      yield* Fiber.join(interruptFiber);
-      const secondTurn = yield* Fiber.join(sendFiber);
-      NodeAssert.equal(runtimeMock.state.promptCalls.length, 2);
-      NodeAssert.notEqual(String(secondTurn.turnId), String(firstTurn.turnId));
-    }),
-  );
-
-  it.effect("closes the session when session.abort fails so a later send cannot overlap", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-abort-failed");
-      runtimeMock.state.abortError = new Error("abort failed");
-
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-      const turn = yield* adapter.sendTurn({
-        threadId,
-        input: "keep going",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("opencode"),
-          model: "openai/gpt-5",
-        },
-      });
-
-      yield* adapter.interruptTurn(threadId, turn.turnId);
-      const sessions = yield* adapter.listSessions();
-      NodeAssert.equal(
-        sessions.some((entry) => entry.threadId === threadId),
-        false,
-      );
-      const error = yield* adapter
-        .sendTurn({
-          threadId,
-          input: "next prompt",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("opencode"),
-            model: "openai/gpt-5",
-          },
-        })
-        .pipe(Effect.flip);
-      NodeAssert.equal(error._tag, "ProviderAdapterSessionNotFoundError");
-    }),
-  );
-
-  it.effect("rejects an in-flight sendTurn when session.abort fails during the wait", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-abort-failed-inflight");
-      let releaseAbort: () => void = () => {};
-      const abortStarted = new Promise<void>((resolve) => {
-        runtimeMock.state.abortStarted = resolve;
-      });
-      runtimeMock.state.abortHold = new Promise<void>((resolve) => {
-        releaseAbort = resolve;
-      });
-      runtimeMock.state.abortError = new Error("abort failed");
-
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-      const firstTurn = yield* adapter.sendTurn({
-        threadId,
-        input: "keep going",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("opencode"),
-          model: "openai/gpt-5",
-        },
-      });
-      NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
-
-      const interruptFiber = yield* adapter
-        .interruptTurn(threadId, firstTurn.turnId)
-        .pipe(Effect.forkChild);
-      yield* Effect.promise(() => abortStarted);
-
-      const sendFiber = yield* adapter
-        .sendTurn({
-          threadId,
-          input: "next prompt",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("opencode"),
-            model: "openai/gpt-5",
-          },
-        })
-        .pipe(Effect.forkChild);
-      NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
-
-      releaseAbort();
-      yield* Fiber.join(interruptFiber);
-      const error = yield* Fiber.join(sendFiber).pipe(Effect.flip);
-      NodeAssert.equal(error._tag, "ProviderAdapterSessionNotFoundError");
-      NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
-    }),
-  );
-
-  it.effect("emits a single turn.aborted when interrupt is called concurrently", () =>
-    Effect.gen(function* () {
-      const adapter = yield* OpenCodeAdapter;
-      const threadId = asThreadId("thread-opencode-interrupt-concurrent");
-      const abortedCount = yield* Ref.make(0);
-      yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.threadId === threadId && event.type === "turn.aborted"),
-        Stream.tap(() => Ref.update(abortedCount, (count) => count + 1)),
-        Stream.runDrain,
-        Effect.forkChild,
-      );
-
-      let releaseAbort: () => void = () => {};
-      const abortStarted = new Promise<void>((resolve) => {
-        runtimeMock.state.abortStarted = resolve;
-      });
-      runtimeMock.state.abortHold = new Promise<void>((resolve) => {
-        releaseAbort = resolve;
-      });
-
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("opencode"),
-        threadId,
-        runtimeMode: "full-access",
-      });
-      const turn = yield* adapter.sendTurn({
-        threadId,
-        input: "keep going",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("opencode"),
-          model: "openai/gpt-5",
-        },
-      });
-
-      const firstInterrupt = yield* adapter
-        .interruptTurn(threadId, turn.turnId)
-        .pipe(Effect.forkChild);
-      yield* Effect.promise(() => abortStarted);
-      const secondInterrupt = yield* adapter
-        .interruptTurn(threadId, turn.turnId)
-        .pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
-
-      releaseAbort();
-      yield* Fiber.join(firstInterrupt);
-      yield* Fiber.join(secondInterrupt);
-      NodeAssert.equal(yield* Ref.get(abortedCount), 1);
-      NodeAssert.equal(runtimeMock.state.abortCalls.length, 1);
-    }),
-  );
-
-  it.effect(
-    "emits turn.aborted without starting a session when interrupt has no live context",
-    () =>
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const threadId = asThreadId("thread-opencode-zombie-interrupt");
-        const turnId = TurnId.make("opencode-turn-zombie");
-        const eventsFiber = yield* adapter.streamEvents.pipe(
-          Stream.filter((event) => event.threadId === threadId && event.type === "turn.aborted"),
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-
-        yield* adapter.interruptTurn(threadId, turnId);
-
-        const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
-        NodeAssert.equal(events[0]?.type, "turn.aborted");
-        NodeAssert.equal(String(events[0]?.turnId), String(turnId));
-        NodeAssert.equal(runtimeMock.state.startCalls.length, 0);
-        NodeAssert.equal(runtimeMock.state.abortCalls.length, 0);
-      }),
   );
 
   it.effect("passes agent and variant options for the adapter's bound custom instance id", () => {
