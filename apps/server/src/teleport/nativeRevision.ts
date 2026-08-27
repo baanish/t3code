@@ -13,8 +13,8 @@ import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 
+import { readBoundedNativeSessionBytes } from "./boundedRead.ts";
 import { isPendingTeleportNativePath } from "./exportPresence.ts";
-import { isOversizeTeleportSession } from "./types.ts";
 
 /**
  * Detection is a SHA-256 digest of the native file bytes, persisted on
@@ -311,16 +311,7 @@ export const observeNativeRevision = (
   FileSystem.FileSystem | Crypto.Crypto
 > =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const stat = yield* fs.stat(nativePath).pipe(Effect.orElseSucceed(() => null));
-    if (stat === null || stat.type !== "File") {
-      return { status: "missing" as const };
-    }
-    const byteLength = typeof stat.size === "bigint" ? Number(stat.size) : stat.size;
-    if (isOversizeTeleportSession(stat.size)) {
-      return { status: "oversize" as const, byteLength };
-    }
-    const bytes = yield* fs.readFile(nativePath).pipe(
+    const read = yield* readBoundedNativeSessionBytes(nativePath).pipe(
       Effect.mapError(
         (cause) =>
           new TeleportDiscoveryError({
@@ -329,9 +320,12 @@ export const observeNativeRevision = (
           }),
       ),
     );
-    if (bytes.byteLength === 0) {
+    if (read.status === "missing") {
       return { status: "missing" as const };
     }
-    const revision = yield* nativeRevisionFromBytes(bytes);
+    if (read.status === "oversize") {
+      return { status: "oversize" as const, byteLength: read.byteLength };
+    }
+    const revision = yield* nativeRevisionFromBytes(read.bytes);
     return { status: "observed" as const, revision };
   });

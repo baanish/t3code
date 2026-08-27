@@ -6,7 +6,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 
-import { isOversizeTeleportSession, type ParsedNativeSession } from "./types.ts";
+import { readBoundedNativeSessionBytes } from "./boundedRead.ts";
+import type { ParsedNativeSession } from "./types.ts";
 
 export const readNativeSessionFile = Effect.fn("readNativeSessionFile")(function* (input: {
   readonly nativePath: string;
@@ -19,15 +20,13 @@ export const readNativeSessionFile = Effect.fn("readNativeSessionFile")(function
   TeleportSchemaVersionError,
   FileSystem.FileSystem
 > {
-  const fs = yield* FileSystem.FileSystem;
-  const stat = yield* fs.stat(input.nativePath).pipe(Effect.orElseSucceed(() => null));
-  if (stat === null || stat.type !== "File") {
+  const read = yield* readBoundedNativeSessionBytes(input.nativePath).pipe(
+    Effect.orElseSucceed(() => ({ status: "missing" as const })),
+  );
+  if (read.status !== "observed") {
     return Option.none();
   }
-  if (isOversizeTeleportSession(stat.size)) {
-    return Option.none();
-  }
-  const contents = yield* fs.readFileString(input.nativePath).pipe(Effect.orElseSucceed(() => ""));
+  const contents = Buffer.from(read.bytes).toString("utf8");
   if (contents.length === 0) {
     return Option.none();
   }
@@ -36,8 +35,8 @@ export const readNativeSessionFile = Effect.fn("readNativeSessionFile")(function
     ...session,
     nativeRevision: {
       algorithm: "sha256" as const,
-      digest: NodeCrypto.createHash("sha256").update(contents).digest("hex"),
-      byteLength: Buffer.byteLength(contents, "utf8"),
+      digest: NodeCrypto.createHash("sha256").update(read.bytes).digest("hex"),
+      byteLength: read.bytes.byteLength,
     },
   }));
 });
