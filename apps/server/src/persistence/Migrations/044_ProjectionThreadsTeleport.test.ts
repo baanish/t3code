@@ -9,9 +9,10 @@ import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
-const decodeTeleportThreadState = Schema.decodeUnknownSync(TeleportThreadState);
+const decodeTeleportJson = Schema.decodeUnknownSync(Schema.fromJsonString(TeleportThreadState));
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-const TELEPORT_PAYLOAD = JSON.stringify({
+const TELEPORT_PAYLOAD = encodeUnknownJson({
   teleport: {
     presence: "t3",
     lastSyncDirection: "import",
@@ -101,16 +102,14 @@ layer("044_ProjectionThreadsTeleport", (it) => {
 
       const byThread = Object.fromEntries(rows.map((row) => [row.threadId, row.teleportJson]));
 
-      const codexTeleport = decodeTeleportThreadState(
-        JSON.parse(byThread["thread-codex"] ?? "null"),
-      );
+      assert.ok(byThread["thread-codex"]);
+      const codexTeleport = decodeTeleportJson(byThread["thread-codex"]);
       assert.equal(codexTeleport.provider, "codex");
       assert.equal(codexTeleport.presence, "t3");
       assert.equal(codexTeleport.externalSessionId, "session-1");
 
-      const claudeTeleport = decodeTeleportThreadState(
-        JSON.parse(byThread["thread-claude"] ?? "null"),
-      );
+      assert.ok(byThread["thread-claude"]);
+      const claudeTeleport = decodeTeleportJson(byThread["thread-claude"]);
       assert.equal(claudeTeleport.provider, "claudeAgent");
       assert.equal(claudeTeleport.presence, "t3");
 
