@@ -57,30 +57,29 @@ function windowsRenameFileSystem(
     readonly failRestoreFromBak?: boolean;
   },
 ): FileSystem.FileSystem {
-  return {
-    ...inner,
-    rename: (from: string, to: string) =>
-      inner.exists(to).pipe(
-        Effect.flatMap((exists) => {
-          if (exists) {
-            return Effect.fail(alreadyExists(to));
-          }
-          if (options?.failRestoreFromBak === true && from.endsWith(".teleport-bak")) {
-            return Effect.fail(replaceFailed(to));
-          }
-          // Replacement is temp → dest. Restore is bak → dest and must stay
-          // distinct so a failed replace can still put the original back.
-          if (
-            options?.failReplacementTo !== undefined &&
-            to === options.failReplacementTo &&
-            !from.endsWith(".teleport-bak")
-          ) {
-            return Effect.fail(replaceFailed(to));
-          }
-          return inner.rename(from, to);
-        }),
-      ),
-  };
+  const exists = inner.exists.bind(inner);
+  const rename = inner.rename.bind(inner);
+  const wrapped = Object.create(inner) as FileSystem.FileSystem;
+  wrapped.rename = (from: string, to: string) =>
+    exists(to).pipe(
+      Effect.flatMap((alreadyThere) => {
+        if (alreadyThere) {
+          return Effect.fail(alreadyExists(to));
+        }
+        if (options?.failRestoreFromBak === true && from.endsWith(".teleport-bak")) {
+          return Effect.fail(replaceFailed(to));
+        }
+        if (
+          options?.failReplacementTo !== undefined &&
+          to === options.failReplacementTo &&
+          !from.endsWith(".teleport-bak")
+        ) {
+          return Effect.fail(replaceFailed(to));
+        }
+        return rename(from, to);
+      }),
+    );
+  return wrapped;
 }
 
 describe("teleport native writes", () => {

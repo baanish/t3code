@@ -654,6 +654,19 @@ describe("TeleportService in-place import revert", () => {
           ],
           createdAt: NOW,
         });
+        yield* engine.dispatch({
+          type: "thread.teleport.set",
+          commandId: CommandId.make("cmd-import-delete-dir-teleport"),
+          threadId,
+          teleport: {
+            presence: "t3",
+            provider: "codex",
+            externalSessionId: TELEPORT_TEST_SESSION_ID,
+            nativePath,
+            lastSyncedAt: NOW,
+          },
+          createdAt: NOW,
+        });
 
         const failed = yield* service
           .importSessions({
@@ -675,7 +688,8 @@ describe("TeleportService in-place import revert", () => {
         if (Option.isNone(thread)) {
           return;
         }
-        assert.equal(thread.value.teleport ?? null, null);
+        assert.equal(thread.value.teleport?.presence, "t3");
+        assert.equal(thread.value.teleport?.nativePath, nativePath);
         const binding = yield* directory.getBinding(threadId);
         assert.equal(Option.isNone(binding), true);
       }).pipe(Effect.provide(teleportServiceLayer({ workspaceRoot, codexHome, directory })));
