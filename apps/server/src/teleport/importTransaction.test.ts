@@ -17,6 +17,7 @@ import {
   recoverInterruptedImportTeleports,
   restoreDirectoryBindingAfterFailedImport,
   restorePresenceForImport,
+  revertDirectoryAfterFailedInPlaceImport,
   restoredTeleportStateAfterInterruptedImport,
   revertTeleportAfterFailedInPlaceImport,
   runInPlaceTeleportImport,
@@ -156,6 +157,32 @@ describe("teleport import transaction", () => {
     });
     assert.equal(kept.status, "error");
     assert.equal(readTeleportRuntimePayload(kept.runtimePayload)?.nativePath, "/tmp/session.jsonl");
+  });
+
+  it("deletes a first-time directory binding and restores a prior one", () => {
+    assert.deepEqual(revertDirectoryAfterFailedInPlaceImport(undefined), { action: "delete" });
+    const prior = {
+      threadId: ThreadId.make("thread-1"),
+      provider: "codex" as const,
+      status: "running" as const,
+      runtimePayload: {
+        teleport: {
+          schemaVersion: 1,
+          externalSessionId: "session-1",
+          nativePath: pendingTeleportNativePath("codex", "session-1"),
+          lastSyncDirection: "export",
+          lastSyncedAt: "2026-08-14T22:00:00.000Z",
+          nativeFormatVersion: 1,
+          presence: "native" as const,
+        },
+      },
+    };
+    const restored = revertDirectoryAfterFailedInPlaceImport(prior);
+    assert.equal(restored.action, "restore");
+    if (restored.action === "restore") {
+      assert.equal(restored.binding.status, "stopped");
+      assert.equal(readTeleportRuntimePayload(restored.binding.runtimePayload), undefined);
+    }
   });
 
   it("preserves native revision and fork provenance when changing presence", () => {

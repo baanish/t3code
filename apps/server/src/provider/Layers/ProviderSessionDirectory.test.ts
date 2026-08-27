@@ -75,6 +75,10 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       const threadIds = yield* directory.listThreadIds();
       assert.deepEqual(threadIds, [nextThreadId]);
+
+      yield* directory.deleteByThreadId(nextThreadId);
+      const deleted = yield* directory.getBinding(nextThreadId);
+      assert.equal(Option.isNone(deleted), true);
     }));
 
   it("persists runtime fields and merges payload updates", () =>

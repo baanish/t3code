@@ -192,6 +192,29 @@ export function restoredTeleportStateAfterInterruptedImport(
   return { action: "clear" };
 }
 
+export type RevertDirectoryAfterFailedInPlaceImport<T> =
+  | { readonly action: "delete" }
+  | { readonly action: "restore"; readonly binding: T };
+
+/**
+ * First-time in-place import can upsert a directory row that did not exist.
+ * Revert must delete that row. A prior binding restores identity fields only.
+ */
+export function revertDirectoryAfterFailedInPlaceImport<
+  T extends {
+    readonly status?: RestorableDirectoryStatus;
+    readonly runtimePayload?: unknown | null;
+  },
+>(previousBinding: T | undefined): RevertDirectoryAfterFailedInPlaceImport<T> {
+  if (previousBinding === undefined) {
+    return { action: "delete" };
+  }
+  return {
+    action: "restore",
+    binding: restoreDirectoryBindingAfterFailedImport(previousBinding),
+  };
+}
+
 /**
  * Live revert after an in-place import fails or is interrupted.
  *

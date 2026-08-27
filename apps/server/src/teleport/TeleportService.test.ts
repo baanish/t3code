@@ -89,6 +89,10 @@ function memoryDirectory(options?: {
           lastSeenAt: "2026-08-14T22:00:00.000Z",
         })),
       ),
+    deleteByThreadId: (threadId) =>
+      Effect.sync(() => {
+        bindings.delete(threadId);
+      }),
   } satisfies ProviderSessionDirectory["Service"];
 }
 
@@ -575,6 +579,109 @@ describe("TeleportService.requireNativeRevisionForTurn", () => {
 });
 
 describe("TeleportService in-place import revert", () => {
+  it.effect("deletes a first-time directory row when in-place import reverts", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-import-delete-dir-" });
+      const workspaceRoot = path.join(root, "workspace");
+      const codexHome = path.join(root, "codex");
+      const nativePath = allocateCodexSessionPath({
+        sessionsRoot: path.join(codexHome, "sessions"),
+        sessionId: TELEPORT_TEST_SESSION_ID,
+        createdAt: NOW,
+        join: path.join,
+      });
+      yield* fs.makeDirectory(workspaceRoot, { recursive: true });
+      yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+      yield* fs.writeFileString(
+        nativePath,
+        serializeCodexSession(sampleTeleportSession("codex", workspaceRoot)),
+      );
+      const threadId = ThreadId.make("thread-no-prior-binding");
+      const directory = memoryDirectory({
+        failUpsert: (binding) =>
+          readTeleportRuntimePayload(binding.runtimePayload)?.presence === "importing",
+      });
+
+      yield* Effect.gen(function* () {
+        const service = yield* TeleportService;
+        const engine = yield* OrchestrationEngineService;
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-import-delete-dir-project"),
+          projectId: PROJECT_ID,
+          title: "Teleport Import Delete Dir",
+          workspaceRoot,
+          defaultModelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          createdAt: NOW,
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd-import-delete-dir-thread"),
+          threadId,
+          projectId: PROJECT_ID,
+          title: "No prior binding",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: NOW,
+        });
+        yield* engine.dispatch({
+          type: "thread.history.replace",
+          commandId: CommandId.make("cmd-import-delete-dir-history"),
+          threadId,
+          messages: [
+            {
+              id: MessageId.make("original-t3"),
+              role: "user",
+              text: "original t3 history",
+              turnId: null,
+              streaming: false,
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+          createdAt: NOW,
+        });
+
+        const failed = yield* service
+          .importSessions({
+            projectId: PROJECT_ID,
+            cwd: workspaceRoot,
+            sessions: [
+              {
+                provider: "codex",
+                externalSessionId: TELEPORT_TEST_SESSION_ID,
+                nativePath,
+              },
+            ],
+          })
+          .pipe(Effect.result);
+        assert.equal(failed._tag, "Failure");
+
+        const thread = yield* snapshotQuery.getThreadDetailById(threadId);
+        assert.equal(Option.isSome(thread), true);
+        if (Option.isNone(thread)) {
+          return;
+        }
+        assert.equal(thread.value.teleport ?? null, null);
+        const binding = yield* directory.getBinding(threadId);
+        assert.equal(Option.isNone(binding), true);
+      }).pipe(Effect.provide(teleportServiceLayer({ workspaceRoot, codexHome, directory })));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("clears teleport when a first-time directory import fails after the fence", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

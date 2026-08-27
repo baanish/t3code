@@ -102,8 +102,8 @@ import {
   inPlaceImportPathIsCompatible,
   nativeTranscriptWouldWipeExistingHistory,
   recoverInterruptedImportTeleports,
-  restoreDirectoryBindingAfterFailedImport,
   restorePresenceForImport,
+  revertDirectoryAfterFailedInPlaceImport,
   revertTeleportAfterFailedInPlaceImport,
   runInPlaceTeleportImport,
   runNewThreadTeleportImport,
@@ -842,15 +842,25 @@ export const make = Effect.gen(function* () {
               })();
               const revertImporting = Effect.uninterruptible(
                 revertPresence.pipe(
-                  Effect.flatMap(() =>
-                    Option.match(previousBinding, {
-                      onNone: () => Effect.void,
-                      onSome: (binding) =>
-                        directory
-                          .upsert(restoreDirectoryBindingAfterFailedImport(binding))
-                          .pipe(Effect.catch(() => Effect.void)),
-                    }),
-                  ),
+                  Effect.flatMap(() => {
+                    const revertedDirectory = revertDirectoryAfterFailedInPlaceImport(
+                      Option.getOrUndefined(previousBinding),
+                    );
+                    switch (revertedDirectory.action) {
+                      case "delete":
+                        return directory
+                          .deleteByThreadId(threadId)
+                          .pipe(Effect.catch(() => Effect.void));
+                      case "restore":
+                        return directory
+                          .upsert(revertedDirectory.binding)
+                          .pipe(Effect.catch(() => Effect.void));
+                      default: {
+                        const _exhaustive: never = revertedDirectory;
+                        return _exhaustive;
+                      }
+                    }
+                  }),
                 ),
               );
               yield* runInPlaceTeleportImport<ImportMutationError>({
