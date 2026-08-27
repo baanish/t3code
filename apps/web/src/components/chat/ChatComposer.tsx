@@ -2658,7 +2658,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   const addComposerImages = async (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
-    if (isSendDisabled) {
+    if (!canMutateTeleportDraft()) {
       toastManager.add({
         type: "error",
         title: "Unable to add to chat",
@@ -2716,7 +2716,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           file,
           PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
         );
-        if (sendDisabledReasonRef.current !== null) {
+        if (!canMutateTeleportDraft()) {
           break;
         }
         if (!compressed.ok) {
@@ -2739,9 +2739,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
       }
       const currentSendDisabledReason = sendDisabledReasonRef.current;
-      // Teleport/send-disabled can flip while compression is in flight. Do
-      // not commit attachments into a draft the user can no longer edit.
-      if (currentSendDisabledReason !== null) {
+      // Teleport lock can flip while compression is in flight. Do not commit
+      // attachments into a draft the user can no longer edit. Other send
+      // disables (pending/failed upload) must not drop a second paste.
+      if (isTeleportSendDisabledReason(currentSendDisabledReason)) {
         for (const image of nextImages) {
           URL.revokeObjectURL(image.previewUrl);
         }
