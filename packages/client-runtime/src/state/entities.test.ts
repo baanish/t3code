@@ -319,6 +319,47 @@ describe("environment entity projections", () => {
     expect(mergeEnvironmentThread(detail, shell)?.teleport).toEqual(nativeTeleport);
   });
 
+  it("prefers the shell teleport snapshot when lastSyncedAt ties and presence conflicts", () => {
+    const syncedAt = "2026-08-14T23:00:00.000Z";
+    const detailTeleport = {
+      presence: "t3" as const,
+      provider: "codex" as const,
+      externalSessionId: "session-1",
+      nativePath: "/tmp/native",
+      lastSyncedAt: syncedAt,
+    };
+    const shellTeleport = {
+      ...detailTeleport,
+      presence: "importing" as const,
+      restorePresence: "t3" as const,
+    };
+    const detail = {
+      ...THREAD_SHELL,
+      environmentId: ENVIRONMENT_ID,
+      deletedAt: null,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      teleport: detailTeleport,
+    } satisfies OrchestrationThread & { readonly environmentId: EnvironmentId };
+    const shell = {
+      ...THREAD_SHELL,
+      environmentId: ENVIRONMENT_ID,
+      teleport: shellTeleport,
+    };
+
+    expect(mergeEnvironmentThread(detail, shell)?.teleport).toEqual(shellTeleport);
+
+    const nativeShellTeleport = {
+      ...detailTeleport,
+      presence: "native" as const,
+    };
+    expect(
+      mergeEnvironmentThread(detail, { ...shell, teleport: nativeShellTeleport })?.teleport,
+    ).toEqual(nativeShellTeleport);
+  });
+
   it("preserves untouched project and thread identities across unrelated shell updates", () => {
     const harness = makeHarness();
     const projectRefsAtom = harness.projects.environmentProjectRefsAtom(ENVIRONMENT_ID);

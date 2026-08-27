@@ -41,7 +41,7 @@ export function preferNewerTeleport(
   if (shell == null) {
     return detail;
   }
-  return shell.lastSyncedAt > detail.lastSyncedAt ? shell : detail;
+  return shell.lastSyncedAt >= detail.lastSyncedAt ? shell : detail;
 }
 
 export function mergeEnvironmentThread(
