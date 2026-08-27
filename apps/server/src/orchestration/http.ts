@@ -99,17 +99,31 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          if (
-            normalizedCommand.type === "thread.turn.start" &&
-            turnStartRequiresNativeRevisionCheck(normalizedCommand)
-          ) {
-            yield* teleport
-              .requireNativeRevisionForTurn(normalizedCommand.threadId)
-              .pipe(
-                Effect.catch((cause) =>
-                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
-                ),
-              );
+          if (normalizedCommand.type === "thread.turn.start") {
+            const createThreadBootstrap = normalizedCommand.bootstrap?.createThread !== undefined;
+            const existingThread = createThreadBootstrap
+              ? yield* projectionSnapshotQuery
+                  .getThreadShellById(normalizedCommand.threadId)
+                  .pipe(
+                    Effect.catch((cause) =>
+                      failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                    ),
+                  )
+              : Option.none();
+            if (
+              turnStartRequiresNativeRevisionCheck(
+                normalizedCommand,
+                createThreadBootstrap ? Option.isSome(existingThread) : undefined,
+              )
+            ) {
+              yield* teleport
+                .requireNativeRevisionForTurn(normalizedCommand.threadId)
+                .pipe(
+                  Effect.catch((cause) =>
+                    failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                  ),
+                );
+            }
           }
           return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
             Effect.tapError(() =>

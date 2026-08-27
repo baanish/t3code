@@ -8471,6 +8471,165 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   );
 
   it.effect(
+    "rejects HTTP thread.turn.start with bootstrap.createThread when the existing thread's native revision has diverged",
+    () =>
+      Effect.gen(function* () {
+        const dispatchedCommands: Array<OrchestrationCommand> = [];
+        const threadId = ThreadId.make("thread-http-create-bootstrap-existing");
+        let revisionChecks = 0;
+
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: {
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  dispatchedCommands.push(command);
+                  return { sequence: dispatchedCommands.length };
+                }),
+              readEvents: () => Stream.empty,
+            },
+            projectionSnapshotQuery: {
+              getThreadShellById: (id) =>
+                Effect.succeed(
+                  id === threadId
+                    ? Option.some(makeDefaultOrchestrationThreadShell({ id: threadId }))
+                    : Option.none(),
+                ),
+            },
+            teleportService: {
+              requireNativeRevisionForTurn: () => {
+                revisionChecks += 1;
+                return Effect.fail(
+                  new TeleportNativeDivergenceError({
+                    threadId,
+                    kind: "diverged",
+                    nativePath: "/tmp/session.jsonl",
+                    persistedDigest: "abc",
+                    observedDigest: "def",
+                  }),
+                );
+              },
+            },
+          },
+        });
+
+        const createdAt = "2026-01-01T00:00:00.000Z";
+        const cookie = yield* getAuthenticatedSessionCookieHeader();
+        const response = yield* HttpClient.post("/api/orchestration/dispatch", {
+          headers: {
+            cookie,
+          },
+          body: yield* HttpBody.json({
+            type: "thread.turn.start",
+            commandId: "cmd-http-create-bootstrap-existing",
+            threadId,
+            message: {
+              messageId: "msg-http-create-bootstrap-existing",
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Thread",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+            },
+            createdAt,
+          }),
+        });
+
+        assert.equal(response.status, 500);
+        assert.equal(revisionChecks, 1);
+        assert.deepEqual(dispatchedCommands, []);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "does not require a native revision for HTTP bootstrap.createThread on a missing thread",
+    () =>
+      Effect.gen(function* () {
+        const dispatchedCommands: Array<OrchestrationCommand> = [];
+        const missingThreadId = ThreadId.make("thread-http-create-bootstrap-missing");
+        let revisionChecks = 0;
+
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: {
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  dispatchedCommands.push(command);
+                  return { sequence: dispatchedCommands.length };
+                }),
+              readEvents: () => Stream.empty,
+            },
+            teleportService: {
+              requireNativeRevisionForTurn: () => {
+                revisionChecks += 1;
+                return Effect.fail(
+                  new TeleportInvalidInputError({
+                    reason: `Thread '${missingThreadId}' was not found.`,
+                  }),
+                );
+              },
+            },
+          },
+        });
+
+        const createdAt = "2026-01-01T00:00:00.000Z";
+        const cookie = yield* getAuthenticatedSessionCookieHeader();
+        const response = yield* HttpClient.post("/api/orchestration/dispatch", {
+          headers: {
+            cookie,
+          },
+          body: yield* HttpBody.json({
+            type: "thread.turn.start",
+            commandId: "cmd-http-create-bootstrap-missing",
+            threadId: missingThreadId,
+            message: {
+              messageId: "msg-http-create-bootstrap-missing",
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Thread",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+            },
+            createdAt,
+          }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.equal(revisionChecks, 0);
+        assert.deepEqual(
+          dispatchedCommands.map((command) => command.type),
+          ["thread.turn.start"],
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
     "still dispatches HTTP thread.turn.start so the decider can reject native presence",
     () =>
       Effect.gen(function* () {

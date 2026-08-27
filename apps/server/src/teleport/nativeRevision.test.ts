@@ -93,7 +93,7 @@ describe("native revision classification", () => {
     );
   });
 
-  it("skips the turn-start revision check only when bootstrap creates the thread", () => {
+  it("skips the turn-start revision check only when bootstrap creates a missing thread", () => {
     assert.equal(
       turnStartRequiresNativeRevisionCheck({
         type: "thread.turn.start",
@@ -117,6 +117,30 @@ describe("native revision classification", () => {
         },
       }),
       false,
+    );
+    assert.equal(
+      turnStartRequiresNativeRevisionCheck(
+        {
+          type: "thread.turn.start",
+          bootstrap: {
+            createThread: {},
+          },
+        },
+        false,
+      ),
+      false,
+    );
+    assert.equal(
+      turnStartRequiresNativeRevisionCheck(
+        {
+          type: "thread.turn.start",
+          bootstrap: {
+            createThread: {},
+          },
+        },
+        true,
+      ),
+      true,
     );
     assert.equal(
       turnStartRequiresNativeRevisionCheck({

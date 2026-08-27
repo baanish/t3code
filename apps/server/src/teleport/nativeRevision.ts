@@ -63,16 +63,30 @@ export function shouldWatchNativeRevision(
   );
 }
 
-export function turnStartRequiresNativeRevisionCheck(command: {
-  readonly type: string;
-  readonly bootstrap?:
-    | {
-        readonly createThread?: unknown;
-        readonly prepareWorktree?: unknown;
-      }
-    | undefined;
-}): boolean {
-  return command.type === "thread.turn.start" && command.bootstrap?.createThread === undefined;
+export function turnStartRequiresNativeRevisionCheck(
+  command: {
+    readonly type: string;
+    readonly bootstrap?:
+      | {
+          readonly createThread?: unknown;
+          readonly prepareWorktree?: unknown;
+        }
+      | undefined;
+  },
+  threadExists?: boolean,
+): boolean {
+  if (command.type !== "thread.turn.start") {
+    return false;
+  }
+  // Skip only when bootstrap.createThread is minting a thread that is not
+  // present yet. HTTP dispatches turn.start as-is and the decider ignores
+  // bootstrap, so an existing-thread createThread payload must still be gated.
+  // WS omits `threadExists` and keeps the payload-only skip because it runs
+  // thread.create first (existing ids fail closed before the turn starts).
+  if (command.bootstrap?.createThread !== undefined && threadExists !== true) {
+    return false;
+  }
+  return true;
 }
 
 export function findCoveringNativeFork<T extends { readonly id: ThreadId }>(input: {
