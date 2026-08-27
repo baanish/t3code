@@ -1,15 +1,17 @@
 import {
+  ClaudeSettings,
+  CodexSettings,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
   ProviderInstanceId,
-  type ClaudeSettings,
-  type CodexSettings,
   type ServerSettings,
   type TeleportProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
@@ -172,17 +174,12 @@ export function claudeSearchRoots(homes: TeleportHomes): ReadonlyArray<TeleportI
   ]);
 }
 
-function instanceConfigString(config: unknown, key: string): string | undefined {
-  if (config === null || typeof config !== "object" || Array.isArray(config)) {
-    return undefined;
-  }
-  const value = (config as Record<string, unknown>)[key];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  // Keep explicit empty strings so extra instances can opt into the provider
-  // default home instead of inheriting the default instance's configured path.
-  return value.trim();
+function decodeCodexInstanceSettings(config: unknown): CodexSettings | undefined {
+  return Option.getOrUndefined(Schema.decodeUnknownOption(CodexSettings)(config ?? {}));
+}
+
+function decodeClaudeInstanceSettings(config: unknown): ClaudeSettings | undefined {
+  return Option.getOrUndefined(Schema.decodeUnknownOption(ClaudeSettings)(config ?? {}));
 }
 
 function instanceIdsForDriver(
@@ -209,14 +206,7 @@ function codexSettingsForInstance(
   if (envelope === undefined || envelope.driver !== CODEX_DRIVER) {
     return settings.providers.codex;
   }
-  return {
-    ...settings.providers.codex,
-    homePath:
-      instanceConfigString(envelope.config, "homePath") ?? settings.providers.codex.homePath,
-    shadowHomePath:
-      instanceConfigString(envelope.config, "shadowHomePath") ??
-      settings.providers.codex.shadowHomePath,
-  };
+  return decodeCodexInstanceSettings(envelope.config) ?? settings.providers.codex;
 }
 
 function claudeSettingsForInstance(
@@ -227,10 +217,7 @@ function claudeSettingsForInstance(
   if (envelope === undefined || envelope.driver !== CLAUDE_DRIVER) {
     return settings.providers.claudeAgent;
   }
-  return {
-    homePath:
-      instanceConfigString(envelope.config, "homePath") ?? settings.providers.claudeAgent.homePath,
-  };
+  return decodeClaudeInstanceSettings(envelope.config) ?? settings.providers.claudeAgent;
 }
 
 export const resolveTeleportHomes = Effect.fn("resolveTeleportHomes")(function* (

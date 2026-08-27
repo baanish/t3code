@@ -161,6 +161,31 @@ describe("resolveTeleportHomes", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("does not inherit legacy homePath from an explicit default-instance envelope", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-homes-envelope-" });
+      const legacyHome = path.join(root, "codex-legacy");
+      const homes = yield* resolveTeleportHomes(
+        decodeServerSettings({
+          providers: {
+            codex: { homePath: legacyHome },
+          },
+          providerInstances: {
+            [ProviderInstanceId.make("codex")]: {
+              driver: "codex",
+              config: {},
+            },
+          },
+        }),
+      );
+
+      assert.equal(homes.codexSessionsRoot, path.join(NodeOS.homedir(), ".codex", "sessions"));
+      assert.notEqual(homes.codexSessionsRoot, path.join(legacyHome, "sessions"));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("uses the provider default home when an extra instance sets an empty homePath", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
