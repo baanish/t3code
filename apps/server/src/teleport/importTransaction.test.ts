@@ -696,6 +696,58 @@ describe("teleport import transaction", () => {
     }),
   );
 
+  it.effect("retries a failed import recovery once", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const restored = yield* Ref.make<string | null>(null);
+      yield* recoverInterruptedImportTeleports({
+        threads: [
+          {
+            id: ThreadId.make("thread-retry"),
+            teleport: importingTeleportState({
+              base: BASE_TELEPORT,
+              restorePresence: "native",
+            }),
+          },
+        ],
+        nextCommandId: Effect.succeed(CommandId.make("cmd-recover-retry")),
+        setTeleport: (threadId, teleport) =>
+          Ref.updateAndGet(attempts, (count) => count + 1).pipe(
+            Effect.flatMap((count) =>
+              count === 1
+                ? Effect.fail("transient recovery failure" as const)
+                : Ref.set(restored, `${threadId}:${teleport.presence}`),
+            ),
+          ),
+        clearTeleport: (threadId) => Ref.set(restored, `${threadId}:cleared`),
+        deleteThread: (threadId) => Ref.set(restored, `${threadId}:deleted`),
+      });
+      assert.equal(yield* Ref.get(attempts), 2);
+      assert.equal(yield* Ref.get(restored), "thread-retry:native");
+    }),
+  );
+
+  it.effect("re-fails interrupted import recovery", () =>
+    Effect.gen(function* () {
+      const exit = yield* recoverInterruptedImportTeleports({
+        threads: [
+          {
+            id: ThreadId.make("thread-interrupt"),
+            teleport: importingTeleportState({
+              base: BASE_TELEPORT,
+              restorePresence: "native",
+            }),
+          },
+        ],
+        nextCommandId: Effect.succeed(CommandId.make("cmd-recover-interrupt")),
+        setTeleport: () => Effect.interrupt,
+        clearTeleport: () => Effect.void,
+        deleteThread: () => Effect.void,
+      }).pipe(Effect.exit);
+      assert.equal(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause), true);
+    }),
+  );
+
   it("finalizes a directory that lagged behind a committed T3 import", () => {
     assert.equal(
       directoryNeedsFinalizeAfterCommittedImport({

@@ -105,6 +105,7 @@ import {
   importHistoryIsEmptyOrFenceOnly,
   recoverInterruptedImportTeleports,
   recoverLaggingDirectoryImportFinalize,
+  retryStartupRecovery,
   restorePresenceForImport,
   revertDirectoryAfterFailedInPlaceImport,
   revertTeleportAfterFailedInPlaceImport,
@@ -824,9 +825,15 @@ export const make = Effect.gen(function* () {
                 });
               }
               updatedInPlace = true;
-              const previousBinding = yield* directory
-                .getBinding(threadId)
-                .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+              const previousBinding = yield* directory.getBinding(threadId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new TeleportDiscoveryError({
+                      reason: "Failed to read the existing provider binding for in-place import.",
+                      cause,
+                    }),
+                ),
+              );
               const importingTeleport = importingTeleportState({
                 base: committedTeleport,
                 restorePresence: restorePresenceForImport(latest.value.teleport),
@@ -1914,21 +1921,25 @@ export const make = Effect.gen(function* () {
             ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
           });
         }
-        return snapshotQuery.getThreadDetailById(thread.id).pipe(
-          Effect.map((detail) => ({
-            id: thread.id,
-            ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
-            historyIsEmptyOrFenceOnly: Option.match(detail, {
-              onNone: () => false,
-              onSome: (value) => importHistoryIsEmptyOrFenceOnly(value.messages),
-            }),
-          })),
-          Effect.catchCause(() =>
-            Effect.succeed({
+        return retryStartupRecovery(
+          snapshotQuery.getThreadDetailById(thread.id).pipe(
+            Effect.map((detail) => ({
               id: thread.id,
               ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
-            }),
+              historyIsEmptyOrFenceOnly: Option.match(detail, {
+                onNone: () => false,
+                onSome: (value) => importHistoryIsEmptyOrFenceOnly(value.messages),
+              }),
+            })),
           ),
+          () =>
+            Effect.logWarning("teleport.import.recovery-detail-skipped").pipe(
+              Effect.annotateLogs({ threadId: thread.id }),
+              Effect.as({
+                id: thread.id,
+                ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
+              }),
+            ),
         );
       },
       { concurrency: 1 },
@@ -1977,14 +1988,27 @@ export const make = Effect.gen(function* () {
       },
     });
 
-    const directoryBindings = yield* directory.listBindings().pipe(
-      Effect.map((bindings) => ({ ok: true as const, bindings })),
-      Effect.catchCause((cause) =>
+    const directoryBindings = yield* retryStartupRecovery(
+      directory
+        .listBindings()
+        .pipe(
+          Effect.map(
+            (
+              bindings,
+            ): {
+              readonly ok: boolean;
+              readonly bindings: typeof bindings;
+            } => ({ ok: true, bindings }),
+          ),
+        ),
+      (cause) =>
         Effect.logWarning("teleport.import.directory-finalize-recovery-skipped").pipe(
           Effect.annotateLogs({ cause: String(cause) }),
-          Effect.as({ ok: false as const, bindings: [] }),
+          Effect.as({
+            ok: false,
+            bindings: [] as const,
+          }),
         ),
-      ),
     );
     const bindingByThreadId = new Map(
       directoryBindings.bindings.map((binding) => [binding.threadId, binding] as const),
@@ -2059,87 +2083,93 @@ export const make = Effect.gen(function* () {
     const settings = yield* settingsService.getSettings;
     const homes = yield* resolveTeleportHomes(settings);
     for (const thread of pendingExports) {
-      yield* Effect.gen(function* () {
-        const pending = thread.teleport;
-        if (pending == null) {
-          return;
-        }
-        const cwdSource = resolveThreadWorkspaceCwd({
-          thread,
-          projects: activeShell.projects,
-        });
-        const discovered =
-          cwdSource === undefined
-            ? undefined
-            : yield* resolveTeleportCwdPath(cwdSource).pipe(
-                Effect.flatMap((cwd) =>
-                  loadTeleportSession({
-                    homes,
-                    provider: pending.provider,
-                    externalSessionId: pending.externalSessionId,
-                    cwd,
-                    ...(pending.providerInstanceId === undefined
-                      ? {}
-                      : { providerInstanceId: pending.providerInstanceId }),
-                  }),
-                ),
-                Effect.map((session): ParsedNativeSession | undefined => session),
-                Effect.catchCause(() => Effect.succeed(undefined)),
-              );
-        const recoveredTeleport = recoveredInterruptedExportState(pending, discovered?.nativePath);
-        if (recoveredTeleport === null) {
-          return;
-        }
-        yield* dispatchTeleportSet({
-          threadId: thread.id,
-          teleport: recoveredTeleport,
-          createdAt: now,
-          reason: "Failed to recover an interrupted teleport export.",
-        });
+      yield* retryStartupRecovery(
+        Effect.gen(function* () {
+          const pending = thread.teleport;
+          if (pending == null) {
+            return;
+          }
+          const cwdSource = resolveThreadWorkspaceCwd({
+            thread,
+            projects: activeShell.projects,
+          });
+          const discovered =
+            cwdSource === undefined
+              ? undefined
+              : yield* resolveTeleportCwdPath(cwdSource).pipe(
+                  Effect.flatMap((cwd) =>
+                    loadTeleportSession({
+                      homes,
+                      provider: pending.provider,
+                      externalSessionId: pending.externalSessionId,
+                      cwd,
+                      ...(pending.providerInstanceId === undefined
+                        ? {}
+                        : { providerInstanceId: pending.providerInstanceId }),
+                    }),
+                  ),
+                  Effect.map((session): ParsedNativeSession | undefined => session),
+                  Effect.catchCause(() => Effect.succeed(undefined)),
+                );
+          const recoveredTeleport = recoveredInterruptedExportState(
+            pending,
+            discovered?.nativePath,
+          );
+          if (recoveredTeleport === null) {
+            return;
+          }
+          yield* dispatchTeleportSet({
+            threadId: thread.id,
+            teleport: recoveredTeleport,
+            createdAt: now,
+            reason: "Failed to recover an interrupted teleport export.",
+          });
 
-        if (discovered === undefined) {
-          return;
-        }
+          if (discovered === undefined) {
+            return;
+          }
 
-        const adapter = formats.get(pending.provider);
-        if (!adapter) {
-          return;
-        }
-        const driver = ProviderDriverKind.make(pending.provider);
-        const providerInstanceId = pending.providerInstanceId ?? defaultInstanceIdForDriver(driver);
-        const runtimePayload: TeleportRuntimePayload = {
-          schemaVersion: TELEPORT_SCHEMA_VERSION,
-          externalSessionId: pending.externalSessionId,
-          nativePath: recoveredTeleport.nativePath,
-          lastSyncDirection: "export",
-          lastSyncedAt: pending.lastSyncedAt,
-          nativeFormatVersion: discovered?.nativeFormatVersion ?? TELEPORT_NATIVE_FORMAT_VERSION,
-          presence: recoveredTeleport.presence,
-        };
-        yield* directory.upsert({
-          threadId: thread.id,
-          provider: driver,
-          providerInstanceId,
-          status: "stopped",
-          resumeCursor: buildTeleportResumeCursor({
-            provider: pending.provider,
+          const adapter = formats.get(pending.provider);
+          if (!adapter) {
+            return;
+          }
+          const driver = ProviderDriverKind.make(pending.provider);
+          const providerInstanceId =
+            pending.providerInstanceId ?? defaultInstanceIdForDriver(driver);
+          const runtimePayload: TeleportRuntimePayload = {
+            schemaVersion: TELEPORT_SCHEMA_VERSION,
             externalSessionId: pending.externalSessionId,
-            adapter,
-          }),
-          runtimePayload: { teleport: runtimePayload },
-        });
-      }).pipe(
-        Effect.catchCause((cause) =>
+            nativePath: recoveredTeleport.nativePath,
+            lastSyncDirection: "export",
+            lastSyncedAt: pending.lastSyncedAt,
+            nativeFormatVersion: discovered?.nativeFormatVersion ?? TELEPORT_NATIVE_FORMAT_VERSION,
+            presence: recoveredTeleport.presence,
+          };
+          yield* directory.upsert({
+            threadId: thread.id,
+            provider: driver,
+            providerInstanceId,
+            status: "stopped",
+            resumeCursor: buildTeleportResumeCursor({
+              provider: pending.provider,
+              externalSessionId: pending.externalSessionId,
+              adapter,
+            }),
+            runtimePayload: { teleport: runtimePayload },
+          });
+        }),
+        (cause) =>
           Effect.logWarning("teleport.export.recovery-skipped", {
             threadId: thread.id,
             cause: String(cause),
           }),
-        ),
       );
     }
-  }).pipe(Effect.catchCause(() => Effect.logWarning("teleport.recovery-failed")));
+  });
 
-  yield* recoverInterruptedTeleports;
+  yield* retryStartupRecovery(recoverInterruptedTeleports, (cause) =>
+    Effect.logWarning("teleport.recovery-failed", { cause: String(cause) }),
+  );
 
   return TeleportService.of({
     listSessions,

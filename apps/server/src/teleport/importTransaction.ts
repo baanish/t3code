@@ -5,6 +5,7 @@ import {
   type TeleportRestorePresence,
   type TeleportThreadState,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 
 import { teleportCwdsMatch } from "./cwd.ts";
@@ -12,6 +13,21 @@ import { isPendingTeleportNativePath } from "./exportPresence.ts";
 import { isRecord } from "./json.ts";
 
 export { TELEPORT_IMPORT_BATCH_SEMANTICS };
+
+/**
+ * Startup reconciliation: retry once, isolate a persistent failure, and
+ * re-fail interrupts so layer construction does not report success mid-shutdown.
+ */
+export const retryStartupRecovery = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  onFailure: (cause: Cause.Cause<E>) => Effect.Effect<A, never, R>,
+) =>
+  effect.pipe(
+    Effect.retry({ times: 1 }),
+    Effect.catchCause((cause) =>
+      Cause.hasInterrupts(cause) ? Effect.failCause(cause) : onFailure(cause),
+    ),
+  );
 
 export function nativeTranscriptWouldWipeExistingHistory(input: {
   readonly nativeMessageCount: number;
@@ -366,7 +382,7 @@ export const recoverInterruptedImportTeleports = <E, R = never>(input: {
     threadId: ThreadId,
     restored: Exclude<InterruptedImportTeleportRestore, { action: "none" }>,
   ) => Effect.Effect<void, never, R>;
-}): Effect.Effect<void, never, R> =>
+}) =>
   Effect.gen(function* () {
     for (const thread of input.threads) {
       const restored =
@@ -393,13 +409,14 @@ export const recoverInterruptedImportTeleports = <E, R = never>(input: {
           }
         }
       })();
-      yield* recover.pipe(
-        Effect.flatMap(() => input.afterRecover?.(thread.id, restored) ?? Effect.void),
-        Effect.catchCause(() =>
+      yield* retryStartupRecovery(
+        recover.pipe(
+          Effect.flatMap(() => input.afterRecover?.(thread.id, restored) ?? Effect.void),
+        ),
+        () =>
           Effect.logWarning("teleport.import.recovery-skipped").pipe(
             Effect.annotateLogs({ threadId: thread.id }),
           ),
-        ),
       );
     }
   });
@@ -440,7 +457,7 @@ export const recoverLaggingDirectoryImportFinalize = <E, R = never>(input: {
     readonly directoryNativePath?: string;
   }>;
   readonly finalizeDirectory: (threadId: ThreadId) => Effect.Effect<void, E, R>;
-}): Effect.Effect<void, never, R> =>
+}) =>
   Effect.gen(function* () {
     for (const thread of input.threads) {
       if (
@@ -454,14 +471,10 @@ export const recoverLaggingDirectoryImportFinalize = <E, R = never>(input: {
       ) {
         continue;
       }
-      yield* input
-        .finalizeDirectory(thread.id)
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("teleport.import.directory-finalize-recovery-skipped").pipe(
-              Effect.annotateLogs({ threadId: thread.id, cause: String(cause) }),
-            ),
-          ),
-        );
+      yield* retryStartupRecovery(input.finalizeDirectory(thread.id), (cause) =>
+        Effect.logWarning("teleport.import.directory-finalize-recovery-skipped").pipe(
+          Effect.annotateLogs({ threadId: thread.id, cause: String(cause) }),
+        ),
+      );
     }
   });
