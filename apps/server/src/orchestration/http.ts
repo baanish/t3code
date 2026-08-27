@@ -99,38 +99,43 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          if (normalizedCommand.type === "thread.turn.start") {
-            const createThreadBootstrap = normalizedCommand.bootstrap?.createThread !== undefined;
-            const existingThread = createThreadBootstrap
-              ? yield* projectionSnapshotQuery
-                  .getThreadShellById(normalizedCommand.threadId)
+          return yield* Effect.gen(function* () {
+            if (normalizedCommand.type === "thread.turn.start") {
+              const createThreadBootstrap = normalizedCommand.bootstrap?.createThread !== undefined;
+              const existingThread = createThreadBootstrap
+                ? yield* projectionSnapshotQuery
+                    .getThreadShellById(normalizedCommand.threadId)
+                    .pipe(
+                      Effect.catch((cause) =>
+                        failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                      ),
+                    )
+                : Option.none();
+              if (
+                turnStartRequiresNativeRevisionCheck(
+                  normalizedCommand,
+                  createThreadBootstrap ? Option.isSome(existingThread) : undefined,
+                )
+              ) {
+                yield* teleport
+                  .requireNativeRevisionForTurn(normalizedCommand.threadId)
                   .pipe(
                     Effect.catch((cause) =>
                       failEnvironmentInternal("orchestration_dispatch_failed", cause),
                     ),
-                  )
-              : Option.none();
-            if (
-              turnStartRequiresNativeRevisionCheck(
-                normalizedCommand,
-                createThreadBootstrap ? Option.isSome(existingThread) : undefined,
-              )
-            ) {
-              yield* teleport
-                .requireNativeRevisionForTurn(normalizedCommand.threadId)
-                .pipe(
-                  Effect.catch((cause) =>
-                    failEnvironmentInternal("orchestration_dispatch_failed", cause),
-                  ),
-                );
+                  );
+              }
             }
-          }
-          return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
+            return yield* orchestrationEngine
+              .dispatch(normalizedCommand)
+              .pipe(
+                Effect.catch((cause) =>
+                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                ),
+              );
+          }).pipe(
             Effect.tapError(() =>
               cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
-            ),
-            Effect.catch((cause) =>
-              failEnvironmentInternal("orchestration_dispatch_failed", cause),
             ),
           );
         }),
