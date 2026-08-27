@@ -68,7 +68,13 @@ function windowsRenameFileSystem(
           if (options?.failRestoreFromBak === true && from.endsWith(".teleport-bak")) {
             return Effect.fail(replaceFailed(to));
           }
-          if (options?.failReplacementTo !== undefined && to === options.failReplacementTo) {
+          // Replacement is temp → dest. Restore is bak → dest and must stay
+          // distinct so a failed replace can still put the original back.
+          if (
+            options?.failReplacementTo !== undefined &&
+            to === options.failReplacementTo &&
+            !from.endsWith(".teleport-bak")
+          ) {
             return Effect.fail(replaceFailed(to));
           }
           return inner.rename(from, to);
