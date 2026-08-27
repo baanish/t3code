@@ -1988,19 +1988,27 @@ export const make = Effect.gen(function* () {
       },
     });
 
-    const directoryBindings = yield* retryStartupRecovery(
-      directory
-        .listBindings()
-        .pipe(
-          Effect.map(
-            (
-              bindings,
-            ): {
-              readonly ok: boolean;
-              readonly bindings: typeof bindings;
-            } => ({ ok: true, bindings }),
-          ),
+    const [recoveredActiveShell, recoveredArchivedShell] = yield* retryStartupRecovery(
+      Effect.all([snapshotQuery.getShellSnapshot(), snapshotQuery.getArchivedShellSnapshot()]),
+      (cause) =>
+        Effect.logWarning("teleport.import.recovery-snapshot-refresh-skipped").pipe(
+          Effect.annotateLogs({ cause: String(cause) }),
+          Effect.as([activeShell, archivedShell] as const),
         ),
+    );
+    const recoveredThreads = [...recoveredActiveShell.threads, ...recoveredArchivedShell.threads];
+
+    const directoryBindings = yield* retryStartupRecovery(
+      directory.listBindings().pipe(
+        Effect.map(
+          (
+            bindings,
+          ): {
+            readonly ok: boolean;
+            readonly bindings: typeof bindings;
+          } => ({ ok: true, bindings }),
+        ),
+      ),
       (cause) =>
         Effect.logWarning("teleport.import.directory-finalize-recovery-skipped").pipe(
           Effect.annotateLogs({ cause: String(cause) }),
@@ -2015,7 +2023,7 @@ export const make = Effect.gen(function* () {
     );
     yield* directoryBindings.ok
       ? recoverLaggingDirectoryImportFinalize({
-          threads: threads.map((thread) => {
+          threads: recoveredThreads.map((thread) => {
             const binding = bindingByThreadId.get(thread.id);
             const payload =
               binding === undefined
@@ -2031,7 +2039,7 @@ export const make = Effect.gen(function* () {
             };
           }),
           finalizeDirectory: (threadId) => {
-            const thread = threads.find((candidate) => candidate.id === threadId);
+            const thread = recoveredThreads.find((candidate) => candidate.id === threadId);
             const teleport = thread?.teleport;
             if (
               teleport == null ||
@@ -2071,7 +2079,7 @@ export const make = Effect.gen(function* () {
         })
       : Effect.void;
 
-    const pendingExports = threads.filter(
+    const pendingExports = recoveredThreads.filter(
       (thread) =>
         thread.teleport?.presence === "native" &&
         isPendingTeleportNativePath(thread.teleport.nativePath),
@@ -2091,7 +2099,7 @@ export const make = Effect.gen(function* () {
           }
           const cwdSource = resolveThreadWorkspaceCwd({
             thread,
-            projects: activeShell.projects,
+            projects: recoveredActiveShell.projects,
           });
           const discovered =
             cwdSource === undefined

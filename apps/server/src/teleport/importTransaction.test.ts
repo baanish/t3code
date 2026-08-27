@@ -834,6 +834,26 @@ describe("teleport import transaction", () => {
     }),
   );
 
+  it.effect("repairs a lagging importing directory after native presence is restored", () =>
+    Effect.gen(function* () {
+      const finalized = yield* Ref.make<string[]>([]);
+      yield* recoverLaggingDirectoryImportFinalize({
+        threads: [
+          {
+            id: ThreadId.make("thread-restored-native"),
+            teleport: {
+              ...BASE_TELEPORT,
+              presence: "native",
+            },
+            directoryPresence: "importing",
+          },
+        ],
+        finalizeDirectory: (threadId) => Ref.update(finalized, (current) => [...current, threadId]),
+      });
+      assert.deepEqual(yield* Ref.get(finalized), ["thread-restored-native"]);
+    }),
+  );
+
   it.effect("logs and continues when directory finalize recovery is skipped", () =>
     Effect.gen(function* () {
       const finalized = yield* Ref.make<string[]>([]);
