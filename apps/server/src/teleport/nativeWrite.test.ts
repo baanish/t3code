@@ -114,9 +114,7 @@ describe("teleport native writes", () => {
       assert.equal(yield* fs.readFileString(filePath), "original\n");
       const leftovers = yield* fs.readDirectory(root);
       assert.equal(
-        leftovers.some(
-          (name) => name.endsWith(".teleport-bak") || name.includes("contents.tmp"),
-        ),
+        leftovers.some((name) => name.endsWith(".teleport-bak") || name.includes("contents.tmp")),
         false,
       );
     }).pipe(Effect.scoped, Effect.provide(unixWriteLayer)),

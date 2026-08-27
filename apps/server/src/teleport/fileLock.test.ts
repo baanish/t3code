@@ -11,8 +11,6 @@ import * as Path from "effect/Path";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as ProcessRunner from "../processRunner.ts";
-import { TeleportLockProbeError } from "@t3tools/contracts";
-
 import { isNativePathLocked, requireNativePathUnlocked } from "./fileLock.ts";
 
 const lockProbeLayer = Layer.merge(

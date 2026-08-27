@@ -1935,7 +1935,9 @@ export const make = Effect.gen(function* () {
             threadId,
           })
           .pipe(
-            Effect.flatMap(() => directory.deleteByThreadId(threadId).pipe(Effect.catch(() => Effect.void))),
+            Effect.flatMap(() =>
+              directory.deleteByThreadId(threadId).pipe(Effect.catch(() => Effect.void)),
+            ),
             Effect.asVoid,
           ),
     });
@@ -1954,53 +1956,57 @@ export const make = Effect.gen(function* () {
     );
     yield* directoryBindings.ok
       ? recoverLaggingDirectoryImportFinalize({
-      threads: threads.map((thread) => {
-        const binding = bindingByThreadId.get(thread.id);
-        const payload =
-          binding === undefined ? undefined : readTeleportRuntimePayload(binding.runtimePayload);
-        return {
-          id: thread.id,
-          ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
-          ...(payload?.presence === undefined ? {} : { directoryPresence: payload.presence }),
-          ...(payload?.nativePath === undefined ? {} : { directoryNativePath: payload.nativePath }),
-        };
-      }),
-      finalizeDirectory: (threadId) => {
-        const thread = threads.find((candidate) => candidate.id === threadId);
-        const teleport = thread?.teleport;
-        if (teleport == null || teleport.presence !== "t3") {
-          return Effect.void;
-        }
-        const driver = ProviderDriverKind.make(teleport.provider);
-        const providerInstanceId =
-          teleport.providerInstanceId ?? defaultInstanceIdForDriver(driver);
-        return directory.upsert({
-          threadId,
-          provider: driver,
-          providerInstanceId,
-          status: "stopped",
-          resumeCursor: buildTeleportResumeCursor({
-            provider: teleport.provider,
-            externalSessionId: teleport.externalSessionId,
-            adapter: formats.get(teleport.provider),
-          }),
-          runtimePayload: {
-            teleport: {
-              schemaVersion: TELEPORT_SCHEMA_VERSION,
-              externalSessionId: teleport.externalSessionId,
-              nativePath: teleport.nativePath,
-              lastSyncDirection: "import",
-              lastSyncedAt: teleport.lastSyncedAt,
-              nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-              presence: "t3",
-              ...(teleport.nativeRevision === undefined
+          threads: threads.map((thread) => {
+            const binding = bindingByThreadId.get(thread.id);
+            const payload =
+              binding === undefined
+                ? undefined
+                : readTeleportRuntimePayload(binding.runtimePayload);
+            return {
+              id: thread.id,
+              ...(thread.teleport == null ? {} : { teleport: thread.teleport }),
+              ...(payload?.presence === undefined ? {} : { directoryPresence: payload.presence }),
+              ...(payload?.nativePath === undefined
                 ? {}
-                : { nativeRevision: teleport.nativeRevision }),
-            },
+                : { directoryNativePath: payload.nativePath }),
+            };
+          }),
+          finalizeDirectory: (threadId) => {
+            const thread = threads.find((candidate) => candidate.id === threadId);
+            const teleport = thread?.teleport;
+            if (teleport == null || teleport.presence !== "t3") {
+              return Effect.void;
+            }
+            const driver = ProviderDriverKind.make(teleport.provider);
+            const providerInstanceId =
+              teleport.providerInstanceId ?? defaultInstanceIdForDriver(driver);
+            return directory.upsert({
+              threadId,
+              provider: driver,
+              providerInstanceId,
+              status: "stopped",
+              resumeCursor: buildTeleportResumeCursor({
+                provider: teleport.provider,
+                externalSessionId: teleport.externalSessionId,
+                adapter: formats.get(teleport.provider),
+              }),
+              runtimePayload: {
+                teleport: {
+                  schemaVersion: TELEPORT_SCHEMA_VERSION,
+                  externalSessionId: teleport.externalSessionId,
+                  nativePath: teleport.nativePath,
+                  lastSyncDirection: "import",
+                  lastSyncedAt: teleport.lastSyncedAt,
+                  nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+                  presence: "t3",
+                  ...(teleport.nativeRevision === undefined
+                    ? {}
+                    : { nativeRevision: teleport.nativeRevision }),
+                },
+              },
+            });
           },
-        });
-      },
-    })
+        })
       : Effect.void;
 
     const pendingExports = threads.filter(

@@ -200,7 +200,7 @@ it.effect(
         getProvider: () => Effect.die("unused"),
         listThreadIds: () => Effect.die("unused"),
         listBindings: () => Effect.die("unused"),
-      deleteByThreadId: () => Effect.die("unused"),
+        deleteByThreadId: () => Effect.die("unused"),
       },
       dispatch: (command) =>
         Effect.sync(() => dispatched.push(command)).pipe(

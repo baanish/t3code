@@ -417,7 +417,8 @@ export function directoryNeedsFinalizeAfterCommittedImport(input: {
     return true;
   }
   return (
-    input.directoryNativePath !== undefined && isPendingTeleportNativePath(input.directoryNativePath)
+    input.directoryNativePath !== undefined &&
+    isPendingTeleportNativePath(input.directoryNativePath)
   );
 }
 
@@ -448,12 +449,14 @@ export const recoverLaggingDirectoryImportFinalize = <E, R = never>(input: {
       ) {
         continue;
       }
-      yield* input.finalizeDirectory(thread.id).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("teleport.import.directory-finalize-recovery-skipped").pipe(
-            Effect.annotateLogs({ threadId: thread.id, cause: String(cause) }),
+      yield* input
+        .finalizeDirectory(thread.id)
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("teleport.import.directory-finalize-recovery-skipped").pipe(
+              Effect.annotateLogs({ threadId: thread.id, cause: String(cause) }),
+            ),
           ),
-        ),
-      );
+        );
     }
   });

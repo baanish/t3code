@@ -85,9 +85,9 @@ const isUnixPathInUse = Effect.fn("isUnixPathInUse")(function* (nativePath: stri
     );
   if (result === null) {
     const fs = yield* FileSystem.FileSystem;
-    const exists = yield* fs.exists(nativePath).pipe(
-      Effect.mapError((cause) => new TeleportLockProbeError({ nativePath, cause })),
-    );
+    const exists = yield* fs
+      .exists(nativePath)
+      .pipe(Effect.mapError((cause) => new TeleportLockProbeError({ nativePath, cause })));
     if (!exists) {
       // First export create: the target file is not there yet.
       return false;
