@@ -86,6 +86,7 @@ import {
   buildTeleportResumeCursor,
   readTeleportExternalSessionId,
   readTeleportRuntimePayload,
+  teleportRuntimePayloadFromThreadState,
   teleportThreadStateFromPayload,
   toTeleportProvider,
 } from "./resumeCursors.ts";
@@ -294,8 +295,13 @@ export const make = Effect.gen(function* () {
       }),
     );
   const loadProjectWorktreeCwds = (projectId: ProjectId) =>
-    snapshotQuery.getShellSnapshot().pipe(
-      Effect.map((shell) => worktreeCwdsFromThreads(shell.threads, projectId)),
+    Effect.all([snapshotQuery.getShellSnapshot(), snapshotQuery.getArchivedShellSnapshot()]).pipe(
+      Effect.map(([active, archived]) =>
+        uniqueTeleportCwds([
+          ...worktreeCwdsFromThreads(active.threads, projectId),
+          ...worktreeCwdsFromThreads(archived.threads, projectId),
+        ]),
+      ),
       Effect.mapError(
         (cause) =>
           new TeleportDiscoveryError({
@@ -305,12 +311,15 @@ export const make = Effect.gen(function* () {
       ),
     );
   const loadWorkspaceWorktreeCwds = (cwd: string) =>
-    snapshotQuery.getShellSnapshot().pipe(
-      Effect.flatMap((shell) =>
+    Effect.all([snapshotQuery.getShellSnapshot(), snapshotQuery.getArchivedShellSnapshot()]).pipe(
+      Effect.flatMap(([active, archived]) =>
         Effect.gen(function* () {
-          for (const project of shell.projects) {
+          for (const project of active.projects) {
             if (yield* teleportCwdsEquivalent(project.workspaceRoot, cwd)) {
-              return worktreeCwdsFromThreads(shell.threads, project.id);
+              return uniqueTeleportCwds([
+                ...worktreeCwdsFromThreads(active.threads, project.id),
+                ...worktreeCwdsFromThreads(archived.threads, project.id),
+              ]);
             }
           }
           return [] as string[];
@@ -512,7 +521,10 @@ export const make = Effect.gen(function* () {
           }
           const seenRefs = new Set<string>();
           for (const ref of input.sessions) {
-            const key = `${ref.provider}:${ref.providerInstanceId ?? ""}:${ref.externalSessionId}`;
+            const instanceId =
+              ref.providerInstanceId ??
+              defaultInstanceIdForDriver(ProviderDriverKind.make(ref.provider));
+            const key = `${ref.provider}:${instanceId}:${ref.externalSessionId}`;
             if (seenRefs.has(key)) {
               return yield* new TeleportInvalidInputError({
                 reason: `Duplicate session '${ref.externalSessionId}' in the import batch.`,
@@ -542,26 +554,6 @@ export const make = Effect.gen(function* () {
             ),
           );
 
-          const parsedSessions: ParsedNativeSession[] = [];
-          for (const ref of input.sessions) {
-            const parsed = yield* loadTeleportSession({
-              homes,
-              provider: ref.provider,
-              externalSessionId: ref.externalSessionId,
-              cwd,
-              ...definedField("extraCwds", extraCwds.length > 0 ? extraCwds : undefined),
-              ...(ref.providerInstanceId === undefined
-                ? {}
-                : { providerInstanceId: ref.providerInstanceId }),
-              ...(ref.nativePath === undefined ? {} : { nativePath: ref.nativePath }),
-            });
-            yield* requireParsedSessionUnlocked(parsed, homes);
-            parsedSessions.push({
-              ...parsed,
-              messages: capMessages(parsed.messages),
-            });
-          }
-
           const imported: TeleportImportedSession[] = [];
           const now = yield* nowIso;
           const [activeShell, archivedShell] = yield* Effect.all([
@@ -586,7 +578,23 @@ export const make = Effect.gen(function* () {
           ]);
           const importThreadShells = [...activeShell.threads, ...archivedShell.threads];
 
-          for (const parsed of parsedSessions) {
+          for (const ref of input.sessions) {
+            const loaded = yield* loadTeleportSession({
+              homes,
+              provider: ref.provider,
+              externalSessionId: ref.externalSessionId,
+              cwd,
+              ...definedField("extraCwds", extraCwds.length > 0 ? extraCwds : undefined),
+              ...(ref.providerInstanceId === undefined
+                ? {}
+                : { providerInstanceId: ref.providerInstanceId }),
+              ...(ref.nativePath === undefined ? {} : { nativePath: ref.nativePath }),
+            });
+            yield* requireParsedSessionUnlocked(loaded, homes);
+            const parsed = {
+              ...loaded,
+              messages: capMessages(loaded.messages),
+            };
             const driver = ProviderDriverKind.make(parsed.provider);
             let existingThreadId: ThreadId | undefined;
             let existingProjectId = input.projectId;
@@ -1074,7 +1082,11 @@ export const make = Effect.gen(function* () {
             persistedPayload && isPendingTeleportNativePath(persistedPayload.nativePath)
               ? { ...persistedPayload, presence: "t3" as const }
               : persistedPayload;
-          if (resolveTeleportPresence(existingPayload) === "native") {
+          const threadTeleport = thread.value.teleport;
+          const threadOwnsNativeSession =
+            threadTeleport?.presence === "native" &&
+            !isPendingTeleportNativePath(threadTeleport.nativePath);
+          if (threadOwnsNativeSession || resolveTeleportPresence(existingPayload) === "native") {
             return yield* new TeleportInvalidInputError({
               reason: "This thread is already in the native CLI. Import it before exporting again.",
             });
@@ -1168,7 +1180,15 @@ export const make = Effect.gen(function* () {
                 providerInstanceId,
                 payload: existingPayload
                   ? { ...existingPayload, presence: "t3" }
-                  : { ...pendingPayload, presence: "t3" },
+                  : threadTeleport && !isPendingTeleportNativePath(threadTeleport.nativePath)
+                    ? {
+                        ...teleportRuntimePayloadFromThreadState(threadTeleport, {
+                          lastSyncDirection: "import",
+                          nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
+                        }),
+                        presence: "t3",
+                      }
+                    : { ...pendingPayload, presence: "t3" },
               }),
               createdAt: now,
             })
@@ -1943,6 +1963,12 @@ export const make = Effect.gen(function* () {
             ),
             Effect.asVoid,
           ),
+      afterRecover: (threadId, restored) => {
+        if (restored.action !== "clear") {
+          return Effect.void;
+        }
+        return directory.deleteByThreadId(threadId).pipe(Effect.catch(() => Effect.void));
+      },
     });
 
     const directoryBindings = yield* directory.listBindings().pipe(
@@ -1977,7 +2003,10 @@ export const make = Effect.gen(function* () {
           finalizeDirectory: (threadId) => {
             const thread = threads.find((candidate) => candidate.id === threadId);
             const teleport = thread?.teleport;
-            if (teleport == null || teleport.presence !== "t3") {
+            if (
+              teleport == null ||
+              (teleport.presence !== "t3" && teleport.presence !== "native")
+            ) {
               return Effect.void;
             }
             const driver = ProviderDriverKind.make(teleport.provider);
@@ -2001,7 +2030,7 @@ export const make = Effect.gen(function* () {
                   lastSyncDirection: "import",
                   lastSyncedAt: teleport.lastSyncedAt,
                   nativeFormatVersion: TELEPORT_NATIVE_FORMAT_VERSION,
-                  presence: "t3",
+                  presence: teleport.presence,
                   ...(teleport.nativeRevision === undefined
                     ? {}
                     : { nativeRevision: teleport.nativeRevision }),
