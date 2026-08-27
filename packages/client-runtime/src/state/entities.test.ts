@@ -360,6 +360,33 @@ describe("environment entity projections", () => {
     ).toEqual(nativeShellTeleport);
   });
 
+  it("treats a cleared shell teleport as newer than cached detail", () => {
+    const detailTeleport = {
+      presence: "native" as const,
+      provider: "codex" as const,
+      externalSessionId: "session-1",
+      nativePath: "/tmp/native",
+      lastSyncedAt: "2026-08-14T23:00:00.000Z",
+    };
+    const detail = {
+      ...THREAD_SHELL,
+      environmentId: ENVIRONMENT_ID,
+      deletedAt: null,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      teleport: detailTeleport,
+    } satisfies OrchestrationThread & { readonly environmentId: EnvironmentId };
+    const shell = {
+      ...THREAD_SHELL,
+      environmentId: ENVIRONMENT_ID,
+      teleport: null,
+    };
+
+    expect(mergeEnvironmentThread(detail, shell)?.teleport).toBeNull();
+  });
+
   it("preserves untouched project and thread identities across unrelated shell updates", () => {
     const harness = makeHarness();
     const projectRefsAtom = harness.projects.environmentProjectRefsAtom(ENVIRONMENT_ID);

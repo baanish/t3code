@@ -35,11 +35,11 @@ export function preferNewerTeleport(
   detail: EnvironmentThread["teleport"],
   shell: EnvironmentThreadShell["teleport"],
 ): EnvironmentThread["teleport"] {
-  if (detail == null) {
-    return shell ?? null;
-  }
   if (shell == null) {
-    return detail;
+    return null;
+  }
+  if (detail == null) {
+    return shell;
   }
   return shell.lastSyncedAt >= detail.lastSyncedAt ? shell : detail;
 }
@@ -77,9 +77,9 @@ export function mergeEnvironmentThread(
     pinnedAt: shell.pinnedAt,
     pinOrderKey: shell.pinOrderKey,
     session: shell.session,
-    // Detail can resume from a cached snapshot and skip HTTP, so a backfilled
-    // `teleport_json` never arrives as `thread.teleported`. The shell snapshot
-    // is refetched per session; prefer whichever side last synced.
+    // Shell is refetched per session and is the live teleport snapshot,
+    // including an authoritative `null` after clear. Detail can resume from
+    // a cached snapshot; prefer whichever side last synced when both exist.
     teleport: preferNewerTeleport(detail.teleport, shell.teleport),
   };
 }
