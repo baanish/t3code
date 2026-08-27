@@ -1853,6 +1853,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
+      if (!canMutateTeleportDraft()) return;
       if (composerSelectLockRef.current) return;
       composerSelectLockRef.current = true;
       window.requestAnimationFrame(() => {
@@ -1936,7 +1937,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
     },
-    [applyPromptReplacement, handleInteractionModeChange, resolveActiveComposerTrigger],
+    [
+      applyPromptReplacement,
+      canMutateTeleportDraft,
+      handleInteractionModeChange,
+      resolveActiveComposerTrigger,
+    ],
   );
 
   const onComposerMenuItemHighlighted = useCallback(
