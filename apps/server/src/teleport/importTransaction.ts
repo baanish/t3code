@@ -244,17 +244,19 @@ const revertOnError = <A, E, R>(
  * 5. directory presence finalize (best-effort)
  * 6. title (best-effort)
  *
- * Typed failures, defects, and interruptions before the T3 commit revert the
- * importing fence. Title and the post-commit directory finalize cannot
- * invalidate a successful T3 commit.
+ * The fence is inside the same revert region as stop/directory/commit. If
+ * `beginImporting` itself commits and the Effect is then interrupted or
+ * defects, revert still runs. Typed failures, defects, and interruptions
+ * before the T3 commit revert the importing fence. Title and the post-commit
+ * directory finalize cannot invalidate a successful T3 commit.
  */
 export const runInPlaceTeleportImport = <E, R = never>(
   ports: InPlaceTeleportImportPorts<E, R>,
 ): Effect.Effect<void, E, R> =>
   Effect.gen(function* () {
-    yield* ports.beginImporting;
     yield* revertOnError(
-      ports.stopSession.pipe(
+      ports.beginImporting.pipe(
+        Effect.flatMap(() => ports.stopSession),
         Effect.flatMap(() => ports.persistDirectory),
         Effect.flatMap(() => ports.commitOrchestration),
       ),
