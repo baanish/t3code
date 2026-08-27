@@ -2498,13 +2498,22 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         INSERT INTO projection_threads (
           thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
           pending_approval_count, pending_user_input_count, has_actionable_proposed_plan,
-          created_at, updated_at, deleted_at, teleport_json
+          latest_turn_id, created_at, updated_at, deleted_at, teleport_json
         )
         VALUES (
           'thread-teleport', 'project-teleport', 'Native thread',
           '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
-          0, 0, 0, '2026-08-14T00:00:00.000Z', '2026-08-14T00:00:00.000Z', NULL,
+          0, 0, 0, 'turn-teleport',
+          '2026-08-14T00:00:00.000Z', '2026-08-14T00:00:00.000Z', NULL,
           '{"presence":"native","provider":"codex","externalSessionId":"session-1","nativePath":"/tmp/native","lastSyncedAt":"2026-08-14T00:00:01.000Z"}'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, checkpoint_files_json
+        )
+        VALUES (
+          'thread-teleport', 'turn-teleport', 'completed', '2026-08-14T00:00:01.000Z', '[]'
         )
       `;
       for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
@@ -2547,6 +2556,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       if (archivedDetail._tag === "Some") {
         assert.deepEqual(archivedDetail.value.teleport, expectedTeleport);
         assert.equal(archivedDetail.value.archivedAt, "2026-08-14T00:00:02.000Z");
+        assert.equal(archivedDetail.value.latestTurn?.turnId, "turn-teleport");
+      }
+      const archivedShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.make("thread-teleport"),
+      );
+      assert.equal(archivedShell._tag, "Some");
+      if (archivedShell._tag === "Some") {
+        assert.equal(archivedShell.value.latestTurn?.turnId, "turn-teleport");
       }
     }),
   );
