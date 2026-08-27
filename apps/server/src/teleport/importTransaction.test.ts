@@ -14,8 +14,10 @@ import {
   importingTeleportState,
   inPlaceImportPathIsCompatible,
   nativeTranscriptWouldWipeExistingHistory,
+  directoryNeedsFinalizeAfterCommittedImport,
   importHistoryIsEmptyOrFenceOnly,
   recoverInterruptedImportTeleports,
+  recoverLaggingDirectoryImportFinalize,
   restoreDirectoryBindingAfterFailedImport,
   restorePresenceForImport,
   revertDirectoryAfterFailedInPlaceImport,
@@ -701,6 +703,118 @@ describe("teleport import transaction", () => {
         deleteThread: (threadId) => Ref.set(restored, `${threadId}:deleted`),
       });
       assert.equal(yield* Ref.get(restored), "thread-inplace:cleared");
+    }),
+  );
+
+  it("finalizes a directory that lagged behind a committed T3 import", () => {
+    assert.equal(
+      directoryNeedsFinalizeAfterCommittedImport({
+        orchestrationPresence: "t3",
+        directoryPresence: "importing",
+      }),
+      true,
+    );
+    assert.equal(
+      directoryNeedsFinalizeAfterCommittedImport({
+        orchestrationPresence: "t3",
+        directoryPresence: undefined,
+      }),
+      true,
+    );
+    assert.equal(
+      directoryNeedsFinalizeAfterCommittedImport({
+        orchestrationPresence: "t3",
+        directoryPresence: "t3",
+        directoryNativePath: pendingTeleportNativePath("codex", "session-1"),
+      }),
+      true,
+    );
+    assert.equal(
+      directoryNeedsFinalizeAfterCommittedImport({
+        orchestrationPresence: "t3",
+        directoryPresence: "t3",
+      }),
+      false,
+    );
+    assert.equal(
+      directoryNeedsFinalizeAfterCommittedImport({
+        orchestrationPresence: "t3",
+        directoryPresence: "native",
+      }),
+      false,
+    );
+    assert.equal(
+      directoryNeedsFinalizeAfterCommittedImport({
+        orchestrationPresence: "importing",
+        directoryPresence: "importing",
+      }),
+      false,
+    );
+  });
+
+  it.effect("repairs a lagging importing directory after a committed T3 import", () =>
+    Effect.gen(function* () {
+      const finalized = yield* Ref.make<string[]>([]);
+      yield* recoverLaggingDirectoryImportFinalize({
+        threads: [
+          {
+            id: ThreadId.make("thread-lagging"),
+            teleport: {
+              ...BASE_TELEPORT,
+              presence: "t3",
+            },
+            directoryPresence: "importing",
+          },
+          {
+            id: ThreadId.make("thread-ok"),
+            teleport: {
+              ...BASE_TELEPORT,
+              presence: "t3",
+            },
+            directoryPresence: "t3",
+          },
+          {
+            id: ThreadId.make("thread-importing"),
+            teleport: importingTeleportState({ base: BASE_TELEPORT }),
+            directoryPresence: "importing",
+          },
+        ],
+        finalizeDirectory: (threadId) => Ref.update(finalized, (current) => [...current, threadId]),
+      });
+      assert.deepEqual(yield* Ref.get(finalized), ["thread-lagging"]);
+    }),
+  );
+
+  it.effect("logs and continues when directory finalize recovery is skipped", () =>
+    Effect.gen(function* () {
+      const finalized = yield* Ref.make<string[]>([]);
+      yield* recoverLaggingDirectoryImportFinalize({
+        threads: [
+          {
+            id: ThreadId.make("thread-skip"),
+            teleport: {
+              ...BASE_TELEPORT,
+              presence: "t3",
+            },
+            directoryPresence: "importing",
+          },
+          {
+            id: ThreadId.make("thread-after-skip"),
+            teleport: {
+              ...BASE_TELEPORT,
+              presence: "t3",
+            },
+            directoryPresence: undefined,
+          },
+        ],
+        finalizeDirectory: (threadId) => {
+          if (threadId === "thread-skip") {
+            return Effect.fail(importStepError("finalizeDirectory"));
+          }
+          return Ref.update(finalized, (current) => [...current, threadId]);
+        },
+      });
+      assert.deepEqual(yield* Ref.get(finalized), ["thread-after-skip"]);
     }),
   );
 });

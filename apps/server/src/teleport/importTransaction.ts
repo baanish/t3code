@@ -401,3 +401,59 @@ export const recoverInterruptedImportTeleports = <E, R = never>(input: {
       );
     }
   });
+
+export function directoryNeedsFinalizeAfterCommittedImport(input: {
+  readonly orchestrationPresence: TeleportThreadState["presence"] | null | undefined;
+  readonly directoryPresence: TeleportThreadState["presence"] | null | undefined;
+  readonly directoryNativePath?: string | undefined;
+}): boolean {
+  if (input.orchestrationPresence !== "t3") {
+    return false;
+  }
+  if (input.directoryPresence === "importing") {
+    return true;
+  }
+  if (input.directoryPresence == null) {
+    return true;
+  }
+  return (
+    input.directoryNativePath !== undefined && isPendingTeleportNativePath(input.directoryNativePath)
+  );
+}
+
+/**
+ * After a successful T3 import commit, directory finalize is best-effort.
+ * Startup repairs threads that already own the transcript in orchestration
+ * but still have an importing or pending directory payload.
+ */
+export const recoverLaggingDirectoryImportFinalize = <E, R = never>(input: {
+  readonly threads: ReadonlyArray<{
+    readonly id: ThreadId;
+    readonly teleport?: TeleportThreadState | null;
+    readonly directoryPresence?: TeleportThreadState["presence"] | null;
+    readonly directoryNativePath?: string;
+  }>;
+  readonly finalizeDirectory: (threadId: ThreadId) => Effect.Effect<void, E, R>;
+}): Effect.Effect<void, never, R> =>
+  Effect.gen(function* () {
+    for (const thread of input.threads) {
+      if (
+        !directoryNeedsFinalizeAfterCommittedImport({
+          orchestrationPresence: thread.teleport?.presence,
+          directoryPresence: thread.directoryPresence,
+          ...(thread.directoryNativePath === undefined
+            ? {}
+            : { directoryNativePath: thread.directoryNativePath }),
+        })
+      ) {
+        continue;
+      }
+      yield* input.finalizeDirectory(thread.id).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("teleport.import.directory-finalize-recovery-skipped").pipe(
+            Effect.annotateLogs({ threadId: thread.id, cause: String(cause) }),
+          ),
+        ),
+      );
+    }
+  });
