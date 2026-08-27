@@ -543,7 +543,6 @@ export const make = Effect.gen(function* () {
           );
 
           const parsedSessions: ParsedNativeSession[] = [];
-          const requestedNativePaths: Array<string | undefined> = [];
           for (const ref of input.sessions) {
             const parsed = yield* loadTeleportSession({
               homes,
@@ -561,7 +560,6 @@ export const make = Effect.gen(function* () {
               ...parsed,
               messages: capMessages(parsed.messages),
             });
-            requestedNativePaths.push(ref.nativePath);
           }
 
           const imported: TeleportImportedSession[] = [];
@@ -588,8 +586,7 @@ export const make = Effect.gen(function* () {
           ]);
           const importThreadShells = [...activeShell.threads, ...archivedShell.threads];
 
-          for (const [sessionIndex, parsed] of parsedSessions.entries()) {
-            const requestedNativePath = requestedNativePaths[sessionIndex];
+          for (const parsed of parsedSessions) {
             const driver = ProviderDriverKind.make(parsed.provider);
             let existingThreadId: ThreadId | undefined;
             let existingProjectId = input.projectId;
@@ -616,7 +613,6 @@ export const make = Effect.gen(function* () {
               }
               if (
                 !inPlaceImportPathIsCompatible({
-                  requestedNativePath,
                   parsedNativePath: parsed.nativePath,
                   existingNativePath: readTeleportRuntimePayload(binding.runtimePayload)
                     ?.nativePath,
@@ -676,7 +672,6 @@ export const make = Effect.gen(function* () {
                 }
                 if (
                   !inPlaceImportPathIsCompatible({
-                    requestedNativePath,
                     parsedNativePath: parsed.nativePath,
                     existingNativePath: teleport.nativePath,
                   })

@@ -73,10 +73,9 @@ describe("teleport import transaction", () => {
     );
   });
 
-  it("does not in-place-match a different nativePath when the client requested a path", () => {
+  it("does not in-place-match a different durable nativePath", () => {
     assert.equal(
       inPlaceImportPathIsCompatible({
-        requestedNativePath: "/tmp/b.jsonl",
         parsedNativePath: "/tmp/b.jsonl",
         existingNativePath: "/tmp/a.jsonl",
       }),
@@ -84,7 +83,6 @@ describe("teleport import transaction", () => {
     );
     assert.equal(
       inPlaceImportPathIsCompatible({
-        requestedNativePath: "/tmp/a.jsonl",
         parsedNativePath: "/tmp/a.jsonl",
         existingNativePath: "/tmp/a.jsonl",
       }),
@@ -92,15 +90,6 @@ describe("teleport import transaction", () => {
     );
     assert.equal(
       inPlaceImportPathIsCompatible({
-        requestedNativePath: undefined,
-        parsedNativePath: "/tmp/b.jsonl",
-        existingNativePath: "/tmp/a.jsonl",
-      }),
-      true,
-    );
-    assert.equal(
-      inPlaceImportPathIsCompatible({
-        requestedNativePath: "/tmp/b.jsonl",
         parsedNativePath: "/tmp/b.jsonl",
         existingNativePath: undefined,
       }),
@@ -108,7 +97,6 @@ describe("teleport import transaction", () => {
     );
     assert.equal(
       inPlaceImportPathIsCompatible({
-        requestedNativePath: "/tmp/b.jsonl",
         parsedNativePath: "/tmp/b.jsonl",
         existingNativePath: pendingTeleportNativePath("codex", "session-1"),
       }),

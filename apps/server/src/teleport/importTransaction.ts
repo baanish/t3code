@@ -21,19 +21,14 @@ export function nativeTranscriptWouldWipeExistingHistory(input: {
 }
 
 /**
- * In-place import matches provider + externalSessionId + instance. When the
- * client also passed `nativePath`, do not rewrite a thread bound to a
- * different real file. Directory-only bindings and `teleport-pending:`
- * sentinels are not a durable file identity.
+ * In-place import matches provider + externalSessionId + instance. Do not
+ * rewrite a thread bound to a different real file. Directory-only bindings
+ * and `teleport-pending:` sentinels are not a durable file identity.
  */
 export function inPlaceImportPathIsCompatible(options: {
-  readonly requestedNativePath: string | undefined;
   readonly parsedNativePath: string;
   readonly existingNativePath: string | undefined;
 }): boolean {
-  if (options.requestedNativePath === undefined) {
-    return true;
-  }
   const existingNativePath =
     options.existingNativePath === undefined ||
     isPendingTeleportNativePath(options.existingNativePath)
