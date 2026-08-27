@@ -361,6 +361,10 @@ export const recoverInterruptedImportTeleports = <E, R = never>(input: {
   ) => Effect.Effect<void, E, R>;
   readonly clearTeleport: (threadId: ThreadId, commandId: CommandId) => Effect.Effect<void, E, R>;
   readonly deleteThread: (threadId: ThreadId, commandId: CommandId) => Effect.Effect<void, E, R>;
+  readonly afterRecover?: (
+    threadId: ThreadId,
+    restored: Exclude<InterruptedImportTeleportRestore, { action: "none" }>,
+  ) => Effect.Effect<void, never, R>;
 }): Effect.Effect<void, never, R> =>
   Effect.gen(function* () {
     for (const thread of input.threads) {
@@ -389,6 +393,7 @@ export const recoverInterruptedImportTeleports = <E, R = never>(input: {
         }
       })();
       yield* recover.pipe(
+        Effect.flatMap(() => input.afterRecover?.(thread.id, restored) ?? Effect.void),
         Effect.catchCause(() =>
           Effect.logWarning("teleport.import.recovery-skipped").pipe(
             Effect.annotateLogs({ threadId: thread.id }),
@@ -403,6 +408,9 @@ export function directoryNeedsFinalizeAfterCommittedImport(input: {
   readonly directoryPresence: TeleportThreadState["presence"] | null | undefined;
   readonly directoryNativePath?: string | undefined;
 }): boolean {
+  if (input.orchestrationPresence === "native" && input.directoryPresence === "importing") {
+    return true;
+  }
   if (input.orchestrationPresence !== "t3") {
     return false;
   }

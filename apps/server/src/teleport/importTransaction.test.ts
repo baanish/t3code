@@ -641,8 +641,10 @@ describe("teleport import transaction", () => {
         setTeleport: (threadId, teleport) => Ref.set(restored, `${threadId}:${teleport.presence}`),
         clearTeleport: (threadId) => Ref.set(restored, `${threadId}:cleared`),
         deleteThread: (threadId) => Ref.set(restored, `${threadId}:deleted`),
+        afterRecover: (threadId, recovered) =>
+          Ref.set(restored, `${threadId}:${recovered.action}:directory`),
       });
-      assert.equal(yield* Ref.get(restored), "thread-first:cleared");
+      assert.equal(yield* Ref.get(restored), "thread-first:clear:directory");
     }),
   );
 
@@ -730,6 +732,13 @@ describe("teleport import transaction", () => {
         directoryPresence: "native",
       }),
       false,
+    );
+    assert.equal(
+      directoryNeedsFinalizeAfterCommittedImport({
+        orchestrationPresence: "native",
+        directoryPresence: "importing",
+      }),
+      true,
     );
     assert.equal(
       directoryNeedsFinalizeAfterCommittedImport({
