@@ -369,9 +369,12 @@ export const recoverInterruptedImportTeleports = <E, R = never>(input: {
 }): Effect.Effect<void, never, R> =>
   Effect.gen(function* () {
     for (const thread of input.threads) {
-      const restored = restoredTeleportStateAfterInterruptedImport(thread.teleport, {
-        historyIsEmptyOrFenceOnly: thread.historyIsEmptyOrFenceOnly,
-      });
+      const restored =
+        thread.historyIsEmptyOrFenceOnly === undefined
+          ? restoredTeleportStateAfterInterruptedImport(thread.teleport)
+          : restoredTeleportStateAfterInterruptedImport(thread.teleport, {
+              historyIsEmptyOrFenceOnly: thread.historyIsEmptyOrFenceOnly,
+            });
       if (restored.action === "none") {
         continue;
       }
