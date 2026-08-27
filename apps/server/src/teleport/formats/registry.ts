@@ -1,6 +1,5 @@
 import type { TeleportProvider } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import type { TeleportFormatAdapter } from "./adapter.ts";
@@ -26,6 +25,7 @@ export function fromAdapters(
   };
 }
 
-export const make = Effect.sync(() => fromAdapters([codexTeleportFormat, claudeTeleportFormat]));
-
-export const layer = Layer.effect(TeleportFormatRegistry, make);
+export const layer = Layer.succeed(
+  TeleportFormatRegistry,
+  fromAdapters([codexTeleportFormat, claudeTeleportFormat]),
+);
