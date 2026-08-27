@@ -100,7 +100,16 @@ export const replaceNativeFile = Effect.fn("replaceNativeFile")(function* (input
             Effect.andThen(
               rename.pipe(
                 Effect.tapError(() =>
-                  fs.rename(backupPath, input.to).pipe(Effect.catch(() => Effect.void)),
+                  fs.rename(backupPath, input.to).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new TeleportNativeWriteError({
+                          nativePath: input.to,
+                          stage: "replace",
+                          cause,
+                        }),
+                    ),
+                  ),
                 ),
                 Effect.mapError(asReplaceError),
                 Effect.andThen(fs.remove(backupPath).pipe(Effect.catch(() => Effect.void))),
