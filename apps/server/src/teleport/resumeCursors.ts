@@ -2,6 +2,7 @@ import {
   isTeleportProvider,
   ProviderDriverKind,
   resolveTeleportPresence,
+  TELEPORT_SCHEMA_VERSION,
   TeleportRuntimePayload,
   TeleportUnsupportedProviderError,
   type TeleportProvider,
@@ -48,6 +49,25 @@ export function readTeleportRuntimePayload(
     return undefined;
   }
   return Option.getOrUndefined(decodeTeleportRuntimePayload(runtimePayload.teleport));
+}
+
+export function teleportRuntimePayloadFromThreadState(
+  teleport: TeleportThreadState,
+  extras: {
+    readonly lastSyncDirection: TeleportRuntimePayload["lastSyncDirection"];
+    readonly nativeFormatVersion: TeleportRuntimePayload["nativeFormatVersion"];
+  },
+): TeleportRuntimePayload {
+  return {
+    schemaVersion: TELEPORT_SCHEMA_VERSION,
+    externalSessionId: teleport.externalSessionId,
+    nativePath: teleport.nativePath,
+    lastSyncDirection: extras.lastSyncDirection,
+    lastSyncedAt: teleport.lastSyncedAt,
+    nativeFormatVersion: extras.nativeFormatVersion,
+    presence: teleport.presence,
+    ...(teleport.nativeRevision === undefined ? {} : { nativeRevision: teleport.nativeRevision }),
+  };
 }
 
 export function teleportThreadStateFromPayload(input: {
