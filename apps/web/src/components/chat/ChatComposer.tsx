@@ -937,7 +937,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const noProviderAvailable = selectedProviderEntry === undefined;
   const resolvedCompactDisabledReason =
-    compactDisabledReason ?? (noProviderAvailable ? "Compacting is unavailable right now" : null);
+    teleportLockReason ??
+    compactDisabledReason ??
+    (noProviderAvailable ? "Compacting is unavailable right now" : null);
   // The driver kind follows the instance that will actually run the turn,
   // which can differ from the persisted selection when that selection is
   // disabled.
@@ -2056,6 +2058,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const compactThreadContext = useCallback(() => {
     if (
       compactDisabled ||
+      isTeleportComposerLocked ||
       noProviderAvailable ||
       composerSendState.hasSendableContent ||
       activePendingApproval !== null ||
@@ -2095,6 +2098,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     compactDisabled,
     composerDraftTarget,
+    isTeleportComposerLocked,
     composerSendState.hasSendableContent,
     isConnecting,
     isSendBusy,
@@ -3689,7 +3693,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     compactDisabled={
-                      compactDisabled || noProviderAvailable || isSendBusy || isConnecting
+                      compactDisabled ||
+                      noProviderAvailable ||
+                      isSendBusy ||
+                      isConnecting ||
+                      isTeleportComposerLocked
                     }
                     compactDisabledReason={resolvedCompactDisabledReason}
                     {...(selectedProvider === "claudeAgent"
