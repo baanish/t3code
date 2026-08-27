@@ -51,15 +51,15 @@ function replaceFailed(path: string) {
 }
 
 function windowsRenameFileSystem(
-  inner: FileSystem.FileSystem["Service"],
+  inner: FileSystem.FileSystem,
   options?: {
     readonly failReplacementTo?: string;
     readonly failRestoreFromBak?: boolean;
   },
-): FileSystem.FileSystem["Service"] {
+): FileSystem.FileSystem {
   return {
     ...inner,
-    rename: (from, to) =>
+    rename: (from: string, to: string) =>
       inner.exists(to).pipe(
         Effect.flatMap((exists) => {
           if (exists) {
@@ -110,7 +110,9 @@ describe("teleport native writes", () => {
           }),
       }).pipe(Effect.flip);
       assert.equal(error._tag, "TeleportNativeWriteError");
-      assert.equal(error.stage, "verify");
+      if (error._tag === "TeleportNativeWriteError") {
+        assert.equal(error.stage, "verify");
+      }
       assert.equal(yield* fs.readFileString(filePath), "original\n");
       const leftovers = yield* fs.readDirectory(root);
       assert.equal(
@@ -187,7 +189,9 @@ describe("teleport native writes", () => {
         Effect.flip,
       );
       assert.equal(error._tag, "TeleportNativeWriteError");
-      assert.equal(error.stage, "replace");
+      if (error._tag === "TeleportNativeWriteError") {
+        assert.equal(error.stage, "replace");
+      }
       assert.equal(yield* inner.exists(filePath), false);
       assert.equal(yield* inner.exists(`${filePath}.teleport-bak`), true);
       assert.equal(yield* inner.readFileString(`${filePath}.teleport-bak`), "original\n");

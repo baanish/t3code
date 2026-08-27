@@ -804,7 +804,6 @@ describe("teleport import transaction", () => {
               ...BASE_TELEPORT,
               presence: "t3",
             },
-            directoryPresence: undefined,
           },
         ],
         finalizeDirectory: (threadId) => {

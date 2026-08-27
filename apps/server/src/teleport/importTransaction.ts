@@ -238,7 +238,7 @@ export function revertDirectoryAfterFailedInPlaceImport<
  */
 export function revertTeleportAfterFailedInPlaceImport(
   prior: TeleportThreadState | null | undefined,
-): Exclude<InterruptedImportTeleportRestore, { action: "none" }> {
+): Exclude<InterruptedImportTeleportRestore, { action: "none" } | { action: "delete" }> {
   if (prior == null) {
     return { action: "clear" };
   }
@@ -370,9 +370,7 @@ export const recoverInterruptedImportTeleports = <E, R = never>(input: {
   Effect.gen(function* () {
     for (const thread of input.threads) {
       const restored = restoredTeleportStateAfterInterruptedImport(thread.teleport, {
-        ...(thread.historyIsEmptyOrFenceOnly === undefined
-          ? {}
-          : { historyIsEmptyOrFenceOnly: thread.historyIsEmptyOrFenceOnly }),
+        historyIsEmptyOrFenceOnly: thread.historyIsEmptyOrFenceOnly,
       });
       if (restored.action === "none") {
         continue;

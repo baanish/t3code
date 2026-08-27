@@ -783,7 +783,8 @@ export const make = Effect.gen(function* () {
             );
 
             if (threadId) {
-              yield* claimExtraInFlight(inFlightKeys, `thread:${threadId}`);
+              const inPlaceThreadId = threadId;
+              yield* claimExtraInFlight(inFlightKeys, `thread:${inPlaceThreadId}`);
               const latest = yield* snapshotQuery.getThreadDetailById(threadId).pipe(
                 Effect.mapError(
                   (cause) =>
@@ -854,7 +855,7 @@ export const make = Effect.gen(function* () {
                     switch (revertedDirectory.action) {
                       case "delete":
                         return directory
-                          .deleteByThreadId(threadId)
+                          .deleteByThreadId(inPlaceThreadId)
                           .pipe(Effect.catch(() => Effect.void));
                       case "restore":
                         return directory
@@ -1935,6 +1936,13 @@ export const make = Effect.gen(function* () {
             threadId,
           })
           .pipe(
+            Effect.mapError(
+              (cause) =>
+                new TeleportInvalidInputError({
+                  reason: "Failed to recover an interrupted teleport import.",
+                  cause,
+                }),
+            ),
             Effect.flatMap(() =>
               directory.deleteByThreadId(threadId).pipe(Effect.catch(() => Effect.void)),
             ),
