@@ -7,6 +7,7 @@ import {
   type TeleportProvider,
   type TeleportSessionCandidate,
 } from "@t3tools/contracts";
+import type * as Crypto from "effect/Crypto";
 import type * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
@@ -24,7 +25,7 @@ export interface TeleportFormatAdapter {
   }) => Effect.Effect<
     ReadonlyArray<TeleportSessionCandidate>,
     TeleportSchemaVersionError | TeleportDiscoveryError,
-    FileSystem.FileSystem | Path.Path
+    FileSystem.FileSystem | Path.Path | Crypto.Crypto
   >;
   readonly load: (input: {
     readonly homes: TeleportHomes;
@@ -34,7 +35,7 @@ export interface TeleportFormatAdapter {
   }) => Effect.Effect<
     ParsedNativeSession,
     TeleportSchemaVersionError | TeleportDiscoveryError,
-    FileSystem.FileSystem | Path.Path
+    FileSystem.FileSystem | Path.Path | Crypto.Crypto
   >;
   readonly write: (input: {
     readonly homes: TeleportHomes;

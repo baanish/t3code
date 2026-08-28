@@ -7,6 +7,7 @@ import {
   type TeleportProvider,
   type TeleportSessionCandidate,
 } from "@t3tools/contracts";
+import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -31,7 +32,7 @@ export const discoverTeleportSessions = Effect.fn("discoverTeleportSessions")(fu
 }): Effect.fn.Return<
   TeleportListSessionsResult,
   TeleportSchemaVersionError | TeleportDiscoveryError,
-  FileSystem.FileSystem | Path.Path | TeleportFormatRegistry.TeleportFormatRegistry
+  FileSystem.FileSystem | Path.Path | Crypto.Crypto | TeleportFormatRegistry.TeleportFormatRegistry
 > {
   const formats = yield* TeleportFormatRegistry.TeleportFormatRegistry;
   const providers = input.providers ?? formats.providers;
@@ -135,7 +136,7 @@ export const loadTeleportSession = Effect.fn("loadTeleportSession")(function* (i
 }): Effect.fn.Return<
   ParsedNativeSession,
   TeleportSchemaVersionError | TeleportDiscoveryError,
-  FileSystem.FileSystem | Path.Path | TeleportFormatRegistry.TeleportFormatRegistry
+  FileSystem.FileSystem | Path.Path | Crypto.Crypto | TeleportFormatRegistry.TeleportFormatRegistry
 > {
   const formats = yield* TeleportFormatRegistry.TeleportFormatRegistry;
   const adapter = formats.get(input.provider);
