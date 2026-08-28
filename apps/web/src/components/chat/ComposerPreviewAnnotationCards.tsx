@@ -16,6 +16,7 @@ interface ComposerPreviewAnnotationCardsProps {
   annotations: ReadonlyArray<PreviewAnnotationPayload>;
   images: ReadonlyArray<ComposerImageAttachment>;
   onRemove: (annotationId: string) => void;
+  removeDisabled?: boolean;
   onExpandImage: (imageId: string) => void;
   uploadsByImageId?: Readonly<Record<string, AttachmentUploadState>>;
   onRetryUpload?: (image: ComposerImageAttachment) => void;
@@ -43,6 +44,7 @@ export function ComposerPreviewAnnotationCards({
   annotations,
   images,
   onRemove,
+  removeDisabled = false,
   onExpandImage,
   uploadsByImageId,
   onRetryUpload,
@@ -172,6 +174,7 @@ export function ComposerPreviewAnnotationCards({
               aria-label="Remove preview annotation"
               className="absolute right-1.5 top-1.5 [--control-icon-color:currentColor] rounded text-icon-muted hover:bg-muted"
               onClick={() => onRemove(annotation.id)}
+              disabled={removeDisabled}
             >
               <X className="size-3" />
             </Button>

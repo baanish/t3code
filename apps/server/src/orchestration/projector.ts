@@ -33,6 +33,8 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadHistoryReplacedPayload,
+  ThreadTeleportedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -810,6 +812,51 @@ export function projectEvent(
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
               updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.history-replaced":
+      return decodeForEvent(
+        ThreadHistoryReplacedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              messages: payload.messages.slice(-MAX_THREAD_MESSAGES),
+              proposedPlans: [],
+              activities: [],
+              checkpoints: [],
+              latestTurn: null,
+              updatedAt: payload.replacedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.teleported":
+      return decodeForEvent(ThreadTeleportedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              teleport: payload.teleport,
+              updatedAt: payload.updatedAt,
             }),
           };
         }),

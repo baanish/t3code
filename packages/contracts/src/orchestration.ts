@@ -23,6 +23,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { TeleportThreadState } from "./teleport.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -445,6 +446,8 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  // Optional so payloads from pre-teleport servers still decode.
+  teleport: Schema.optional(Schema.NullOr(TeleportThreadState)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -523,6 +526,11 @@ export const OrchestrationThreadShell = Schema.Struct({
       }),
     ),
   ),
+  // Thread-level native/T3 presence. Optional so payloads from pre-teleport
+  // servers still decode. Lives on the shell because the environment snapshot
+  // is refreshed on every new session, unlike cached thread detail which can
+  // resume from events and miss a backfilled projection column.
+  teleport: Schema.optional(Schema.NullOr(TeleportThreadState)),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
@@ -1067,6 +1075,38 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+const ThreadHistoryReplaceCommand = Schema.Struct({
+  type: Schema.Literal("thread.history.replace"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messages: Schema.Array(OrchestrationMessage),
+  createdAt: IsoDateTime,
+});
+
+const ThreadTeleportSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.teleport.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  teleport: TeleportThreadState,
+  createdAt: IsoDateTime,
+});
+
+const ThreadTeleportImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.teleport.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  teleport: TeleportThreadState,
+  messages: Schema.Array(OrchestrationMessage),
+  createdAt: IsoDateTime,
+});
+
+const ThreadTeleportClearCommand = Schema.Struct({
+  type: Schema.Literal("thread.teleport.clear"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1076,6 +1116,10 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadHistoryReplaceCommand,
+  ThreadTeleportSetCommand,
+  ThreadTeleportImportCommand,
+  ThreadTeleportClearCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1115,6 +1159,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "thread.history-replaced",
+  "thread.teleported",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1350,6 +1396,20 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
   activity: OrchestrationThreadActivity,
 });
 
+export const ThreadHistoryReplacedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messages: Schema.Array(OrchestrationMessage),
+  replacedAt: IsoDateTime,
+});
+
+export const ThreadTeleportedPayload = Schema.Struct({
+  threadId: ThreadId,
+  // `null` clears teleport state. `thread.teleport.set` cannot represent
+  // "no teleport" because `TeleportThreadState.nativePath` is required.
+  teleport: Schema.NullOr(TeleportThreadState),
+  updatedAt: IsoDateTime,
+});
+
 /**
  * Which client connection dispatched the command that produced an event.
  * Stamped by the orchestration engine on client-dispatched commands; absent on
@@ -1529,6 +1589,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.history-replaced"),
+    payload: ThreadHistoryReplacedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.teleported"),
+    payload: ThreadTeleportedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

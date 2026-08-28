@@ -84,6 +84,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       this is false — no update would ever repaint it. Absent on older
       servers, which may still publish, so only an explicit false skips. */
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
+  /** Server exposes teleport.listSessions / importSessions / exportSession
+      plus native-revision check/fork. Absent on older servers and on clients
+      that have not wired the feature (including mobile), so those clients
+      must hide teleport controls instead of probing unsupported RPCs. */
+  teleport: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

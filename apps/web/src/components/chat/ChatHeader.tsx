@@ -24,6 +24,7 @@ import {
 } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { isTrailingDoubleClick } from "../Sidebar.logic";
+import { TeleportOutButton } from "../teleport/TeleportOutButton";
 import { type DraftId } from "~/composerDraftStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
@@ -408,6 +409,12 @@ export const ChatHeader = memo(function ChatHeader({
             {...(draftId ? { draftId } : {})}
           />
         )}
+        <TeleportOutButton
+          environmentId={activeThreadEnvironmentId}
+          threadId={activeThreadId}
+          isServerThread={isServerThread}
+          cwd={activeProjectCwd}
+        />
       </div>
     </div>
   );

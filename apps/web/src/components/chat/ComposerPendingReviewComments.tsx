@@ -13,12 +13,14 @@ import { cn } from "~/lib/utils";
 interface ComposerPendingReviewCommentsProps {
   comments: ReadonlyArray<ReviewCommentContext>;
   onRemove: (commentId: string) => void;
+  removeDisabled?: boolean;
   className?: string;
 }
 
 export function ComposerPendingReviewComments({
   comments,
   onRemove,
+  removeDisabled = false,
   className,
 }: ComposerPendingReviewCommentsProps) {
   if (comments.length === 0) return null;
@@ -35,6 +37,7 @@ export function ComposerPendingReviewComments({
               type="button"
               aria-label={`Remove comment on ${label}`}
               className={COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME}
+              disabled={removeDisabled}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();

@@ -27,9 +27,11 @@ import {
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
+  type ProviderInstanceId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
+  type TeleportProvider,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -40,7 +42,9 @@ import {
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
+  ImportIcon,
   LinkIcon,
+  LoaderIcon,
   MessageSquareIcon,
   PaletteIcon,
   ServerIcon,
@@ -91,6 +95,7 @@ import {
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
+import { formatRelativeTimeLabel } from "../timestampFormat";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -129,8 +134,78 @@ import {
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
+  selectTeleportImportProjects,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
+
+function nativeSessionsPaletteView(
+  projectTitle: string,
+  items: CommandPaletteActionItem[],
+): CommandPaletteView {
+  return {
+    addonIcon: <ImportIcon className={ADDON_ICON_CLASS} />,
+    groups: [
+      {
+        value: "native-sessions",
+        label: `Sessions in ${projectTitle}`,
+        items,
+      },
+    ],
+  };
+}
+
+function importSessionsStatusItem(input: {
+  readonly value: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly icon: ReactNode;
+  readonly run?: () => Promise<void>;
+}): CommandPaletteActionItem {
+  return {
+    kind: "action",
+    value: input.value,
+    searchTerms: [],
+    title: input.title,
+    ...(input.description === undefined ? {} : { description: input.description }),
+    icon: input.icon,
+    disabled: input.run === undefined,
+    keepOpen: input.run !== undefined,
+    run: input.run ?? (async () => undefined),
+  };
+}
+
+function importSessionsLoadingView(projectTitle: string): CommandPaletteView {
+  return nativeSessionsPaletteView(projectTitle, [
+    importSessionsStatusItem({
+      value: "import-sessions-loading",
+      title: "Looking for native sessions…",
+      icon: <LoaderIcon className={`${ITEM_ICON_CLASS} animate-spin`} />,
+    }),
+  ]);
+}
+
+function importIntoProjectPaletteView(
+  items: ReadonlyArray<CommandPaletteActionItem>,
+): CommandPaletteView {
+  return {
+    addonIcon: <ImportIcon className={ADDON_ICON_CLASS} />,
+    groups: [
+      {
+        value: "projects",
+        label: "Import into project",
+        items: enumerateCommandPaletteItems(items),
+      },
+    ],
+  };
+}
+
+function toInstalledPaletteView(view: CommandPaletteView): CommandPaletteView {
+  return {
+    addonIcon: view.addonIcon,
+    groups: view.groups,
+    ...(view.initialQuery ? { initialQuery: view.initialQuery } : {}),
+  };
+}
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
@@ -146,7 +221,14 @@ import {
   ThreadCommandSubtitle,
 } from "./ThreadCommandSubtitle";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
+import {
+  environmentSupportsTeleport,
+  isTeleportedOut,
+  teleportFailureMessage,
+  teleportProviderLabel,
+} from "../lib/teleport";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
+import { teleportEnvironment } from "../state/teleport";
 import {
   deriveProviderInstanceEntries,
   resolveDefaultProviderModelSelection,
@@ -403,6 +485,15 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
+  const openImportSessions = useCallback(
+    (input?: { readonly environmentId?: EnvironmentId; readonly projectId?: ProjectId }) =>
+      dispatch({
+        _tag: "OpenImportSessions",
+        ...(input?.environmentId === undefined ? {} : { environmentId: input.environmentId }),
+        ...(input?.projectId === undefined ? {} : { projectId: input.projectId }),
+      }),
+    [],
+  );
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
@@ -473,15 +564,33 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   useEffect(
     () =>
       onOpenCommandPalette((detail) => {
-        if (detail.open === "new-thread-in") {
-          openNewThreadIn();
-        } else if (detail.open === "add-project") {
-          openAddProject();
-        } else {
+        const open = detail.open;
+        if (open === undefined) {
           setOpen(true);
+          return;
+        }
+        switch (open) {
+          case "new-thread-in":
+            openNewThreadIn();
+            return;
+          case "add-project":
+            openAddProject();
+            return;
+          case "import-sessions":
+            openImportSessions({
+              ...(detail.environmentId === undefined
+                ? {}
+                : { environmentId: detail.environmentId }),
+              ...(detail.projectId === undefined ? {} : { projectId: detail.projectId }),
+            });
+            return;
+          default: {
+            const _exhaustive: never = open;
+            return _exhaustive;
+          }
         }
       }),
-    [openAddProject, openNewThreadIn, setOpen],
+    [openAddProject, openImportSessions, openNewThreadIn, setOpen],
   );
 
   return (
@@ -563,7 +672,7 @@ function OpenCommandPaletteDialog(props: {
   readonly clearOpenIntent: () => void;
 }) {
   const navigate = useNavigate();
-  const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
+  const { clearOpenIntent, openIntent, openOverlayMode, setOpen: setPaletteOpen } = props;
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
@@ -580,6 +689,12 @@ function OpenCommandPaletteDialog(props: {
     reportDefect: false,
   });
   const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
+    reportFailure: false,
+  });
+  const listTeleportSessions = useAtomCommand(teleportEnvironment.listSessions, {
+    reportFailure: false,
+  });
+  const importTeleportSessions = useAtomCommand(teleportEnvironment.importSessions, {
     reportFailure: false,
   });
   const { environments } = useEnvironments();
@@ -635,6 +750,17 @@ function OpenCommandPaletteDialog(props: {
     browseNavigationRef.current = createBrowseNavigationCoordinator();
   }
   const browseNavigation = browseNavigationRef.current;
+  const teleportImportPendingRef = useRef(false);
+  const importListGenerationRef = useRef(0);
+  const setOpen = useCallback(
+    (open: boolean) => {
+      if (!open) {
+        importListGenerationRef.current += 1;
+      }
+      setPaletteOpen(open);
+    },
+    [setPaletteOpen],
+  );
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
@@ -1154,14 +1280,31 @@ function OpenCommandPaletteDialog(props: {
   const pushPaletteView = useCallback(
     (view: CommandPaletteView): void => {
       browseNavigation.invalidate();
-      setViewStack((previousViews) => [
-        ...previousViews,
-        {
-          addonIcon: view.addonIcon,
-          groups: view.groups,
-          ...(view.initialQuery ? { initialQuery: view.initialQuery } : {}),
-        },
-      ]);
+      setViewStack((previousViews) => [...previousViews, toInstalledPaletteView(view)]);
+      setHighlightedItemValue(null);
+      setQuery(view.initialQuery ?? "");
+    },
+    [browseNavigation],
+  );
+
+  const replacePaletteView = useCallback(
+    (view: CommandPaletteView): void => {
+      browseNavigation.invalidate();
+      setAddProjectCloneFlow(null);
+      setViewStack([toInstalledPaletteView(view)]);
+      setHighlightedItemValue(null);
+      setQuery(view.initialQuery ?? "");
+    },
+    [browseNavigation],
+  );
+
+  const replaceTopPaletteView = useCallback(
+    (view: CommandPaletteView): void => {
+      browseNavigation.invalidate();
+      setViewStack((previousViews) => {
+        const nextView = toInstalledPaletteView(view);
+        return previousViews.length === 0 ? [nextView] : [...previousViews.slice(0, -1), nextView];
+      });
       setHighlightedItemValue(null);
       setQuery(view.initialQuery ?? "");
     },
@@ -1177,6 +1320,7 @@ function OpenCommandPaletteDialog(props: {
   }
 
   function popView(): void {
+    importListGenerationRef.current += 1;
     browseNavigation.invalidate();
     setAddProjectCloneFlow(null);
     if (viewStack.length <= 1) {
@@ -1195,6 +1339,230 @@ function OpenCommandPaletteDialog(props: {
       popView();
     }
   }
+
+  const importNativeSession = useCallback(
+    async (
+      project: Project,
+      session: {
+        readonly provider: TeleportProvider;
+        readonly providerInstanceId?: ProviderInstanceId;
+        readonly externalSessionId: string;
+        readonly nativePath?: string;
+      },
+    ): Promise<void> => {
+      if (teleportImportPendingRef.current) {
+        return;
+      }
+      teleportImportPendingRef.current = true;
+      try {
+        const result = await importTeleportSessions({
+          environmentId: project.environmentId,
+          input: {
+            projectId: project.id,
+            cwd: project.workspaceRoot,
+            sessions: [
+              {
+                provider: session.provider,
+                ...(session.providerInstanceId === undefined
+                  ? {}
+                  : { providerInstanceId: session.providerInstanceId }),
+                externalSessionId: session.externalSessionId,
+                ...(session.nativePath === undefined ? {} : { nativePath: session.nativePath }),
+              },
+            ],
+          },
+        });
+        if (result._tag === "Success") {
+          const imported = result.value.imported[0];
+          if (imported) {
+            await navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(
+                scopeThreadRef(project.environmentId, imported.threadId),
+              ),
+            });
+            toastManager.add({
+              type: "success",
+              title: imported.updatedInPlace
+                ? "Updated thread from native session"
+                : "Imported native session",
+            });
+          }
+          setOpen(false);
+          return;
+        }
+        if (isAtomCommandInterrupted(result)) {
+          return;
+        }
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not import session",
+            description: teleportFailureMessage(squashAtomCommandFailure(result)),
+          }),
+        );
+      } finally {
+        teleportImportPendingRef.current = false;
+      }
+    },
+    [importTeleportSessions, navigate, setOpen],
+  );
+
+  const loadNativeSessionsIntoView = useCallback(
+    async (project: Project): Promise<void> => {
+      const generation = (importListGenerationRef.current += 1);
+      const result = await listTeleportSessions({
+        environmentId: project.environmentId,
+        input: { cwd: project.workspaceRoot },
+      });
+      if (generation !== importListGenerationRef.current) {
+        return;
+      }
+      if (result._tag !== "Success") {
+        if (isAtomCommandInterrupted(result)) {
+          replaceTopPaletteView(
+            nativeSessionsPaletteView(project.title, [
+              importSessionsStatusItem({
+                value: "import-sessions-interrupted",
+                title: "Could not list native sessions",
+                description: "The request was interrupted. Try again.",
+                icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+                run: async () => {
+                  replaceTopPaletteView(importSessionsLoadingView(project.title));
+                  await loadNativeSessionsIntoView(project);
+                },
+              }),
+            ]),
+          );
+          return;
+        }
+        replaceTopPaletteView(
+          nativeSessionsPaletteView(project.title, [
+            importSessionsStatusItem({
+              value: "import-sessions-error",
+              title: "Could not list native sessions",
+              description: teleportFailureMessage(squashAtomCommandFailure(result)),
+              icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+              run: async () => {
+                replaceTopPaletteView(importSessionsLoadingView(project.title));
+                await loadNativeSessionsIntoView(project);
+              },
+            }),
+          ]),
+        );
+        return;
+      }
+      if (result.value.sessions.length === 0) {
+        replaceTopPaletteView(
+          nativeSessionsPaletteView(project.title, [
+            importSessionsStatusItem({
+              value: "import-sessions-empty",
+              title: "No native sessions in this project",
+              description: project.workspaceRoot,
+              icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+            }),
+          ]),
+        );
+        return;
+      }
+      replaceTopPaletteView(
+        nativeSessionsPaletteView(
+          project.title,
+          result.value.sessions.map((session) => ({
+            kind: "action" as const,
+            value: `import-session:${session.provider}:${session.providerInstanceId}:${session.externalSessionId}:${session.nativePath}`,
+            searchTerms: [
+              session.title ?? "",
+              session.externalSessionId,
+              teleportProviderLabel(session.provider),
+              session.cwd,
+            ],
+            title: session.title ?? session.externalSessionId,
+            description: [
+              teleportProviderLabel(session.provider),
+              session.updatedAt ? formatRelativeTimeLabel(session.updatedAt) : null,
+            ]
+              .filter((part): part is string => part !== null)
+              .join(" · "),
+            icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+            run: async () => {
+              await importNativeSession(project, session);
+            },
+          })),
+        ),
+      );
+    },
+    [importNativeSession, listTeleportSessions, replaceTopPaletteView],
+  );
+
+  const openImportSessionsForProject = useCallback(
+    (project: Project): void => {
+      pushPaletteView(importSessionsLoadingView(project.title));
+      void loadNativeSessionsIntoView(project);
+    },
+    [loadNativeSessionsIntoView, pushPaletteView],
+  );
+
+  const importProjects = useMemo(
+    () =>
+      selectTeleportImportProjects(projects, (environmentId) =>
+        environmentSupportsTeleport(
+          environments.find((environment) => environment.environmentId === environmentId)
+            ?.serverConfig?.environment.capabilities,
+        ),
+      ),
+    [environments, projects],
+  );
+
+  const importProjectItems = useMemo(
+    () =>
+      importProjects.map((project) => ({
+        kind: "action" as const,
+        value: `import-sessions:${project.environmentId}:${project.id}`,
+        searchTerms: [project.title, project.workspaceRoot, "import", "teleport"],
+        title: project.title,
+        description: project.workspaceRoot,
+        icon: projectFavicon(project),
+        keepOpen: true,
+        run: async () => {
+          openImportSessionsForProject(project);
+        },
+      })),
+    [importProjects, openImportSessionsForProject],
+  );
+
+  const openImportSessionsFlow = useCallback(() => {
+    if (importProjectItems.length === 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: projects.length > 0 ? "Teleport is not available" : "No projects available",
+          description:
+            projects.length > 0
+              ? "This server does not support importing native CLI sessions."
+              : "Add a project before importing native sessions.",
+        }),
+      );
+      return;
+    }
+    const currentPrefix =
+      currentProjectEnvironmentId && currentProjectId
+        ? `import-sessions:${currentProjectEnvironmentId}:${currentProjectId}`
+        : null;
+    const prioritized = currentPrefix
+      ? [
+          ...importProjectItems.filter((item) => item.value === currentPrefix),
+          ...importProjectItems.filter((item) => item.value !== currentPrefix),
+        ]
+      : importProjectItems;
+    pushPaletteView(importIntoProjectPaletteView(prioritized));
+  }, [
+    currentProjectEnvironmentId,
+    currentProjectId,
+    importProjectItems,
+    projects.length,
+    pushPaletteView,
+  ]);
 
   const startAddProjectBrowse = useCallback(
     async (environmentId: EnvironmentId): Promise<void> => {
@@ -1484,6 +1852,67 @@ function OpenCommandPaletteDialog(props: {
     pushPaletteView,
   ]);
 
+  useLayoutEffect(() => {
+    if (openIntent?.kind !== "import-sessions") {
+      return;
+    }
+    const environmentId = openIntent.environmentId;
+    const projectId = openIntent.projectId;
+    clearOpenIntent();
+    browseNavigation.invalidate();
+    setAddProjectCloneFlow(null);
+    setQuery("");
+    if (environmentId !== undefined && projectId !== undefined) {
+      const project = projects.find(
+        (candidate) => candidate.environmentId === environmentId && candidate.id === projectId,
+      );
+      if (project) {
+        replacePaletteView(importSessionsLoadingView(project.title));
+        void loadNativeSessionsIntoView(project);
+        return;
+      }
+    }
+    if (importProjectItems.length === 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: projects.length > 0 ? "Teleport is not available" : "No projects available",
+          description:
+            projects.length > 0
+              ? "This server does not support importing native CLI sessions."
+              : "Add a project before importing native sessions.",
+        }),
+      );
+      setOpen(false);
+      return;
+    }
+    const currentPrefix =
+      currentProjectEnvironmentId && currentProjectId
+        ? `import-sessions:${currentProjectEnvironmentId}:${currentProjectId}`
+        : null;
+    replacePaletteView(
+      importIntoProjectPaletteView(
+        currentPrefix
+          ? [
+              ...importProjectItems.filter((item) => item.value === currentPrefix),
+              ...importProjectItems.filter((item) => item.value !== currentPrefix),
+            ]
+          : importProjectItems,
+      ),
+    );
+  }, [
+    browseNavigation,
+    clearOpenIntent,
+    currentProjectEnvironmentId,
+    currentProjectId,
+    importProjectItems,
+    loadNativeSessionsIntoView,
+    openIntent,
+    projects,
+    replacePaletteView,
+    setOpen,
+  ]);
+
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
   if (projects.length > 0) {
@@ -1523,6 +1952,64 @@ function OpenCommandPaletteDialog(props: {
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
     });
+
+    const boundTeleport = isTeleportedOut(activeThread?.teleport)
+      ? (activeThread?.teleport ?? null)
+      : null;
+    const boundImportProject =
+      boundTeleport && activeThread
+        ? (projects.find(
+            (project) =>
+              project.id === activeThread.projectId &&
+              project.environmentId === activeThread.environmentId,
+          ) ?? null)
+        : null;
+    if (boundTeleport && boundImportProject) {
+      const boundSupportsTeleport = environmentSupportsTeleport(
+        environments.find(
+          (environment) => environment.environmentId === boundImportProject.environmentId,
+        )?.serverConfig?.environment.capabilities,
+      );
+      if (boundSupportsTeleport) {
+        actionItems.push({
+          kind: "action",
+          value: "action:import-this-thread",
+          searchTerms: [
+            "import this thread",
+            "teleport in",
+            "native",
+            "cli",
+            teleportProviderLabel(boundTeleport.provider),
+          ],
+          title: "Import this thread from native CLI",
+          icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+          run: async () => {
+            await importNativeSession(boundImportProject, {
+              provider: boundTeleport.provider,
+              ...(boundTeleport.providerInstanceId === undefined
+                ? {}
+                : { providerInstanceId: boundTeleport.providerInstanceId }),
+              externalSessionId: boundTeleport.externalSessionId,
+              nativePath: boundTeleport.nativePath,
+            });
+          },
+        });
+      }
+    }
+
+    if (importProjectItems.length > 0) {
+      actionItems.push({
+        kind: "action",
+        value: "action:import-sessions",
+        searchTerms: ["import sessions", "teleport", "codex", "claude", "native", "cli"],
+        title: "Import sessions...",
+        icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+        keepOpen: true,
+        run: async () => {
+          openImportSessionsFlow();
+        },
+      });
+    }
   }
 
   actionItems.push({

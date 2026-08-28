@@ -1,9 +1,13 @@
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+
 // Tiny event bus allowing components to programmatically open the command palette
 // without owning its React state.
 const COMMAND_PALETTE_OPEN_EVENT = "t3code:open-command-palette";
 
 export interface CommandPaletteOpenDetail {
-  readonly open?: "add-project" | "new-thread-in";
+  readonly open?: "add-project" | "new-thread-in" | "import-sessions";
+  readonly environmentId?: EnvironmentId;
+  readonly projectId?: ProjectId;
 }
 
 export function openCommandPalette(detail?: CommandPaletteOpenDetail): void {

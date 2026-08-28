@@ -31,6 +31,19 @@ const EMPTY_CHECKPOINTS: ReadonlyArray<OrchestrationCheckpointSummary> = Object.
  * a stale checkout while retaining messages, activities, plans, and checkpoints
  * from the detail subscription.
  */
+export function preferNewerTeleport(
+  detail: EnvironmentThread["teleport"],
+  shell: EnvironmentThreadShell["teleport"],
+): EnvironmentThread["teleport"] {
+  if (shell == null) {
+    return null;
+  }
+  if (detail == null) {
+    return shell;
+  }
+  return shell.lastSyncedAt >= detail.lastSyncedAt ? shell : detail;
+}
+
 export function mergeEnvironmentThread(
   detail: EnvironmentThread | null,
   shell: EnvironmentThreadShell | null,
@@ -64,6 +77,10 @@ export function mergeEnvironmentThread(
     pinnedAt: shell.pinnedAt,
     pinOrderKey: shell.pinOrderKey,
     session: shell.session,
+    // Shell is refetched per session and is the live teleport snapshot,
+    // including an authoritative `null` after clear. Detail can resume from
+    // a cached snapshot; prefer whichever side last synced when both exist.
+    teleport: preferNewerTeleport(detail.teleport, shell.teleport),
   };
 }
 

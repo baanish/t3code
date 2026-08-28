@@ -18,6 +18,8 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { TeleportService } from "../teleport/TeleportService.ts";
+import { turnStartRequiresNativeRevisionCheck } from "../teleport/nativeRevision.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -25,6 +27,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const teleport = yield* TeleportService;
 
     return handlers
       .handle(
@@ -96,12 +99,43 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
+          return yield* Effect.gen(function* () {
+            if (normalizedCommand.type === "thread.turn.start") {
+              const createThreadBootstrap = normalizedCommand.bootstrap?.createThread !== undefined;
+              const existingThread = createThreadBootstrap
+                ? yield* projectionSnapshotQuery
+                    .getThreadShellById(normalizedCommand.threadId)
+                    .pipe(
+                      Effect.catch((cause) =>
+                        failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                      ),
+                    )
+                : Option.none();
+              if (
+                turnStartRequiresNativeRevisionCheck(
+                  normalizedCommand,
+                  createThreadBootstrap ? Option.isSome(existingThread) : undefined,
+                )
+              ) {
+                yield* teleport
+                  .requireNativeRevisionForTurn(normalizedCommand.threadId)
+                  .pipe(
+                    Effect.catch((cause) =>
+                      failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                    ),
+                  );
+              }
+            }
+            return yield* orchestrationEngine
+              .dispatch(normalizedCommand)
+              .pipe(
+                Effect.catch((cause) =>
+                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                ),
+              );
+          }).pipe(
             Effect.tapError(() =>
               cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
-            ),
-            Effect.catch((cause) =>
-              failEnvironmentInternal("orchestration_dispatch_failed", cause),
             ),
           );
         }),

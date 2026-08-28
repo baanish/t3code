@@ -927,6 +927,182 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("thread.history-replaced", () => {
+    it("replaces messages and clears turn-derived state", () => {
+      const threadWithHistory: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: MessageId.make("old-1"),
+            role: "user",
+            text: "old",
+            turnId: TurnId.make("turn-1"),
+            streaming: false,
+            createdAt: "2026-04-01T01:00:00.000Z",
+            updatedAt: "2026-04-01T01:00:00.000Z",
+          },
+        ],
+        proposedPlans: [
+          {
+            id: "plan-1",
+            turnId: TurnId.make("turn-1"),
+            planMarkdown: "do things",
+            implementedAt: null,
+            implementationThreadId: null,
+            createdAt: "2026-04-01T01:00:00.000Z",
+            updatedAt: "2026-04-01T01:00:00.000Z",
+          },
+        ],
+        activities: [
+          {
+            id: EventId.make("act-1"),
+            turnId: TurnId.make("turn-1"),
+            tone: "tool",
+            kind: "file-edit",
+            summary: "old activity",
+            payload: {},
+            createdAt: "2026-04-01T01:00:00.000Z",
+          },
+        ],
+        checkpoints: [
+          {
+            turnId: TurnId.make("turn-1"),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("ref-1"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("old-2"),
+            completedAt: "2026-04-01T01:00:00.000Z",
+          },
+        ],
+        latestTurn: {
+          turnId: TurnId.make("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-01T01:00:00.000Z",
+          startedAt: "2026-04-01T01:00:00.000Z",
+          completedAt: "2026-04-01T01:00:00.000Z",
+          assistantMessageId: MessageId.make("old-2"),
+        },
+      };
+
+      const messages = [
+        {
+          id: MessageId.make("new-1"),
+          role: "user" as const,
+          text: "imported",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-08-14T06:00:00.000Z",
+          updatedAt: "2026-08-14T06:00:00.000Z",
+        },
+      ];
+
+      const result = applyThreadDetailEvent(threadWithHistory, {
+        ...baseEventFields,
+        sequence: 20,
+        occurredAt: "2026-08-14T06:02:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.history-replaced",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messages,
+          replacedAt: "2026-08-14T06:02:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages).toEqual(messages);
+        expect(result.thread.proposedPlans).toEqual([]);
+        expect(result.thread.activities).toEqual([]);
+        expect(result.thread.checkpoints).toEqual([]);
+        expect(result.thread.latestTurn).toBeNull();
+        expect(result.thread.updatedAt).toBe("2026-08-14T06:02:00.000Z");
+      }
+    });
+  });
+
+  describe("thread.teleported", () => {
+    it("stores teleport presence on the thread", () => {
+      const result = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 14,
+        occurredAt: "2026-08-14T22:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.teleported",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          teleport: {
+            presence: "native",
+            provider: "codex",
+            externalSessionId: "session-1",
+            nativePath: "/tmp/session.jsonl",
+            lastSyncedAt: "2026-08-14T22:00:00.000Z",
+          },
+          updatedAt: "2026-08-14T22:00:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.teleport).toEqual({
+          presence: "native",
+          provider: "codex",
+          externalSessionId: "session-1",
+          nativePath: "/tmp/session.jsonl",
+          lastSyncedAt: "2026-08-14T22:00:00.000Z",
+        });
+        expect(result.thread.updatedAt).toBe("2026-08-14T22:00:00.000Z");
+      }
+    });
+
+    it("clears teleport when the payload is null", () => {
+      const teleported = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 14,
+        occurredAt: "2026-08-14T22:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.teleported",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          teleport: {
+            presence: "importing",
+            provider: "codex",
+            externalSessionId: "session-1",
+            nativePath: "/tmp/session.jsonl",
+            lastSyncedAt: "2026-08-14T22:00:00.000Z",
+          },
+          updatedAt: "2026-08-14T22:00:00.000Z",
+        },
+      });
+      expect(teleported.kind).toBe("updated");
+      if (teleported.kind !== "updated") {
+        return;
+      }
+      const cleared = applyThreadDetailEvent(teleported.thread, {
+        ...baseEventFields,
+        sequence: 15,
+        occurredAt: "2026-08-14T22:00:01.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.teleported",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          teleport: null,
+          updatedAt: "2026-08-14T22:00:01.000Z",
+        },
+      });
+      expect(cleared.kind).toBe("updated");
+      if (cleared.kind === "updated") {
+        expect(cleared.thread.teleport).toBeNull();
+        expect(cleared.thread.messages).toEqual(teleported.thread.messages);
+      }
+    });
+  });
+
   describe("no-op events", () => {
     it("returns unchanged for approval-response-requested", () => {
       const result = applyThreadDetailEvent(baseThread, {

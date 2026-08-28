@@ -103,7 +103,12 @@ interface ProjectorDefinition {
 
 interface AttachmentSideEffects {
   readonly deletedThreadIds: Set<string>;
-  readonly prunedThreadRelativePaths: Map<string, Set<string>>;
+  readonly prunedThreadAttachments: Map<string, ThreadAttachmentPrunePlan>;
+}
+
+interface ThreadAttachmentPrunePlan {
+  readonly ownedRelativePaths: ReadonlySet<string>;
+  readonly keptRelativePaths: ReadonlySet<string>;
 }
 
 const materializeAttachmentsForProjection = Effect.fn("materializeAttachmentsForProjection")(
@@ -352,7 +357,9 @@ function retainProjectionProposedPlansAfterRevert(
 
 function collectThreadAttachmentRelativePaths(
   threadId: string,
-  messages: ReadonlyArray<ProjectionThreadMessage>,
+  messages: ReadonlyArray<{
+    readonly attachments?: ReadonlyArray<ChatAttachment> | null | undefined;
+  }>,
 ): Set<string> {
   const threadSegment = toSafeThreadAttachmentSegment(threadId);
   if (!threadSegment) {
@@ -372,6 +379,21 @@ function collectThreadAttachmentRelativePaths(
     }
   }
   return relativePaths;
+}
+
+function threadAttachmentPrunePlan(
+  threadId: string,
+  ownedMessages: ReadonlyArray<{
+    readonly attachments?: ReadonlyArray<ChatAttachment> | null | undefined;
+  }>,
+  keptMessages: ReadonlyArray<{
+    readonly attachments?: ReadonlyArray<ChatAttachment> | null | undefined;
+  }>,
+): ThreadAttachmentPrunePlan {
+  return {
+    ownedRelativePaths: collectThreadAttachmentRelativePaths(threadId, ownedMessages),
+    keptRelativePaths: collectThreadAttachmentRelativePaths(threadId, keptMessages),
+  };
 }
 
 const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function* (
@@ -427,21 +449,14 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     );
   });
 
-  const pruneThreadAttachmentEntry = Effect.fn("pruneThreadAttachmentEntry")(function* (
-    threadSegment: string,
-    keptThreadRelativePaths: Set<string>,
-    entry: string,
+  const pruneOwnedAttachmentEntry = Effect.fn("pruneOwnedAttachmentEntry")(function* (
+    relativePath: string,
   ) {
-    const relativePath = entry.replace(/^[/\\]+/, "").replace(/\\/g, "/");
-    if (relativePath.length === 0 || relativePath.includes("/")) {
+    if (relativePath.length === 0 || relativePath.includes("/") || relativePath.includes("\\")) {
       return;
     }
     const attachmentId = parseAttachmentIdFromRelativePath(relativePath);
     if (!attachmentId) {
-      return;
-    }
-    const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
-    if (!attachmentThreadSegment || attachmentThreadSegment !== threadSegment) {
       return;
     }
 
@@ -451,31 +466,23 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
       return;
     }
 
-    if (!keptThreadRelativePaths.has(relativePath)) {
-      yield* fileSystem.remove(absolutePath, { force: true });
-    }
+    yield* fileSystem.remove(absolutePath, { force: true });
   });
 
   const pruneThreadAttachments = Effect.fn("pruneThreadAttachments")(function* (
     threadId: string,
-    keptThreadRelativePaths: Set<string>,
+    plan: ThreadAttachmentPrunePlan,
   ) {
     if (sideEffects.deletedThreadIds.has(threadId)) {
       return;
     }
 
-    const threadSegment = toSafeThreadAttachmentSegment(threadId);
-    if (!threadSegment) {
-      yield* Effect.logWarning("skipping attachment prune for unsafe thread id", { threadId });
-      return;
-    }
-
-    const entries = yield* readAttachmentRootEntries;
-    yield* Effect.forEach(
-      entries,
-      (entry) => pruneThreadAttachmentEntry(threadSegment, keptThreadRelativePaths, entry),
-      { concurrency: 1 },
+    const relativePathsToRemove = [...plan.ownedRelativePaths].filter(
+      (relativePath) => !plan.keptRelativePaths.has(relativePath),
     );
+    yield* Effect.forEach(relativePathsToRemove, pruneOwnedAttachmentEntry, {
+      concurrency: 1,
+    });
   });
 
   yield* Effect.forEach(sideEffects.deletedThreadIds, deleteThreadAttachments, {
@@ -483,9 +490,8 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
   });
 
   yield* Effect.forEach(
-    sideEffects.prunedThreadRelativePaths.entries(),
-    ([threadId, keptThreadRelativePaths]) =>
-      pruneThreadAttachments(threadId, keptThreadRelativePaths),
+    sideEffects.prunedThreadAttachments.entries(),
+    ([threadId, plan]) => pruneThreadAttachments(threadId, plan),
     { concurrency: 1 },
   );
 });
@@ -653,6 +659,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
             deletedAt: null,
+            teleport: null,
           });
           return;
 
@@ -886,6 +893,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.teleported": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            teleport: event.payload.teleport,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
         case "thread.message-sent":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
@@ -904,6 +926,22 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (shouldRefreshThreadShellSummary(event)) {
             yield* refreshThreadShellSummary(event.payload.threadId);
           }
+          return;
+        }
+
+        case "thread.history-replaced": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            latestTurnId: null,
+            updatedAt: event.occurredAt,
+          });
+          yield* refreshThreadShellSummary(event.payload.threadId);
           return;
         }
 
@@ -1050,9 +1088,41 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* Effect.forEach(keptRows, projectionThreadMessageRepository.upsert, {
             concurrency: 1,
           }).pipe(Effect.asVoid);
-          attachmentSideEffects.prunedThreadRelativePaths.set(
+          attachmentSideEffects.prunedThreadAttachments.set(
             event.payload.threadId,
-            collectThreadAttachmentRelativePaths(event.payload.threadId, keptRows),
+            threadAttachmentPrunePlan(event.payload.threadId, existingRows, keptRows),
+          );
+          return;
+        }
+
+        case "thread.history-replaced": {
+          const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* projectionThreadMessageRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(
+            event.payload.messages,
+            (message) =>
+              projectionThreadMessageRepository.upsert({
+                messageId: message.id,
+                threadId: event.payload.threadId,
+                turnId: message.turnId,
+                role: message.role,
+                text: message.text,
+                ...(message.attachments !== undefined
+                  ? { attachments: [...message.attachments] }
+                  : {}),
+                isStreaming: message.streaming,
+                createdAt: message.createdAt,
+                updatedAt: message.updatedAt,
+              }),
+            { concurrency: 1 },
+          ).pipe(Effect.asVoid);
+          attachmentSideEffects.prunedThreadAttachments.set(
+            event.payload.threadId,
+            threadAttachmentPrunePlan(event.payload.threadId, existingRows, event.payload.messages),
           );
           return;
         }
@@ -1076,6 +1146,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             implementationThreadId: event.payload.proposedPlan.implementationThreadId,
             createdAt: event.payload.proposedPlan.createdAt,
             updatedAt: event.payload.proposedPlan.updatedAt,
+          });
+          return;
+
+        case "thread.history-replaced":
+          yield* projectionThreadProposedPlanRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
           });
           return;
 
@@ -1130,6 +1206,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? { sequence: event.payload.activity.sequence }
               : {}),
             createdAt: event.payload.activity.createdAt,
+          });
+          return;
+
+        case "thread.history-replaced":
+          yield* projectionThreadActivityRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
           });
           return;
 
@@ -1486,6 +1568,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.history-replaced":
+          yield* projectionTurnRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+
         case "thread.reverted": {
           const existingTurns = yield* projectionTurnRepository.listByThreadId({
             threadId: event.payload.threadId,
@@ -1640,6 +1728,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.history-replaced": {
+          const pendingRows = yield* projectionPendingApprovalRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(
+            pendingRows,
+            (row) =>
+              projectionPendingApprovalRepository.deleteByRequestId({
+                requestId: row.requestId,
+              }),
+            { concurrency: 1 },
+          ).pipe(Effect.asVoid);
+          return;
+        }
+
         default:
           return;
       }
@@ -1690,7 +1793,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     ) {
       const attachmentSideEffects: AttachmentSideEffects = {
         deletedThreadIds: new Set<string>(),
-        prunedThreadRelativePaths: new Map<string, Set<string>>(),
+        prunedThreadAttachments: new Map<string, ThreadAttachmentPrunePlan>(),
       };
 
       yield* sql.withTransaction(

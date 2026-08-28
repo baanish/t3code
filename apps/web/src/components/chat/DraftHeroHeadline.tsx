@@ -1,9 +1,10 @@
 import type { ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { FolderPlusIcon } from "lucide-react";
+import { FolderPlusIcon, ImportIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
 import { openCommandPalette } from "~/commandPaletteBus";
+import { environmentSupportsTeleport } from "~/lib/teleport";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
@@ -42,6 +43,17 @@ export function DraftHeroHeadline({
   const projectSortOrder = useClientSettings((settings) => settings.sidebarProjectSortOrder);
   const handleNewThread = useNewThreadHandler();
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
+  const openImportSessions = useCallback(() => {
+    if (activeProjectRef === null) {
+      openCommandPalette({ open: "import-sessions" });
+      return;
+    }
+    openCommandPalette({
+      open: "import-sessions",
+      environmentId: activeProjectRef.environmentId,
+      projectId: activeProjectRef.projectId,
+    });
+  }, [activeProjectRef]);
 
   const environmentLabelById = useMemo(
     () =>
@@ -97,6 +109,11 @@ export function DraftHeroHeadline({
   const hasResolvedProject = activeProjectTitle !== null;
   const canChooseProject = projectPickerEntries.length > 0;
   const shouldShowProjectMenu = canChooseProject;
+  const teleportEnvironmentId = activeProjectRef?.environmentId ?? primaryEnvironmentId;
+  const supportsTeleport = environmentSupportsTeleport(
+    environments.find((environment) => environment.environmentId === teleportEnvironmentId)
+      ?.serverConfig?.environment.capabilities,
+  );
 
   const projectSelector = shouldShowProjectMenu ? (
     <Menu>
@@ -167,14 +184,26 @@ export function DraftHeroHeadline({
   );
 
   return (
-    <h1 className="mx-auto w-full max-w-5xl text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
-      {hasResolvedProject ? (
-        <>What should we build in {projectSelector}?</>
-      ) : canChooseProject ? (
-        <>{projectSelector} to start</>
-      ) : (
-        <>Add a project to start</>
-      )}
-    </h1>
+    <div className="mx-auto w-full max-w-5xl text-center">
+      <h1 className="font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
+        {hasResolvedProject ? (
+          <>What should we build in {projectSelector}?</>
+        ) : canChooseProject ? (
+          <>{projectSelector} to start</>
+        ) : (
+          <>Add a project to start</>
+        )}
+      </h1>
+      {hasResolvedProject && supportsTeleport ? (
+        <button
+          type="button"
+          onClick={openImportSessions}
+          className="pointer-events-auto mt-3 inline-flex cursor-pointer items-center gap-1.5 text-muted-foreground text-sm transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ImportIcon className="size-3.5" />
+          Import a native CLI session
+        </button>
+      ) : null}
+    </div>
   );
 }

@@ -157,14 +157,16 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<ProjectionFullThreadDiffContext>, ProjectionRepositoryError>;
 
   /**
-   * Read a single active thread shell row by id.
+   * Read a single thread shell row by id, including archived threads.
+   * Turn start is rejected in the decider; this lookup is for import and UI.
    */
   readonly getThreadShellById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
-   * Read a single active thread detail snapshot by id.
+   * Read a single thread detail snapshot by id, including archived threads.
+   * Turn start is rejected in the decider; this lookup is for import and UI.
    */
   readonly getThreadDetailById: (
     threadId: ThreadId,

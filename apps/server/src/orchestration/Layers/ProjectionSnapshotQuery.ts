@@ -24,8 +24,9 @@ import {
   type OrchestrationThreadShell,
   ModelSelection,
   ProjectId,
-  ThreadLinkedPullRequest,
+  TeleportThreadState,
   ThreadId,
+  ThreadLinkedPullRequest,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -91,6 +92,9 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    teleport: Schema.NullOr(Schema.fromJsonString(TeleportThreadState)).pipe(
+      Schema.withDecodingDefault(Effect.succeed(null)),
+    ),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -442,7 +446,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          teleport_json AS "teleport"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
       `,
@@ -480,7 +485,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          teleport_json AS "teleport"
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NULL
@@ -520,7 +526,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          teleport_json AS "teleport"
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NOT NULL
@@ -932,6 +939,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // By-id lookups include archived threads so in-place teleport import and
+  // UI snapshots can load them. Turn admission still rejects archived threads
+  // in the decider. List queries exclude archived.
   const getActiveThreadRowById = SqlSchema.findOneOption({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadDbRowSchema,
@@ -964,11 +974,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          teleport_json AS "teleport"
         FROM projection_threads
         WHERE thread_id = ${threadId}
           AND deleted_at IS NULL
-          AND archived_at IS NULL
         LIMIT 1
       `,
   });
@@ -1096,7 +1106,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           AND turns.turn_id = threads.latest_turn_id
         WHERE threads.thread_id = ${threadId}
           AND threads.deleted_at IS NULL
-          AND threads.archived_at IS NULL
         LIMIT 1
       `,
   });
@@ -1160,7 +1169,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             'thread.activity-appended',
             'thread.turn-diff-completed',
             'thread.reverted',
-            'thread.session-set'
+            'thread.session-set',
+            'thread.history-replaced',
+            'thread.teleported'
           )
       `,
   });
@@ -1725,6 +1736,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 activities: activitiesByThread.get(row.threadId) ?? [],
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
+                ...(row.teleport == null ? {} : { teleport: row.teleport }),
               }));
 
               const snapshot = {
@@ -1936,6 +1948,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   activities: [],
                   checkpoints: [],
                   session: sessionByThread.get(row.threadId) ?? null,
+                  ...(row.teleport == null ? {} : { teleport: row.teleport }),
                 });
               }
 
@@ -2079,6 +2092,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         row.threadId,
                       ),
                       planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
+                      ...(row.teleport == null ? {} : { teleport: row.teleport }),
                     } satisfies OrchestrationThreadShell)
                   : Result.failVoid,
               ),
@@ -2228,6 +2242,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     row.threadId,
                   ),
                   planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
+                  ...(row.teleport == null ? {} : { teleport: row.teleport }),
                 }),
               ),
               updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
@@ -2511,6 +2526,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           threadRow.value.threadId,
         ),
         planProgress: threadPlanProgress.getThreadPlanProgress(threadRow.value.threadId),
+        ...(threadRow.value.teleport == null ? {} : { teleport: threadRow.value.teleport }),
       } satisfies OrchestrationThreadShell);
     });
 
@@ -2689,6 +2705,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           completedAt: row.completedAt,
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
+        ...(threadRow.value.teleport == null ? {} : { teleport: threadRow.value.teleport }),
       };
 
       return Option.some(

@@ -135,6 +135,8 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import * as TeleportService from "./teleport/TeleportService.ts";
+import { turnStartRequiresNativeRevisionCheck } from "./teleport/nativeRevision.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -300,7 +302,9 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
-      | "thread.session-set";
+      | "thread.session-set"
+      | "thread.history-replaced"
+      | "thread.teleported";
   }
 > {
   return (
@@ -309,7 +313,9 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
-    event.type === "thread.session-set"
+    event.type === "thread.session-set" ||
+    event.type === "thread.history-replaced" ||
+    event.type === "thread.teleported"
   );
 }
 
@@ -521,6 +527,7 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
+      const teleport = yield* TeleportService.TeleportService;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1094,14 +1101,37 @@ const makeWsRpcLayer = (
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-        const dispatchEffect =
-          normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
-            ? dispatchBootstrapTurnStart(normalizedCommand)
-            : dispatchFromClient(normalizedCommand).pipe(
-                Effect.mapError((cause) =>
-                  toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+        // User-facing turns enter only through orchestration.dispatchCommand.
+        // Fail the RPC with OrchestrationDispatchCommandError before bootstrap
+        // or engine.dispatch so a revision check error never silently admits.
+        const guardedDispatch =
+          normalizedCommand.type === "thread.turn.start" &&
+          turnStartRequiresNativeRevisionCheck(normalizedCommand)
+            ? teleport.requireNativeRevisionForTurn(normalizedCommand.threadId).pipe(
+                Effect.catchDefect((defect) =>
+                  Effect.fail(
+                    new OrchestrationDispatchCommandError({
+                      message: "Failed to verify the imported native session.",
+                      cause: defect,
+                    }),
+                  ),
                 ),
-              );
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to verify the imported native session."),
+                ),
+              )
+            : Effect.void;
+        const dispatchEffect = guardedDispatch.pipe(
+          Effect.flatMap(() =>
+            normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
+              ? dispatchBootstrapTurnStart(normalizedCommand)
+              : dispatchFromClient(normalizedCommand).pipe(
+                  Effect.mapError((cause) =>
+                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                  ),
+                ),
+          ),
+        );
 
         return startup
           .enqueueCommand(dispatchEffect)
@@ -2452,6 +2482,34 @@ const makeWsRpcLayer = (
               ),
             ),
             { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.teleportListSessions]: (input) =>
+          observeRpcEffect(WS_METHODS.teleportListSessions, teleport.listSessions(input), {
+            "rpc.aggregate": "teleport",
+          }),
+        [WS_METHODS.teleportImportSessions]: (input) =>
+          observeRpcEffect(WS_METHODS.teleportImportSessions, teleport.importSessions(input), {
+            "rpc.aggregate": "teleport",
+          }),
+        [WS_METHODS.teleportExportSession]: (input) =>
+          observeRpcEffect(WS_METHODS.teleportExportSession, teleport.exportSession(input), {
+            "rpc.aggregate": "teleport",
+          }),
+        [WS_METHODS.teleportCheckNativeRevision]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.teleportCheckNativeRevision,
+            teleport.checkNativeRevision(input),
+            {
+              "rpc.aggregate": "teleport",
+            },
+          ),
+        [WS_METHODS.teleportForkNativeDivergence]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.teleportForkNativeDivergence,
+            teleport.forkNativeDivergence(input),
+            {
+              "rpc.aggregate": "teleport",
+            },
           ),
       });
     }),

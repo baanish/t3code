@@ -3,6 +3,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  teleportPresenceBlocksThreadTurnStart,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -115,6 +116,7 @@ function threadHasQueuedTurnStart(
     readonly session: { readonly status: string } | null;
   },
   occurredAt: string,
+  latestHandledMessageAt?: string,
 ): boolean {
   const latestUserMessageAtMs = thread.messages.reduce(
     (latest, message) =>
@@ -134,10 +136,14 @@ function threadHasQueuedTurnStart(
           ),
         );
   const queuedAgeMs = Date.parse(occurredAt) - latestUserMessageAtMs;
+  const latestHandledMessageAtMs =
+    latestHandledMessageAt === undefined
+      ? Number.NEGATIVE_INFINITY
+      : Date.parse(latestHandledMessageAt);
   return (
     thread.session?.status !== "error" &&
     Number.isFinite(latestUserMessageAtMs) &&
-    latestUserMessageAtMs > latestTurnAtMs &&
+    latestUserMessageAtMs > Math.max(latestTurnAtMs, latestHandledMessageAtMs) &&
     Math.abs(queuedAgeMs) <= QUEUED_TURN_START_GRACE_MS
   );
 }
@@ -927,7 +933,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.start": {
-      const targetThread = yield* requireThread({
+      const targetThread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
@@ -954,6 +960,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
+        });
+      }
+      if (teleportPresenceBlocksThreadTurnStart(targetThread.teleport?.presence)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            targetThread.teleport?.presence === "importing"
+              ? "This thread is being imported from the native CLI."
+              : "This thread is in the native CLI. Import it before sending messages from T3.",
         });
       }
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
@@ -1403,6 +1418,199 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [unsettledEvent, activityAppendedEvent];
+    }
+
+    case "thread.history.replace": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const status = thread.session?.status;
+      if (status === "starting" || status === "running") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Cannot replace thread history while its T3 session is starting or running.",
+        });
+      }
+      if (threadHasQueuedTurnStart(thread, command.createdAt)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Cannot replace thread history while a turn start is queued.",
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.history-replaced",
+        payload: {
+          threadId: command.threadId,
+          messages: command.messages,
+          replacedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.teleport.set": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (teleportPresenceBlocksThreadTurnStart(command.teleport.presence)) {
+        const status = thread.session?.status;
+        if (status === "starting" || status === "running") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              command.teleport.presence === "importing"
+                ? "Cannot import a thread while its T3 session is starting or running."
+                : "Cannot teleport a thread to the native CLI while its T3 session is starting or running.",
+          });
+        }
+        const canHaveQueuedT3Turn =
+          thread.teleport?.presence !== "native" && thread.teleport?.presence !== "importing";
+        if (
+          canHaveQueuedT3Turn &&
+          threadHasQueuedTurnStart(
+            thread,
+            command.createdAt,
+            thread.teleport?.presence === "t3" ? thread.teleport.lastSyncedAt : undefined,
+          )
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              command.teleport.presence === "importing"
+                ? "Cannot import a thread while a turn start is queued."
+                : "Cannot teleport a thread to the native CLI while a turn start is queued.",
+          });
+        }
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.teleported",
+        payload: {
+          threadId: command.threadId,
+          teleport: command.teleport,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.teleport.import": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (command.teleport.presence !== "t3") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Native session import must commit T3 ownership.",
+        });
+      }
+      const status = thread.session?.status;
+      if (status === "starting" || status === "running") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Cannot import native history while the T3 session is starting or running.",
+        });
+      }
+      // Turn admission is already blocked by native/importing presence, or by
+      // the importing fence TeleportService sets before this command. A recent
+      // user message with no latestTurn is the history being replaced.
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (thread.archivedAt !== null) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unarchived",
+          payload: {
+            threadId: command.threadId,
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+      events.push({
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.teleported",
+        payload: {
+          threadId: command.threadId,
+          teleport: {
+            presence: "t3",
+            provider: command.teleport.provider,
+            ...(command.teleport.providerInstanceId === undefined
+              ? {}
+              : { providerInstanceId: command.teleport.providerInstanceId }),
+            externalSessionId: command.teleport.externalSessionId,
+            nativePath: command.teleport.nativePath,
+            lastSyncedAt: command.teleport.lastSyncedAt,
+            ...(command.teleport.nativeRevision === undefined
+              ? {}
+              : { nativeRevision: command.teleport.nativeRevision }),
+            ...(command.teleport.forkedFromThreadId === undefined
+              ? {}
+              : { forkedFromThreadId: command.teleport.forkedFromThreadId }),
+          },
+          updatedAt: command.createdAt,
+        },
+      });
+      events.push({
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.history-replaced",
+        payload: {
+          threadId: command.threadId,
+          messages: command.messages,
+          replacedAt: command.createdAt,
+        },
+      });
+      return events;
+    }
+
+    case "thread.teleport.clear": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.teleported",
+        payload: {
+          threadId: command.threadId,
+          teleport: null,
+          updatedAt: command.createdAt,
+        },
+      };
     }
 
     default: {

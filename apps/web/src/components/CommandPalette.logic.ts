@@ -1,6 +1,8 @@
 import {
+  type EnvironmentId,
   type FilesystemBrowseEntry,
   type KeybindingCommand,
+  type ProjectId,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
@@ -37,9 +39,14 @@ export function browseInputEndPaddingClass(input: {
  */
 export type SearchOverlayMode = "command" | "files" | "content";
 
-export interface CommandPaletteOpenIntent {
-  readonly kind: "add-project" | "new-thread-in";
-}
+export type CommandPaletteOpenIntent =
+  | { readonly kind: "add-project" }
+  | { readonly kind: "new-thread-in" }
+  | {
+      readonly kind: "import-sessions";
+      readonly environmentId?: EnvironmentId;
+      readonly projectId?: ProjectId;
+    };
 
 export interface CommandPaletteUiState {
   readonly open: boolean;
@@ -52,6 +59,11 @@ export type CommandPaletteUiAction =
   | { readonly _tag: "ToggleMode"; readonly mode: SearchOverlayMode }
   | { readonly _tag: "OpenAddProject" }
   | { readonly _tag: "OpenNewThreadIn" }
+  | {
+      readonly _tag: "OpenImportSessions";
+      readonly environmentId?: EnvironmentId;
+      readonly projectId?: ProjectId;
+    }
   | { readonly _tag: "ClearOpenIntent" };
 
 export function reduceCommandPaletteUiState(
@@ -71,8 +83,22 @@ export function reduceCommandPaletteUiState(
       return { open: true, mode: "command", openIntent: { kind: "add-project" } };
     case "OpenNewThreadIn":
       return { open: true, mode: "command", openIntent: { kind: "new-thread-in" } };
+    case "OpenImportSessions":
+      return {
+        open: true,
+        mode: "command",
+        openIntent: {
+          kind: "import-sessions",
+          ...(action.environmentId === undefined ? {} : { environmentId: action.environmentId }),
+          ...(action.projectId === undefined ? {} : { projectId: action.projectId }),
+        },
+      };
     case "ClearOpenIntent":
       return state.openIntent ? { ...state, openIntent: null } : state;
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
   }
 }
 
@@ -455,4 +481,11 @@ export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): str
     case "submenu-browse":
       return "Enter path (e.g. ~/projects/my-app)";
   }
+}
+
+export function selectTeleportImportProjects<T extends { readonly environmentId: EnvironmentId }>(
+  projects: ReadonlyArray<T>,
+  environmentSupportsTeleport: (environmentId: EnvironmentId) => boolean,
+): ReadonlyArray<T> {
+  return projects.filter((project) => environmentSupportsTeleport(project.environmentId));
 }

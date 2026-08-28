@@ -130,6 +130,7 @@ import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
+import { isTeleportSendDisabledReason } from "~/lib/teleport";
 import { Separator } from "../ui/separator";
 import {
   getComposerPromptLengthValidationMessage,
@@ -763,6 +764,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const sendDisabledReason =
     externalSendDisabledReason ?? (activePendingProgress ? null : attachmentBlockReason);
   const isSendDisabled = sendDisabledReason !== null;
+  const teleportLockReason = isTeleportSendDisabledReason(sendDisabledReason)
+    ? sendDisabledReason
+    : null;
+  const isTeleportComposerLocked = teleportLockReason !== null;
+  const sendDisabledReasonRef = useRef(sendDisabledReason);
+  sendDisabledReasonRef.current = sendDisabledReason;
+  const canMutateTeleportDraft = useCallback(
+    () => !isTeleportSendDisabledReason(sendDisabledReasonRef.current),
+    [],
+  );
 
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
@@ -926,7 +937,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const noProviderAvailable = selectedProviderEntry === undefined;
   const resolvedCompactDisabledReason =
-    compactDisabledReason ?? (noProviderAvailable ? "Compacting is unavailable right now" : null);
+    teleportLockReason ??
+    compactDisabledReason ??
+    (noProviderAvailable ? "Compacting is unavailable right now" : null);
   // The driver kind follows the instance that will actually run the turn,
   // which can differ from the persisted selection when that selection is
   // disabled.
@@ -1299,6 +1312,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   const setPromptFromTraits = useCallback(
     (nextPrompt: string) => {
+      if (!canMutateTeleportDraft()) {
+        return;
+      }
       if (nextPrompt === promptRef.current) {
         scheduleComposerFocus();
         return;
@@ -1310,7 +1326,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
       scheduleComposerFocus();
     },
-    [composerDraftTarget, promptRef, scheduleComposerFocus, setComposerDraftPrompt],
+    [
+      canMutateTeleportDraft,
+      composerDraftTarget,
+      promptRef,
+      scheduleComposerFocus,
+      setComposerDraftPrompt,
+    ],
   );
 
   const providerTraitsMenuContent = renderProviderTraitsMenuContent({
@@ -1368,9 +1390,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   const setPrompt = useCallback(
     (nextPrompt: string) => {
+      if (!canMutateTeleportDraft()) {
+        return;
+      }
       setComposerDraftPrompt(composerDraftTarget, nextPrompt);
     },
-    [composerDraftTarget, setComposerDraftPrompt],
+    [canMutateTeleportDraft, composerDraftTarget, setComposerDraftPrompt],
   );
 
   const addComposerImage = useCallback(
@@ -1389,14 +1414,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const removeComposerImageFromDraft = useCallback(
     (imageId: string) => {
+      if (!canMutateTeleportDraft()) {
+        return;
+      }
       releaseAttachmentUpload(imageId);
       removeComposerDraftImage(composerDraftTarget, imageId);
     },
-    [composerDraftTarget, removeComposerDraftImage],
+    [canMutateTeleportDraft, composerDraftTarget, removeComposerDraftImage],
   );
 
   const removeComposerTerminalContextFromDraft = useCallback(
     (contextId: string) => {
+      if (!canMutateTeleportDraft()) {
+        return;
+      }
       const contextIndex = composerTerminalContexts.findIndex(
         (context) => context.id === contextId,
       );
@@ -1412,10 +1443,39 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [
       composerDraftTarget,
       composerTerminalContexts,
+      canMutateTeleportDraft,
       promptRef,
       removeComposerDraftTerminalContext,
       setPrompt,
     ],
+  );
+
+  const removeComposerElementContextFromDraft = useCallback(
+    (contextId: string) => {
+      if (canMutateTeleportDraft()) {
+        removeComposerDraftElementContext(composerDraftTarget, contextId);
+      }
+    },
+    [canMutateTeleportDraft, composerDraftTarget, removeComposerDraftElementContext],
+  );
+
+  const removeComposerPreviewAnnotationFromDraft = useCallback(
+    (annotationId: string) => {
+      if (canMutateTeleportDraft()) {
+        releaseAttachmentUpload(annotationId);
+        removeComposerDraftPreviewAnnotation(composerDraftTarget, annotationId);
+      }
+    },
+    [canMutateTeleportDraft, composerDraftTarget, removeComposerDraftPreviewAnnotation],
+  );
+
+  const removeComposerReviewCommentFromDraft = useCallback(
+    (commentId: string) => {
+      if (canMutateTeleportDraft()) {
+        removeComposerDraftReviewComment(composerDraftTarget, commentId);
+      }
+    },
+    [canMutateTeleportDraft, composerDraftTarget, removeComposerDraftReviewComment],
   );
 
   // ------------------------------------------------------------------
@@ -1793,6 +1853,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
+      if (!canMutateTeleportDraft()) return;
       if (composerSelectLockRef.current) return;
       composerSelectLockRef.current = true;
       window.requestAnimationFrame(() => {
@@ -1876,7 +1937,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
     },
-    [applyPromptReplacement, handleInteractionModeChange, resolveActiveComposerTrigger],
+    [
+      applyPromptReplacement,
+      canMutateTeleportDraft,
+      handleInteractionModeChange,
+      resolveActiveComposerTrigger,
+    ],
   );
 
   const onComposerMenuItemHighlighted = useCallback(
@@ -1998,6 +2064,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const compactThreadContext = useCallback(() => {
     if (
       compactDisabled ||
+      isTeleportComposerLocked ||
       noProviderAvailable ||
       composerSendState.hasSendableContent ||
       activePendingApproval !== null ||
@@ -2037,6 +2104,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     compactDisabled,
     composerDraftTarget,
+    isTeleportComposerLocked,
     composerSendState.hasSendableContent,
     isConnecting,
     isSendBusy,
@@ -2150,6 +2218,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const restoreStashEntry = useCallback(
     (entry: PromptStashEntry) => {
+      if (isTeleportSendDisabledReason(sendDisabledReasonRef.current)) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to restore stash",
+          description:
+            sendDisabledReasonRef.current ?? "The composer is busy; try again once it is ready.",
+        });
+        return;
+      }
       // Remove first so a double activation (click + Enter) can't restore twice.
       const { entry: taken, durable } = takeStashEntry(entry.id);
       if (!taken) return;
@@ -2286,6 +2363,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const images = [...composerImagesRef.current];
     if (prompt.length === 0 && images.length === 0) {
       setIsStashMenuOpen((open) => !open);
+      return;
+    }
+    if (isTeleportSendDisabledReason(sendDisabledReasonRef.current)) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to stash prompt",
+        description:
+          sendDisabledReasonRef.current ?? "The composer is busy; try again once it is ready.",
+      });
       return;
     }
     // A repeat ⌘S on the *same* still-unencoded snapshot would stash it
@@ -2582,6 +2668,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   const addComposerImages = async (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
+    if (!canMutateTeleportDraft()) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to add to chat",
+        description: sendDisabledReason ?? "The composer is busy; try again once it is ready.",
+      });
+      return;
+    }
     if (pendingUserInputs.length > 0) {
       toastManager.add({
         type: "error",
@@ -2632,6 +2726,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           file,
           PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
         );
+        if (!canMutateTeleportDraft()) {
+          break;
+        }
         if (!compressed.ok) {
           compressionError =
             compressed.reason === "unreadable"
@@ -2650,6 +2747,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           previewUrl,
           file: attachmentFile,
         });
+      }
+      const currentSendDisabledReason = sendDisabledReasonRef.current;
+      // Teleport lock can flip while compression is in flight. Do not commit
+      // attachments into a draft the user can no longer edit. Other send
+      // disables (pending/failed upload) must not drop a second paste.
+      if (isTeleportSendDisabledReason(currentSendDisabledReason)) {
+        for (const image of nextImages) {
+          URL.revokeObjectURL(image.previewUrl);
+        }
+        toastManager.add({
+          type: "error",
+          title: "Unable to add to chat",
+          description: currentSendDisabledReason,
+        });
+        return;
       }
       if (nextImages.length === 1 && nextImages[0]) {
         addComposerImage(nextImages[0]);
@@ -2698,6 +2810,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ): boolean => {
     if (
       text.length === 0 ||
+      isTeleportComposerLocked ||
       isConnecting ||
       isComposerApprovalState ||
       pendingUserInputs.length > 0 ||
@@ -2849,7 +2962,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
       },
       addTerminalContext: (selection: TerminalContextSelection) => {
-        if (!activeThread) return;
+        if (!activeThread || !canMutateTeleportDraft()) return;
         const snapshot = composerEditorRef.current?.readSnapshot() ?? {
           value: promptRef.current,
           cursor: composerCursor,
@@ -2912,6 +3025,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [
       activeThread,
       addComposerImages,
+      canMutateTeleportDraft,
       composerDraftTarget,
       composerCursor,
       composerTerminalContexts,
@@ -3229,10 +3343,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             retryAttachmentUpload({ environmentId, image }),
                         }
                       : {})}
-                    onRemove={(annotationId) => {
-                      releaseAttachmentUpload(annotationId);
-                      removeComposerDraftPreviewAnnotation(composerDraftTarget, annotationId);
-                    }}
+                    onRemove={removeComposerPreviewAnnotationFromDraft}
+                    removeDisabled={isTeleportComposerLocked}
                     onExpandImage={(imageId) => {
                       const preview = buildExpandedImagePreview(composerImages, imageId);
                       if (preview) onExpandImage(preview);
@@ -3247,9 +3359,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 composerReviewComments.length > 0 && (
                   <ComposerPendingReviewComments
                     comments={composerReviewComments}
-                    onRemove={(commentId) =>
-                      removeComposerDraftReviewComment(composerDraftTarget, commentId)
-                    }
+                    onRemove={removeComposerReviewCommentFromDraft}
+                    removeDisabled={isTeleportComposerLocked}
                     className="mb-3"
                   />
                 )}
@@ -3260,9 +3371,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 composerElementContexts.length > 0 && (
                   <ComposerPendingElementContexts
                     contexts={composerElementContexts}
-                    onRemove={(contextId) =>
-                      removeComposerDraftElementContext(composerDraftTarget, contextId)
-                    }
+                    onRemove={removeComposerElementContextFromDraft}
+                    removeDisabled={isTeleportComposerLocked}
                     className="mb-3"
                   />
                 )}
@@ -3374,6 +3484,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               className="absolute right-1 top-1 bg-background/80 hover:bg-background/90"
                               onClick={() => removeComposerImage(image.id)}
                               aria-label={`Remove ${image.name}`}
+                              disabled={isTeleportComposerLocked}
                             >
                               <XIcon />
                             </Button>
@@ -3406,22 +3517,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onCommandKeyDown={onComposerCommandKey}
                   onPaste={onComposerPaste}
                   placeholder={
-                    isComposerApprovalState
-                      ? (activePendingApproval?.detail ??
-                        "Resolve this approval request to continue")
-                      : activePendingProgress
-                        ? "Type your own answer, or leave this blank to use the selected option"
-                        : showPlanFollowUpPrompt && activeProposedPlan
-                          ? "Add feedback to refine the plan, or leave this blank to implement it"
-                          : projectSelectionRequired
-                            ? "Choose a project above to start a thread"
-                            : noProviderAvailable
-                              ? "Enable a provider in Settings to send a message"
-                              : phase === "disconnected"
-                                ? DISCONNECTED_COMPOSER_PLACEHOLDER
-                                : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                    teleportLockReason !== null
+                      ? teleportLockReason
+                      : isComposerApprovalState
+                        ? (activePendingApproval?.detail ??
+                          "Resolve this approval request to continue")
+                        : activePendingProgress
+                          ? "Type your own answer, or leave this blank to use the selected option"
+                          : showPlanFollowUpPrompt && activeProposedPlan
+                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            : projectSelectionRequired
+                              ? "Choose a project above to start a thread"
+                              : noProviderAvailable
+                                ? "Enable a provider in Settings to send a message"
+                                : phase === "disconnected"
+                                  ? DISCONNECTED_COMPOSER_PLACEHOLDER
+                                  : "Ask anything, @tag files/folders, $use skills, or / for commands"
                   }
-                  disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
+                  disabled={
+                    isConnecting ||
+                    isComposerApprovalState ||
+                    projectSelectionRequired ||
+                    isTeleportComposerLocked
+                  }
                 />
                 {showMobilePendingAnswerActions ? (
                   <div
@@ -3581,7 +3699,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                     compactDisabled={
-                      compactDisabled || noProviderAvailable || isSendBusy || isConnecting
+                      compactDisabled ||
+                      noProviderAvailable ||
+                      isSendBusy ||
+                      isConnecting ||
+                      isTeleportComposerLocked
                     }
                     compactDisabledReason={resolvedCompactDisabledReason}
                     {...(selectedProvider === "claudeAgent"

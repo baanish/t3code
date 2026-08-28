@@ -17,12 +17,14 @@ import {
 interface ComposerPendingElementContextsProps {
   contexts: ReadonlyArray<ElementContextDraft>;
   onRemove: (contextId: string) => void;
+  removeDisabled?: boolean;
   className?: string;
 }
 
 interface ComposerPendingElementContextChipProps {
   context: ElementContextDraft;
   onRemove: (contextId: string) => void;
+  removeDisabled: boolean;
 }
 
 function buildTooltipContent(context: ElementContextDraft): string {
@@ -42,6 +44,7 @@ function buildTooltipContent(context: ElementContextDraft): string {
 export function ComposerPendingElementContextChip({
   context,
   onRemove,
+  removeDisabled,
 }: ComposerPendingElementContextChipProps) {
   const label = formatElementContextLabel(context);
   const sourceLabel = formatElementContextSourceLabel(context);
@@ -61,6 +64,7 @@ export function ComposerPendingElementContextChip({
               type="button"
               aria-label={`Remove ${label}`}
               className={COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME}
+              disabled={removeDisabled}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -82,13 +86,19 @@ export function ComposerPendingElementContextChip({
 export function ComposerPendingElementContexts({
   contexts,
   onRemove,
+  removeDisabled = false,
   className,
 }: ComposerPendingElementContextsProps) {
   if (contexts.length === 0) return null;
   return (
     <div className={cn("flex flex-wrap gap-1.5", className)}>
       {contexts.map((context) => (
-        <ComposerPendingElementContextChip key={context.id} context={context} onRemove={onRemove} />
+        <ComposerPendingElementContextChip
+          key={context.id}
+          context={context}
+          onRemove={onRemove}
+          removeDisabled={removeDisabled}
+        />
       ))}
     </div>
   );

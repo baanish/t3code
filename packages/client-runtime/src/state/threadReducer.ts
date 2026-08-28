@@ -570,6 +570,32 @@ export function applyThreadDetailEvent(
       };
     }
 
+    case "thread.history-replaced": {
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          messages: event.payload.messages,
+          proposedPlans: [],
+          activities: [],
+          checkpoints: [],
+          latestTurn: null,
+          updatedAt: event.payload.replacedAt,
+        },
+      };
+    }
+
+    case "thread.teleported": {
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          teleport: event.payload.teleport,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+    }
+
     // ── Activities ──────────────────────────────────────────────────
     case "thread.activity-appended": {
       const activity = event.payload.activity;

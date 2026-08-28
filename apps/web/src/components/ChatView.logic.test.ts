@@ -1,8 +1,11 @@
 import {
   EnvironmentId,
+  isTeleportSendDisabledReason,
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  TELEPORT_IMPORTING_SEND_DISABLED_REASON,
+  TELEPORTED_OUT_SEND_DISABLED_REASON,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -16,6 +19,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
+  composerSendDisabledReason,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
@@ -314,6 +318,117 @@ describe("buildLoadingThreadFromShell", () => {
       activities: [],
       checkpoints: [],
     });
+  });
+
+  it("preserves shell teleport presence while detail is still loading", () => {
+    const teleport = {
+      presence: "native" as const,
+      provider: "codex" as const,
+      externalSessionId: "session-1",
+      nativePath: "/tmp/native",
+      lastSyncedAt: now,
+    };
+    const shell = {
+      environmentId,
+      id: threadId,
+      projectId,
+      title: "Loading thread",
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      branch: "main",
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      snoozedUntil: null,
+      snoozedAt: null,
+      session: null,
+      latestUserMessageAt: now,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+      teleport,
+    } satisfies ThreadShell;
+
+    expect(buildLoadingThreadFromShell(shell).teleport).toEqual(teleport);
+  });
+});
+
+describe("composerSendDisabledReason", () => {
+  const nativeTeleport = {
+    presence: "native" as const,
+    provider: "codex" as const,
+    externalSessionId: "session-1",
+    nativePath: "/tmp/native",
+    lastSyncedAt: now,
+  };
+  const importingTeleport = {
+    ...nativeTeleport,
+    presence: "importing" as const,
+  };
+
+  it("keeps the native teleport lock while messages are still loading", () => {
+    const reason = composerSendDisabledReason({
+      teleport: nativeTeleport,
+      threadDetailLoading: true,
+      nativeConflictReason: null,
+      feedbackUploading: false,
+    });
+    expect(reason).toBe(TELEPORTED_OUT_SEND_DISABLED_REASON);
+    expect(isTeleportSendDisabledReason(reason)).toBe(true);
+  });
+
+  it("keeps the importing teleport lock while messages are still loading", () => {
+    const reason = composerSendDisabledReason({
+      teleport: importingTeleport,
+      threadDetailLoading: true,
+      nativeConflictReason: null,
+      feedbackUploading: false,
+    });
+    expect(reason).toBe(TELEPORT_IMPORTING_SEND_DISABLED_REASON);
+    expect(isTeleportSendDisabledReason(reason)).toBe(true);
+  });
+
+  it("uses the loading reason when teleport does not lock the composer", () => {
+    expect(
+      composerSendDisabledReason({
+        teleport: undefined,
+        threadDetailLoading: true,
+        nativeConflictReason:
+          "The native CLI session changed after import. Fork those changes into a new thread to keep both.",
+        feedbackUploading: false,
+      }),
+    ).toBe("Messages loading");
+  });
+
+  it("keeps the native teleport lock while feedback is uploading", () => {
+    const reason = composerSendDisabledReason({
+      teleport: nativeTeleport,
+      threadDetailLoading: true,
+      nativeConflictReason: null,
+      feedbackUploading: true,
+    });
+    expect(reason).toBe(TELEPORTED_OUT_SEND_DISABLED_REASON);
+    expect(isTeleportSendDisabledReason(reason)).toBe(true);
+  });
+
+  it("uses the feedback reason when teleport does not lock the composer", () => {
+    expect(
+      composerSendDisabledReason({
+        teleport: undefined,
+        threadDetailLoading: true,
+        nativeConflictReason:
+          "The native CLI session changed after import. Fork those changes into a new thread to keep both.",
+        feedbackUploading: true,
+      }),
+    ).toBe("Sending feedback");
   });
 });
 
