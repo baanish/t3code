@@ -339,12 +339,13 @@ export const codexTeleportFormat: TeleportFormatAdapter = {
           nativePath,
           parse: parseCodexSessionContents,
         }).pipe(
-          Effect.catchTag("TeleportSchemaVersionError", (error) =>
-            Effect.logWarning("teleport.codex.unsupported-session-skipped", {
-              nativePath,
-              foundVersion: error.foundVersion,
-            }).pipe(Effect.as(Option.none<ParsedNativeSession>())),
-          ),
+          Effect.catchTags({
+            TeleportSchemaVersionError: (error) =>
+              Effect.logWarning("teleport.codex.unsupported-session-skipped", {
+                nativePath,
+                foundVersion: error.foundVersion,
+              }).pipe(Effect.as(Option.none<ParsedNativeSession>())),
+          }),
         );
         if (
           Option.isNone(parsed) ||

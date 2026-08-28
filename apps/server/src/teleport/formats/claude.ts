@@ -439,12 +439,13 @@ export const claudeTeleportFormat: TeleportFormatAdapter = {
           nativePath,
           parse: parseClaudeSessionContents,
         }).pipe(
-          Effect.catchTag("TeleportSchemaVersionError", (error) =>
-            Effect.logWarning("teleport.claude.unsupported-session-skipped", {
-              nativePath,
-              foundVersion: error.foundVersion,
-            }).pipe(Effect.as(Option.none<ParsedNativeSession>())),
-          ),
+          Effect.catchTags({
+            TeleportSchemaVersionError: (error) =>
+              Effect.logWarning("teleport.claude.unsupported-session-skipped", {
+                nativePath,
+                foundVersion: error.foundVersion,
+              }).pipe(Effect.as(Option.none<ParsedNativeSession>())),
+          }),
         );
         if (
           Option.isNone(parsed) ||
