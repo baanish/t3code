@@ -142,7 +142,7 @@ const unusedInstanceRegistry: ProviderInstanceRegistry["Service"] = {
   subscribeChanges: Effect.die("ProviderInstanceRegistry.subscribeChanges unused"),
 };
 
-function teleportServiceLayer(input: {
+function teleportDepsLayer(input: {
   readonly workspaceRoot: string;
   readonly codexHome: string;
   readonly directory: ReturnType<typeof memoryDirectory>;
@@ -166,24 +166,32 @@ function teleportServiceLayer(input: {
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
   );
-  return Layer.effect(TeleportService, makeTeleportService).pipe(
-    Layer.provide(TeleportFormatRegistry.layer),
-    Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, unlockedProcessRunner)),
-    Layer.provideMerge(orchestrationLayer),
-    Layer.provideMerge(
-      ServerSettings.layerTest({
-        providers: {
-          codex: {
-            homePath: input.codexHome,
-          },
+  return Layer.mergeAll(
+    TeleportFormatRegistry.layer,
+    Layer.succeed(ProcessRunner.ProcessRunner, unlockedProcessRunner),
+    orchestrationLayer,
+    ServerSettings.layerTest({
+      providers: {
+        codex: {
+          homePath: input.codexHome,
         },
-      }),
-    ),
-    Layer.provideMerge(Layer.succeed(ProviderSessionDirectory, input.directory)),
-    Layer.provideMerge(Layer.succeed(ProviderInstanceRegistry, unusedInstanceRegistry)),
-    Layer.provideMerge(Layer.succeed(ProviderService, unusedProviderService)),
-    Layer.provideMerge(Layer.succeed(HostProcessPlatform, "linux")),
-    Layer.provideMerge(NodeServices.layer),
+      },
+    }),
+    Layer.succeed(ProviderSessionDirectory, input.directory),
+    Layer.succeed(ProviderInstanceRegistry, unusedInstanceRegistry),
+    Layer.succeed(ProviderService, unusedProviderService),
+    Layer.succeed(HostProcessPlatform, "linux"),
+    NodeServices.layer,
+  );
+}
+
+function teleportServiceLayer(input: {
+  readonly workspaceRoot: string;
+  readonly codexHome: string;
+  readonly directory: ReturnType<typeof memoryDirectory>;
+}) {
+  return Layer.effect(TeleportService, makeTeleportService).pipe(
+    Layer.provideMerge(teleportDepsLayer(input)),
   );
 }
 
@@ -1440,17 +1448,17 @@ describe("TeleportService.listSessions cwd binding", () => {
             [TELEPORT_TEST_SESSION_ID],
           );
 
-        const rejectedRoot = yield* service.listSessions({ cwd: "/" }).pipe(Effect.result);
-        assert.equal(rejectedRoot._tag, "Failure");
-        if (rejectedRoot._tag === "Failure") {
-          assert.equal(rejectedRoot.failure._tag, "TeleportInvalidInputError");
-          if (rejectedRoot.failure._tag === "TeleportInvalidInputError") {
-            assert.match(
-              rejectedRoot.failure.reason,
-              /must match a registered project's workspace root/,
-            );
+          const rejectedRoot = yield* service.listSessions({ cwd: "/" }).pipe(Effect.result);
+          assert.equal(rejectedRoot._tag, "Failure");
+          if (rejectedRoot._tag === "Failure") {
+            assert.equal(rejectedRoot.failure._tag, "TeleportInvalidInputError");
+            if (rejectedRoot.failure._tag === "TeleportInvalidInputError") {
+              assert.match(
+                rejectedRoot.failure.reason,
+                /must match a registered project's workspace root/,
+              );
+            }
           }
-        }
 
           const rejectedOutside = yield* service
             .listSessions({ cwd: outsideRoot })
@@ -1461,5 +1469,122 @@ describe("TeleportService.listSessions cwd binding", () => {
           }
         }).pipe(Effect.provide(teleportServiceLayer({ workspaceRoot, codexHome, directory })));
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("TeleportService pending-export recovery", () => {
+  it.effect("clears a stale native binding when the pending export file is missing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-export-recovery-" });
+      const workspaceRoot = path.join(root, "workspace");
+      const codexHome = path.join(root, "codex");
+      yield* fs.makeDirectory(workspaceRoot, { recursive: true });
+      yield* fs.makeDirectory(codexHome, { recursive: true });
+      const threadId = ThreadId.make("thread-pending-export-recovery");
+      const pendingPath = pendingTeleportNativePath("codex", TELEPORT_TEST_SESSION_ID);
+      const staleNativePath = path.join(codexHome, "sessions", "missing-rollout.jsonl");
+      const directory = memoryDirectory();
+      yield* directory.upsert({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        status: "stopped",
+        resumeCursor: { threadId: TELEPORT_TEST_SESSION_ID },
+        runtimePayload: {
+          teleport: {
+            schemaVersion: 1,
+            externalSessionId: TELEPORT_TEST_SESSION_ID,
+            nativePath: staleNativePath,
+            lastSyncDirection: "export",
+            lastSyncedAt: NOW,
+            nativeFormatVersion: 1,
+            presence: "native",
+          },
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-export-recovery-project"),
+          projectId: PROJECT_ID,
+          title: "Teleport Export Recovery",
+          workspaceRoot,
+          defaultModelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          createdAt: NOW,
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd-export-recovery-thread"),
+          threadId,
+          projectId: PROJECT_ID,
+          title: "Pending export",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: NOW,
+        });
+        // Seed the interrupted-export fence before any user message so the
+        // native presence write is not blocked by a queued turn start.
+        yield* engine.dispatch({
+          type: "thread.teleport.set",
+          commandId: CommandId.make("cmd-export-recovery-pending"),
+          threadId,
+          teleport: {
+            presence: "native",
+            provider: "codex",
+            externalSessionId: TELEPORT_TEST_SESSION_ID,
+            nativePath: pendingPath,
+            lastSyncedAt: NOW,
+          },
+          createdAt: NOW,
+        });
+
+        const service = yield* makeTeleportService;
+        const recovered = yield* snapshotQuery.getThreadDetailById(threadId);
+        assert.equal(Option.isSome(recovered), true);
+        if (Option.isNone(recovered)) {
+          return;
+        }
+        assert.equal(recovered.value.teleport?.presence, "t3");
+        assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+
+        yield* engine.dispatch({
+          type: "thread.history.replace",
+          commandId: CommandId.make("cmd-export-recovery-history"),
+          threadId,
+          messages: [
+            {
+              id: MessageId.make("export-recovery-user"),
+              role: "user",
+              text: "Recover me",
+              turnId: null,
+              streaming: false,
+              createdAt: NOW,
+              updatedAt: NOW,
+            },
+          ],
+          createdAt: NOW,
+        });
+
+        const exported = yield* service.exportSession({ threadId });
+        assert.equal(exported.provider, "codex");
+        assert.notEqual(exported.nativePath, pendingPath);
+        assert.equal(yield* fs.exists(exported.nativePath), true);
+      }).pipe(Effect.provide(teleportDepsLayer({ workspaceRoot, codexHome, directory })));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

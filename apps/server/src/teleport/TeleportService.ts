@@ -2141,6 +2141,10 @@ export const make = Effect.gen(function* () {
           });
 
           if (discovered === undefined) {
+            // Thread presence is back on T3 with no written native file. Drop a
+            // stale directory binding that still says presence native so a later
+            // exportSession is not rejected as already-native.
+            yield* directory.deleteByThreadId(thread.id).pipe(Effect.catch(() => Effect.void));
             return;
           }
 
