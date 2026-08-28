@@ -1378,3 +1378,88 @@ describe("TeleportService import batch load validation", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
+
+describe("TeleportService.listSessions cwd binding", () => {
+  it.effect(
+    "lists sessions for a registered project workspace and rejects free-form ancestors",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "teleport-list-cwd-" });
+        const workspaceRoot = path.join(root, "workspace");
+        const outsideRoot = path.join(root, "outside");
+        const codexHome = path.join(root, "codex");
+        const inProjectPath = allocateCodexSessionPath({
+          sessionsRoot: path.join(codexHome, "sessions"),
+          sessionId: TELEPORT_TEST_SESSION_ID,
+          createdAt: NOW,
+          join: path.join,
+        });
+        const outsideSessionId = "33333333-3333-4333-8333-333333333333";
+        const outsidePath = allocateCodexSessionPath({
+          sessionsRoot: path.join(codexHome, "sessions"),
+          sessionId: outsideSessionId,
+          createdAt: NOW,
+          join: path.join,
+        });
+        yield* fs.makeDirectory(workspaceRoot, { recursive: true });
+        yield* fs.makeDirectory(outsideRoot, { recursive: true });
+        yield* fs.makeDirectory(path.dirname(inProjectPath), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(outsidePath), { recursive: true });
+        yield* fs.writeFileString(
+          inProjectPath,
+          serializeCodexSession(sampleTeleportSession("codex", workspaceRoot)),
+        );
+        yield* fs.writeFileString(
+          outsidePath,
+          serializeCodexSession(sampleTeleportSession("codex", outsideRoot)),
+        );
+        const directory = memoryDirectory();
+
+        yield* Effect.gen(function* () {
+          const service = yield* TeleportService;
+          const engine = yield* OrchestrationEngineService;
+
+          yield* engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.make("cmd-list-cwd-project"),
+            projectId: PROJECT_ID,
+            title: "Teleport List Cwd",
+            workspaceRoot,
+            defaultModelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            createdAt: NOW,
+          });
+
+          const listed = yield* service.listSessions({ cwd: workspaceRoot });
+          assert.deepEqual(
+            listed.sessions.map((session) => session.externalSessionId),
+            [TELEPORT_TEST_SESSION_ID],
+          );
+
+        const rejectedRoot = yield* service.listSessions({ cwd: "/" }).pipe(Effect.result);
+        assert.equal(rejectedRoot._tag, "Failure");
+        if (rejectedRoot._tag === "Failure") {
+          assert.equal(rejectedRoot.failure._tag, "TeleportInvalidInputError");
+          if (rejectedRoot.failure._tag === "TeleportInvalidInputError") {
+            assert.match(
+              rejectedRoot.failure.reason,
+              /must match a registered project's workspace root/,
+            );
+          }
+        }
+
+          const rejectedOutside = yield* service
+            .listSessions({ cwd: outsideRoot })
+            .pipe(Effect.result);
+          assert.equal(rejectedOutside._tag, "Failure");
+          if (rejectedOutside._tag === "Failure") {
+            assert.equal(rejectedOutside.failure._tag, "TeleportInvalidInputError");
+          }
+        }).pipe(Effect.provide(teleportServiceLayer({ workspaceRoot, codexHome, directory })));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});

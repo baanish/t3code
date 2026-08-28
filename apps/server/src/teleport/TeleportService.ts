@@ -311,8 +311,20 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
+  /**
+   * List discovery is scoped to a registered T3 project workspace (same contract
+   * the UI already sends). Free-form ancestors such as `/` or `$HOME` must not
+   * match every native CLI session on the host for a read-scoped client.
+   */
   const loadWorkspaceWorktreeCwds = (cwd: string) =>
     Effect.all([snapshotQuery.getShellSnapshot(), snapshotQuery.getArchivedShellSnapshot()]).pipe(
+      Effect.mapError(
+        (cause) =>
+          new TeleportDiscoveryError({
+            reason: "Failed to load project worktree paths for teleport.",
+            cause,
+          }),
+      ),
       Effect.flatMap(([active, archived]) =>
         Effect.gen(function* () {
           for (const project of active.projects) {
@@ -323,15 +335,10 @@ export const make = Effect.gen(function* () {
               ]);
             }
           }
-          return [] as string[];
+          return yield* new TeleportInvalidInputError({
+            reason: "List cwd must match a registered project's workspace root.",
+          });
         }),
-      ),
-      Effect.mapError(
-        (cause) =>
-          new TeleportDiscoveryError({
-            reason: "Failed to load project worktree paths for teleport.",
-            cause,
-          }),
       ),
     );
   const claimExtraInFlight = (keys: string[], extra: string) =>
